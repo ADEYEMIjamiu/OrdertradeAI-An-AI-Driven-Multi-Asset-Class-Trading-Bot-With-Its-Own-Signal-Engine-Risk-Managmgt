@@ -62,6 +62,7 @@ from engines.execution_engine import sort_trade_queue, filter_executable_trades
 from engines import performance_engine
 from engines.digest_engine import calculate_performance_digest
 import telegram_notifier
+import emergency_stop
 from engines.priority_engine import calculate_priority
 from engines.scoring_engine import calculate_trade_score
 from engines.trade_planner import create_trade_plan
@@ -763,6 +764,12 @@ def execute_paper_trades(buy_signals, sell_signals):
     from datetime import datetime
     import streamlit as st
 
+    if emergency_stop.is_stopped():
+        st.session_state.trade_messages.append(
+            "🛑 Trade blocked: Emergency Stop is active."
+        )
+        return
+
     # =========================
     # 🟢 BUY EXECUTION
     # =========================
@@ -1052,6 +1059,11 @@ def execute_alpaca_trades(buy_signals, sell_signals):
     - Apply portfolio and risk checks
     - Log submitted trades
     """
+    if emergency_stop.is_stopped():
+        st.session_state.trade_messages.append(
+            "🛑 Trade blocked: Emergency Stop is active."
+        )
+        return
 
     try:
         alpaca_positions = get_open_positions()
@@ -1338,6 +1350,12 @@ def execute_binance_trades(buy_signals, sell_signals):
     anything.
     """
     import binance_broker
+
+    if emergency_stop.is_stopped():
+        st.session_state.trade_messages.append(
+            "🛑 Trade blocked: Emergency Stop is active."
+        )
+        return
 
     try:
         binance_positions = binance_broker.get_positions()
@@ -1832,6 +1850,19 @@ def update_equity_history(portfolio_value):
 
 st.title("🤖 OrderTrade AI")
 st.write("Live market dashboard for AI trading decisions")
+
+if emergency_stop.is_stopped():
+    st.error(
+        f"🛑 EMERGENCY STOP ACTIVE — all trade execution is blocked "
+        f"(manual and auto). {emergency_stop.stopped_since()}"
+    )
+    if st.button("✅ Resume Trading", type="primary"):
+        emergency_stop.deactivate()
+        st.rerun()
+else:
+    if st.button("🛑 EMERGENCY STOP — Halt All Trading"):
+        emergency_stop.activate("Manually triggered from dashboard")
+        st.rerun()
 
 st.divider()
 

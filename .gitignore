@@ -6,3 +6,4 @@ __pycache__/
 *.db
 logs/
 .streamlit/secrets.toml
+emergency_stop.flag

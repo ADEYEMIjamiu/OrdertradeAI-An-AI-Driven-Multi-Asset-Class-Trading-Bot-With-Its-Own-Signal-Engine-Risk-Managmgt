@@ -71,7 +71,17 @@ def send_telegram_message(text):
                 data={
                     "chat_id": TELEGRAM_CHAT_ID,
                     "text": text,
-                    "parse_mode": "Markdown",
+                    # No parse_mode: plain text. Markdown mode requires
+                    # every _, *, ` in the WHOLE message to appear in
+                    # matched pairs -- "Mode: LOCAL_PAPER" or
+                    # "Mode: BINANCE_TESTNET" each contain exactly one
+                    # underscore, which Telegram rejected outright
+                    # (400 "can't parse entities") for every asset class
+                    # whose label didn't happen to contribute a second,
+                    # accidentally-pairing underscore. Stocks only
+                    # "worked" by luck (US_STOCKS has one too). Plain
+                    # text sidesteps this whole class of bug for any
+                    # ticker/label this project ever adds.
                 },
                 timeout=5,
             )
@@ -159,7 +169,7 @@ def notify_trade_fill(
     emoji = "🟢" if str(action).upper() == "BUY" else "🔴"
 
     lines = [
-        f"{emoji} *{str(action).upper()}* — {ticker} ({asset_class})",
+        f"{emoji} {str(action).upper()} — {ticker} ({asset_class})",
         f"Price: {_format_price(price)}",
         f"Size: {_format_units(shares)} units (${float(amount):,.2f})",
     ]
@@ -183,7 +193,7 @@ def notify_digest(period_label, overall, by_asset_class):
     `overall` and `by_asset_class` match the dicts returned by
     engines.digest_engine.calculate_performance_digest().
     """
-    lines = [f"📅 *Performance Digest — {period_label}*", ""]
+    lines = [f"📅 Performance Digest — {period_label}", ""]
 
     lines.append(
         f"Trades Closed: {overall['trades_closed']} | "
@@ -195,7 +205,7 @@ def notify_digest(period_label, overall, by_asset_class):
         pf = stats["profit_factor"]
         pf_text = "N/A" if pf is None else f"{pf:.2f}"
         lines.append(
-            f"\n*{asset_class}*: {stats['trades_closed']} closed, "
+            f"\n{asset_class}: {stats['trades_closed']} closed, "
             f"{stats['win_rate']:.1f}% win rate, "
             f"{_format_signed_dollars(stats['total_pnl'])} P&L, PF {pf_text}"
         )

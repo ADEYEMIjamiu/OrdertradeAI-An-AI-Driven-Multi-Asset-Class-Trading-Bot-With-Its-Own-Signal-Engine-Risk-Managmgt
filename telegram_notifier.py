@@ -18,6 +18,7 @@ wrapped in try/except with a short timeout for exactly that reason.
 """
 
 import os
+import time
 
 import requests
 
@@ -31,7 +32,7 @@ def is_configured():
     return bool(TELEGRAM_BOT_TOKEN) and bool(TELEGRAM_CHAT_ID)
 
 
-def send_telegram_message(text):
+def send_telegram_message(text, _retry=True):
     """
     Best-effort send. Returns True on success, False otherwise --
     including "not configured yet", which is expected before setup,
@@ -51,6 +52,30 @@ def send_telegram_message(text):
             },
             timeout=5,
         )
+
+        if response.status_code == 429 and _retry:
+            # Telegram's per-chat flood control (roughly ~1 msg/sec) --
+            # a batch of many trade fills in one execution pass (e.g.
+            # stocks + forex + commodities all filling together) can
+            # easily send 8-10 notifications within milliseconds of each
+            # other. Past the first few, Telegram starts returning 429
+            # and the earlier version of this function silently dropped
+            # them (only returned False, no retry) -- notifications for
+            # later trades in the batch never arrived even though the
+            # trades themselves filled correctly. Back off for exactly
+            # as long as Telegram says to, then retry once.
+            retry_after = 1
+            try:
+                retry_after = int(
+                    response.json()
+                    .get("parameters", {})
+                    .get("retry_after", 1)
+                )
+            except Exception:
+                pass
+            time.sleep(min(retry_after, 5))
+            return send_telegram_message(text, _retry=False)
+
         return response.status_code == 200
     except Exception:
         return False

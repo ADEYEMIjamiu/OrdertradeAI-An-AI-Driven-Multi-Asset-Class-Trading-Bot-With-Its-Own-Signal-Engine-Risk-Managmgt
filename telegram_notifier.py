@@ -27,58 +27,82 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 _API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
+# Telegram enforces roughly one message per second per chat. A batch of
+# many trade fills in one execution pass (e.g. 5 stocks + forex +
+# commodities all filling together) previously fired that many sends
+# within milliseconds of each other, tripping flood control after the
+# first few. A first attempt at fixing this only reacted to the 429
+# *after* it happened, with the retry wait arbitrarily capped at 5
+# seconds -- too short whenever Telegram's actual cooldown (which scales
+# up with repeated violations) was longer, so the retry got 429'd again
+# and, being allowed only once, gave up for good. This throttles sends
+# proactively instead, so the limit is rarely even hit, and backs off
+# for Telegram's own requested wait time (not an arbitrary cap) with a
+# few retries as a fallback for whatever slips through.
+_MIN_SEND_INTERVAL_SECONDS = 1.1
+_MAX_RETRIES = 3
+_last_send_time = 0.0
+
 
 def is_configured():
     return bool(TELEGRAM_BOT_TOKEN) and bool(TELEGRAM_CHAT_ID)
 
 
-def send_telegram_message(text, _retry=True):
+def send_telegram_message(text):
     """
     Best-effort send. Returns True on success, False otherwise --
     including "not configured yet", which is expected before setup,
     not an error. Never raises: a Telegram outage or bad token must
     never take down trade execution or the dashboard.
     """
+    global _last_send_time
+
     if not is_configured():
         return False
 
-    try:
-        response = requests.post(
-            _API_URL.format(token=TELEGRAM_BOT_TOKEN),
-            data={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": text,
-                "parse_mode": "Markdown",
-            },
-            timeout=5,
-        )
+    for attempt in range(_MAX_RETRIES + 1):
+        elapsed = time.monotonic() - _last_send_time
+        if elapsed < _MIN_SEND_INTERVAL_SECONDS:
+            time.sleep(_MIN_SEND_INTERVAL_SECONDS - elapsed)
 
-        if response.status_code == 429 and _retry:
-            # Telegram's per-chat flood control (roughly ~1 msg/sec) --
-            # a batch of many trade fills in one execution pass (e.g.
-            # stocks + forex + commodities all filling together) can
-            # easily send 8-10 notifications within milliseconds of each
-            # other. Past the first few, Telegram starts returning 429
-            # and the earlier version of this function silently dropped
-            # them (only returned False, no retry) -- notifications for
-            # later trades in the batch never arrived even though the
-            # trades themselves filled correctly. Back off for exactly
-            # as long as Telegram says to, then retry once.
-            retry_after = 1
+        try:
+            response = requests.post(
+                _API_URL.format(token=TELEGRAM_BOT_TOKEN),
+                data={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": text,
+                    "parse_mode": "Markdown",
+                },
+                timeout=5,
+            )
+        except Exception:
+            _last_send_time = time.monotonic()
+            return False
+
+        _last_send_time = time.monotonic()
+
+        if response.status_code == 200:
+            return True
+
+        if response.status_code == 429 and attempt < _MAX_RETRIES:
+            retry_after = 2
             try:
                 retry_after = int(
                     response.json()
                     .get("parameters", {})
-                    .get("retry_after", 1)
+                    .get("retry_after", 2)
                 )
             except Exception:
                 pass
-            time.sleep(min(retry_after, 5))
-            return send_telegram_message(text, _retry=False)
+            # Honor Telegram's actual requested wait, not an arbitrary
+            # cap -- but don't let one stuck message block trade
+            # execution indefinitely either.
+            time.sleep(min(retry_after, 20))
+            continue
 
-        return response.status_code == 200
-    except Exception:
         return False
+
+    return False
 
 
 def _format_price(price):

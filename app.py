@@ -901,6 +901,11 @@ def execute_paper_trades(buy_signals, sell_signals):
 
         st.session_state.last_trade_time[ticker] = datetime.now()
 
+        st.session_state.trade_messages.append(
+            f"BUY sent for {ticker}: "
+            f"${trade_amount:,.2f} filled at ${price:,.2f} (local paper)."
+        )
+
     # =========================
     # 🔴 SELL EXECUTION
     # =========================

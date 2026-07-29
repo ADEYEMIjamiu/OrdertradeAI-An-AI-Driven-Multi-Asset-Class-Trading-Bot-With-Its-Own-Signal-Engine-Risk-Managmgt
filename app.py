@@ -63,6 +63,7 @@ from engines import performance_engine
 from engines.digest_engine import calculate_performance_digest
 import telegram_notifier
 import emergency_stop
+import account_store
 from engines.priority_engine import calculate_priority
 from engines.scoring_engine import calculate_trade_score
 from engines.trade_planner import create_trade_plan
@@ -249,18 +250,26 @@ tickers = [asset["symbol"] for asset in asset_list]
 
 print("🔥 LOADED ASSETS:", tickers)
 
+# Loaded from persistent shared storage (account_store.py) rather than
+# reset to hardcoded defaults, so opening the dashboard from a new
+# browser tab or a different device shows the SAME live account instead
+# of an independent fresh copy. Only fires once per session (gated on
+# "cash", same pattern as before) -- a session already running keeps
+# using its own in-memory state for the rest of its life, saving back to
+# storage after every mutation so it stays the source of truth for any
+# other session that loads afterward. See account_store.py for the full
+# reasoning and its limits.
 if "cash" not in st.session_state:
-    st.session_state.cash = INITIAL_CASH
-
-if "positions" not in st.session_state:
-    st.session_state.positions = {}
+    _saved_account = account_store.load_account(default_cash=INITIAL_CASH)
+    st.session_state.cash = _saved_account["cash"]
+    st.session_state.positions = _saved_account["positions"]
+    st.session_state.equity_history = _saved_account["equity_history"]
+    st.session_state.AUTO_TRADING = _saved_account["auto_trading"]
+    st.session_state.last_trade_time = _saved_account["last_trade_time"]
 
 if "trade_log" not in st.session_state:
     st.session_state.trade_log = []
 
-if "equity_history" not in st.session_state:
-    st.session_state.equity_history = []
-    
 if "last_execution_result" not in st.session_state:
     st.session_state.last_execution_result = None
     
@@ -1843,6 +1852,24 @@ def calculate_performance(market_df):
     }
 
 
+def persist_account():
+    """
+    Write this session's current cash/positions/equity_history/
+    AUTO_TRADING/last_trade_time back to shared persistent storage. Call
+    this after anything that mutates them, so any other session (a
+    different tab/device) sees the change the next time it loads. See
+    the checkpoints this is called from for exactly which code paths
+    that covers.
+    """
+    account_store.save_account(
+        cash=st.session_state.cash,
+        positions=st.session_state.positions,
+        equity_history=st.session_state.equity_history,
+        auto_trading=st.session_state.AUTO_TRADING,
+        last_trade_time=st.session_state.last_trade_time,
+    )
+
+
 def update_equity_history(portfolio_value):
     st.session_state.equity_history.append({
         "Time": datetime.now().strftime("%H:%M:%S"),
@@ -2003,6 +2030,12 @@ performance = calculate_performance(market_df)
 
 update_equity_history(portfolio_value)
 
+# Catches anything apply_risk_management() did above (stop loss / take
+# profit / trailing exits fire on every pass, not just from the buttons
+# below) plus this pass's equity tick, regardless of whether a trade was
+# ever attempted this run.
+persist_account()
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -2060,6 +2093,11 @@ if not LIVE_TRADING:
         # 🚨 CRITICAL: RESET ENGINE OBJECT
         if "paper_engine" in st.session_state:
             del st.session_state.paper_engine
+
+        # Reset the shared account too -- otherwise this session shows
+        # $100k locally, but any other device still loads the old
+        # pre-reset balance from persistent storage.
+        account_store.reset_account(starting_cash=100000)
 
         st.success("Portfolio FULLY reset")
 
@@ -2294,6 +2332,10 @@ if st.button("Reset Portfolio (TEST ONLY)"):
     if "paper_engine" in st.session_state:
         del st.session_state.paper_engine
 
+    # Reset the shared account too -- see the comment on the other
+    # reset button above for why.
+    account_store.reset_account(starting_cash=100000)
+
     st.success("Portfolio FULLY reset (test)")
 
     # Restart clean UI
@@ -2432,6 +2474,7 @@ if st.button("Execute Trades"):
         "messages": list(st.session_state.trade_messages),
     }
     st.session_state.trade_execution_in_progress = False
+    persist_account()
     st.rerun()
 
 # Display the most recent manual execution result
@@ -2488,6 +2531,7 @@ if st.session_state.get("last_execution_result"):
 st.divider()
 st.subheader("🤖 Auto-Trading")
 
+_auto_trading_before = st.session_state.AUTO_TRADING
 st.session_state.AUTO_TRADING = st.checkbox(
     "Enable automatic execution (uses the same approved trades shown above)",
     value=st.session_state.AUTO_TRADING,
@@ -2497,6 +2541,11 @@ st.session_state.AUTO_TRADING = st.checkbox(
         "When OFF, nothing executes automatically — use the button above."
     ),
 )
+if st.session_state.AUTO_TRADING != _auto_trading_before:
+    # Persist the toggle itself immediately, not just trade mutations --
+    # otherwise flipping it on this device wouldn't show up on another
+    # device until a trade happened to fire.
+    persist_account()
 
 if not st.session_state.AUTO_TRADING:
     st.caption("Auto-trading is OFF. Use the Execute Trades button above for manual control.")
@@ -2561,6 +2610,7 @@ else:
             execute_binance_trades(auto_buy_crypto, auto_sell_crypto)
 
     st.session_state.trade_execution_in_progress = False
+    persist_account()
 
 
 st.divider()

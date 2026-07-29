@@ -38,6 +38,18 @@ MAX_PORTFOLIO_EXPOSURE = 0.50
 # own budget -- one slot per tracked coin (BTC, ETH, SOL, BNB).
 MAX_CRYPTO_POSITIONS = 4
 
+# Forex and commodities have no real broker yet, so they share
+# st.session_state.positions with stocks (see PAPER_ONLY_ASSET_CLASSES in
+# app.py) rather than getting their own separate storage like crypto's
+# Binance wallet. That means the exact same "stocks fill their 5 slots
+# first" bug fixed above for crypto also applied to them -- with 11+
+# approved signals in a typical scan, stocks alone routinely fill
+# MAX_OPEN_POSITIONS before forex/commodities rows are even processed,
+# permanently locking them out of ever opening a position. These give
+# each its own independent budget, same pattern as MAX_CRYPTO_POSITIONS.
+MAX_FOREX_POSITIONS = 3
+MAX_COMMODITIES_POSITIONS = 3
+
 DAILY_LOSS_LIMIT = 0.03
 DAILY_PROFIT_TARGET = 0.05
 

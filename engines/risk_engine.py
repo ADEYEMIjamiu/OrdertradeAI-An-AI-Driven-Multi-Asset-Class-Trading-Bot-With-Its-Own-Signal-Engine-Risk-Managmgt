@@ -13,6 +13,8 @@ from config import (
     MAX_POSITIONS,
     MAX_OPEN_POSITIONS,
     MAX_CRYPTO_POSITIONS,
+    MAX_FOREX_POSITIONS,
+    MAX_COMMODITIES_POSITIONS,
     MAX_PORTFOLIO_EXPOSURE,
     MAX_TRADES_PER_DAY,
     TRADE_COOLDOWN_MINUTES,
@@ -67,6 +69,48 @@ def _is_crypto_ticker(ticker):
     return str(ticker).upper().endswith("-USD")
 
 
+def _is_forex_ticker(ticker):
+    """yfinance forex tickers are all named 'XXXYYY=X' (e.g. EURUSD=X)."""
+    return str(ticker).upper().endswith("=X")
+
+
+def _is_commodity_ticker(ticker):
+    """yfinance commodity futures tickers are all named 'XX=F' (e.g. GC=F)."""
+    return str(ticker).upper().endswith("=F")
+
+
+def _get_forex_position_count():
+    """
+    Forex has no real broker yet, so (unlike crypto) there's no separate
+    wallet/journal to count from -- it shares st.session_state.positions
+    with stocks. Counting only forex-suffixed tickers here keeps its cap
+    independent of how many stock positions happen to be open.
+    """
+    return sum(
+        1 for t in st.session_state.positions if _is_forex_ticker(t)
+    )
+
+
+def _get_commodity_position_count():
+    """Same reasoning as _get_forex_position_count(), for commodities."""
+    return sum(
+        1 for t in st.session_state.positions if _is_commodity_ticker(t)
+    )
+
+
+def _get_stock_position_count():
+    """
+    Stocks share st.session_state.positions with forex/commodities, so the
+    stock-only cap must exclude those tickers -- otherwise forex/commodity
+    positions would eat into MAX_POSITIONS/MAX_OPEN_POSITIONS meant for
+    stocks, the same class of bug this whole file works around for crypto.
+    """
+    return sum(
+        1 for t in st.session_state.positions
+        if not _is_forex_ticker(t) and not _is_commodity_ticker(t)
+    )
+
+
 def _get_crypto_position_count():
     """
     Number of crypto positions the BOT has actually opened, derived from
@@ -107,13 +151,25 @@ def can_open_position(ticker):
             return False, "Maximum crypto positions reached."
         return True, ""
 
+    # Forex/commodities: same independent-cap treatment as crypto above,
+    # see MAX_FOREX_POSITIONS/MAX_COMMODITIES_POSITIONS in config.py for why.
+    if _is_forex_ticker(ticker):
+        if _get_forex_position_count() >= MAX_FOREX_POSITIONS:
+            return False, "Maximum forex positions reached."
+        return True, ""
+
+    if _is_commodity_ticker(ticker):
+        if _get_commodity_position_count() >= MAX_COMMODITIES_POSITIONS:
+            return False, "Maximum commodities positions reached."
+        return True, ""
+
     # Already holding?
     if ticker in st.session_state.positions:
         if not ALLOW_PYRAMIDING:
             return False, "Already holding this stock."
 
-    # Too many positions?
-    if len(st.session_state.positions) >= MAX_POSITIONS:
+    # Too many positions? (stock-only count -- see _get_stock_position_count)
+    if _get_stock_position_count() >= MAX_POSITIONS:
         return False, "Maximum portfolio positions reached."
 
     return True, ""
@@ -126,12 +182,20 @@ def risk_check_before_trade(ticker, trade_amount, market_df):
     """
 
     is_crypto = _is_crypto_ticker(ticker)
+    is_forex = _is_forex_ticker(ticker)
+    is_commodity = _is_commodity_ticker(ticker)
 
-    # 1. Maximum open positions -- crypto and stocks capped independently,
-    # see can_open_position() above for why.
+    # 1. Maximum open positions -- crypto, forex, commodities and stocks
+    # are all capped independently, see can_open_position() above for why.
     if is_crypto:
         if _get_crypto_position_count() >= MAX_CRYPTO_POSITIONS:
             return False, "Maximum crypto positions reached."
+    elif is_forex:
+        if _get_forex_position_count() >= MAX_FOREX_POSITIONS:
+            return False, "Maximum forex positions reached."
+    elif is_commodity:
+        if _get_commodity_position_count() >= MAX_COMMODITIES_POSITIONS:
+            return False, "Maximum commodities positions reached."
     elif LIVE_TRADING:
         try:
             positions = get_open_positions()
@@ -140,7 +204,7 @@ def risk_check_before_trade(ticker, trade_amount, market_df):
         except Exception:
             pass
     else:
-        if len(st.session_state.positions) >= MAX_OPEN_POSITIONS:
+        if _get_stock_position_count() >= MAX_OPEN_POSITIONS:
             return False, "Maximum open positions reached."
 
     # 2. Cash check -- crypto spends from the Binance testnet USDT

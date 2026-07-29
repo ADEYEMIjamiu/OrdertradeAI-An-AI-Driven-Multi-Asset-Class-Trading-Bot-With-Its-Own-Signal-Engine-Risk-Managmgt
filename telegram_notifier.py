@@ -75,8 +75,9 @@ def send_telegram_message(text):
                 },
                 timeout=5,
             )
-        except Exception:
+        except Exception as e:
             _last_send_time = time.monotonic()
+            print(f"[telegram] send raised exception (attempt {attempt}): {e}")
             return False
 
         _last_send_time = time.monotonic()
@@ -94,14 +95,23 @@ def send_telegram_message(text):
                 )
             except Exception:
                 pass
+            print(
+                f"[telegram] 429 on attempt {attempt}, "
+                f"retry_after={retry_after}s, body={response.text[:200]!r}"
+            )
             # Honor Telegram's actual requested wait, not an arbitrary
             # cap -- but don't let one stuck message block trade
             # execution indefinitely either.
             time.sleep(min(retry_after, 20))
             continue
 
+        print(
+            f"[telegram] send failed, status={response.status_code}, "
+            f"body={response.text[:200]!r}"
+        )
         return False
 
+    print("[telegram] gave up after exhausting retries")
     return False
 
 

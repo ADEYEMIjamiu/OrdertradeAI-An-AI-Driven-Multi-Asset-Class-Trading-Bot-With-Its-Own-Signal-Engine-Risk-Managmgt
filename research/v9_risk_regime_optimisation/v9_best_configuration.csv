@@ -1,0 +1,2 @@
+Stop_Loss,Take_Profit,Max_Holding_Days,Min_BUY_Confidence,Regime_Filter,Use_Model_SELL,Ending_Capital,Net_Profit,Total_Return,Annualised_Return,Sharpe_Ratio,Maximum_Drawdown,Total_Trades,Win_Rate,Profit_Factor,Expectancy,Selection_Score
+0.03,0.08,5,0.5,NONE,False,9943.28994308612,-56.71005691388018,-0.005671005691388009,-0.0016612184357334137,-0.043006423430404214,-0.0399739832798538,34,0.47058823529411764,0.9542127578140316,-1.6679428504082006,0.7317135938286861

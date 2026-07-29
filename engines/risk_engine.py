@@ -1,0 +1,342 @@
+import streamlit as st
+from datetime import datetime, timedelta
+
+from broker import get_account, get_open_positions
+from broker import broker
+from engines.regime_engine import get_market_regime, get_market_risk_level
+
+from config import (
+    LIVE_TRADING,
+    MIN_TRADE_AMOUNT,
+    MAX_TRADE_AMOUNT,
+    ALLOW_PYRAMIDING,
+    MAX_POSITIONS,
+    MAX_OPEN_POSITIONS,
+    MAX_CRYPTO_POSITIONS,
+    MAX_PORTFOLIO_EXPOSURE,
+    MAX_TRADES_PER_DAY,
+    TRADE_COOLDOWN_MINUTES,
+    HIGH_SCORE_SIZE_MULTIPLIER,
+    NORMAL_SCORE_SIZE_MULTIPLIER,
+    LOW_SCORE_SIZE_MULTIPLIER,
+)
+
+
+def calculate_trade_amount(confidence, market_df=None):
+    """
+    Dynamic position sizing based on AI confidence and market risk.
+    """
+
+    confidence = float(confidence)
+
+    # Base position size from AI confidence
+    if confidence >= 90:
+        base_amount = 1000
+
+    elif confidence >= 85:
+        base_amount = 750
+
+    elif confidence >= 80:
+        base_amount = 500
+
+    elif confidence >= 75:
+        base_amount = 300
+
+    elif confidence >= 70:
+        base_amount = 200
+
+    else:
+        base_amount = 100
+
+    # Adjust based on market risk
+    if market_df is not None:
+        risk_level, risk_multiplier = get_market_risk_level(market_df)
+        
+        adjusted_amount = base_amount * risk_multiplier
+    else:
+        adjusted_amount = base_amount
+
+    # Respect configured limits
+    adjusted_amount = max(MIN_TRADE_AMOUNT, adjusted_amount)
+    adjusted_amount = min(MAX_TRADE_AMOUNT, adjusted_amount)
+
+    return round(adjusted_amount, 2)
+
+def _is_crypto_ticker(ticker):
+    """This project's crypto tickers are all named 'XXX-USD'; stocks never are."""
+    return str(ticker).upper().endswith("-USD")
+
+
+def _get_crypto_position_count():
+    """
+    Number of crypto positions the BOT has actually opened, derived from
+    the trade journal (same source as get_bot_owned_crypto_value) --
+    NOT a raw count of the Binance wallet's nonzero balances.
+
+    The wallet almost always has dust in every tracked coin (testnet
+    seed funds), so counting the wallet directly meant this cap was
+    already maxed out before the bot ever placed a single crypto trade,
+    for the exact same reason the exposure and asset-class-limit checks
+    were broken earlier.
+    """
+    try:
+        from engines import performance_engine
+        open_positions = performance_engine.get_open_positions_cost_basis()
+        return sum(
+            1 for ticker in open_positions
+            if str(ticker).upper().endswith("-USD")
+        )
+    except Exception:
+        return 0
+
+
+def can_open_position(ticker):
+    """
+    Determines whether a new position can be opened.
+
+    Stocks (st.session_state.positions) and crypto (the Binance testnet
+    wallet) are tracked in completely different places, so they're capped
+    independently here. They used to share this one check against the
+    stock-only count, which meant stocks filling their 5 slots first
+    silently locked crypto out of every run, regardless of how much (or
+    little) crypto was actually held.
+    """
+
+    if _is_crypto_ticker(ticker):
+        if _get_crypto_position_count() >= MAX_CRYPTO_POSITIONS:
+            return False, "Maximum crypto positions reached."
+        return True, ""
+
+    # Already holding?
+    if ticker in st.session_state.positions:
+        if not ALLOW_PYRAMIDING:
+            return False, "Already holding this stock."
+
+    # Too many positions?
+    if len(st.session_state.positions) >= MAX_POSITIONS:
+        return False, "Maximum portfolio positions reached."
+
+    return True, ""
+
+
+def risk_check_before_trade(ticker, trade_amount, market_df):
+    """
+    Final risk gate before opening a trade.
+    Checks position limit, cash, exposure, daily trade limit, and cooldown.
+    """
+
+    is_crypto = _is_crypto_ticker(ticker)
+
+    # 1. Maximum open positions -- crypto and stocks capped independently,
+    # see can_open_position() above for why.
+    if is_crypto:
+        if _get_crypto_position_count() >= MAX_CRYPTO_POSITIONS:
+            return False, "Maximum crypto positions reached."
+    elif LIVE_TRADING:
+        try:
+            positions = get_open_positions()
+            if len(positions) >= MAX_OPEN_POSITIONS:
+                return False, "Maximum open positions reached."
+        except Exception:
+            pass
+    else:
+        if len(st.session_state.positions) >= MAX_OPEN_POSITIONS:
+            return False, "Maximum open positions reached."
+
+    # 2. Cash check -- crypto spends from the Binance testnet USDT
+    # balance, not the local stock paper-trading cash pool. This used to
+    # check st.session_state.cash even for crypto orders, so crypto could
+    # get "Insufficient cash" once stocks used up the stock cash pool,
+    # despite the testnet balance being untouched and available.
+    if is_crypto:
+        try:
+            import binance_broker
+            available_cash = binance_broker.get_available_usdt()
+        except Exception:
+            available_cash = 0.0
+    elif LIVE_TRADING:
+        try:
+            account = get_account()
+            available_cash = float(account.cash)
+        except Exception:
+            available_cash = st.session_state.cash
+    else:
+        available_cash = st.session_state.cash
+
+    if available_cash < trade_amount:
+        return False, "Insufficient cash."
+
+    # 3. Portfolio exposure
+    exposure = get_exposure_percent(market_df)
+
+    if exposure >= MAX_PORTFOLIO_EXPOSURE * 100:
+        return False, "Maximum portfolio exposure reached."
+
+    # 4. Daily trade limit
+    today = datetime.now().date()
+    trades_today = 0
+
+    for trade in st.session_state.trade_log:
+        if "Time" in trade:
+            try:
+                trade_date = datetime.fromisoformat(trade["Time"]).date()
+                if trade_date == today:
+                    trades_today += 1
+            except Exception:
+                pass
+
+    if trades_today >= MAX_TRADES_PER_DAY:
+        return False, "Maximum daily trades reached."
+
+    # 5. Cooldown per ticker
+    if "last_trade_time" not in st.session_state:
+        st.session_state.last_trade_time = {}
+
+    if ticker in st.session_state.last_trade_time:
+        elapsed = datetime.now() - st.session_state.last_trade_time[ticker]
+
+        if elapsed < timedelta(minutes=TRADE_COOLDOWN_MINUTES):
+            return False, "Cooldown active."
+
+    return True, "OK"
+
+def get_dynamic_buy_confidence(market_df):
+    """
+    Adjusts required BUY confidence based on market movement and market regime.
+    Higher number = stricter BUY filter.
+    """
+
+    avg_change = market_df["Daily Change %"].mean()
+    market_regime, regime_score = get_market_regime()
+
+    # Base threshold from short-term market movement
+    if avg_change > 2:
+        threshold = 65
+    elif avg_change > 1:
+        threshold = 70
+    elif avg_change > 0:
+        threshold = 75
+    elif avg_change > -1:
+        threshold = 80
+    else:
+        threshold = 85
+
+    # Regime adjustment
+    if market_regime == "STRONG BULL":
+        threshold -= 5
+    elif market_regime == "BULL":
+        threshold -= 2
+    elif market_regime == "NEUTRAL":
+        threshold += 0
+    elif market_regime == "DEFENSIVE":
+        threshold += 5
+    elif market_regime == "BEAR":
+        threshold += 10
+
+    # Keep threshold inside safe range
+    threshold = max(60, min(95, threshold))
+
+    return threshold
+
+def get_exposure_percent(market_df):
+    if LIVE_TRADING:
+        try:
+            positions = get_open_positions()
+            account = get_account()
+
+            equity = float(account.equity)
+            total_position_value = 0
+
+            for position in positions:
+                total_position_value += float(position.market_value)
+
+            if equity == 0:
+                return 0
+
+            return (total_position_value / equity) * 100
+
+        except Exception:
+            return 0
+
+    portfolio_value = calculate_portfolio_value(market_df)
+    invested_value = get_open_positions_value(market_df)
+
+    if portfolio_value == 0:
+        return 0
+
+    return (invested_value / portfolio_value) * 100
+
+def calculate_portfolio_value(market_df):
+    value = st.session_state.cash
+
+    for ticker, position in st.session_state.positions.items():
+        latest_price = market_df.loc[market_df["Ticker"] == ticker, "Price ($)"].values
+
+        if len(latest_price) > 0:
+            value += position["shares"] * latest_price[0]
+
+    # Crypto trades independently of LIVE_TRADING (always via Binance
+    # testnet), so its value belongs in the portfolio total regardless
+    # of stock execution mode.
+    try:
+        import binance_broker
+        value += binance_broker.get_crypto_positions_value(market_df)
+    except Exception:
+        pass  # Binance not configured/reachable -- don't break the whole page over it
+
+    return value
+
+def get_bot_owned_crypto_value(market_df):
+    """
+    Value of ONLY the crypto this bot has actually bought itself, derived
+    from trade_journal.db via FIFO BUY/SELL matching -- as opposed to
+    whatever raw balance happens to sit in the Binance testnet wallet.
+
+    Binance testnet accounts commonly come pre-seeded with dust in every
+    tracked coin (BTC/ETH/BNB/SOL) that the bot never traded. Counting
+    that dust as "invested" inflated the portfolio-exposure gate and
+    permanently blocked new trades (both stock and crypto) that had
+    nothing to do with it. This isolates the bot's own positions so the
+    exposure check reflects risk the bot actually chose to take on.
+    """
+    try:
+        from engines import performance_engine
+        open_positions = performance_engine.get_open_positions_cost_basis()
+    except Exception:
+        return 0.0
+
+    if market_df is None or market_df.empty:
+        return 0.0
+
+    total_value = 0.0
+    for ticker, lot in open_positions.items():
+        if not str(ticker).upper().endswith("-USD"):
+            continue  # this project's crypto tickers are all "XXX-USD"; skip stocks
+
+        price_rows = market_df.loc[market_df["Ticker"] == ticker, "Price ($)"]
+        if not price_rows.empty:
+            total_value += lot["shares"] * float(price_rows.iloc[0])
+
+    return total_value
+
+
+def get_open_positions_value(market_df):
+    total_value = 0.0
+
+    if LIVE_TRADING:
+        positions = broker.get_positions()
+        for pos in positions:
+            total_value += float(pos.market_value)
+    else:
+        for ticker, position in st.session_state.positions.items():
+            latest_price = market_df.loc[market_df["Ticker"] == ticker, "Price ($)"].values
+            if len(latest_price) > 0:
+                total_value += position["shares"] * latest_price[0]
+
+    # Only the bot's own crypto trades count toward invested/exposure --
+    # see get_bot_owned_crypto_value() docstring. calculate_portfolio_value()
+    # below still uses the FULL real wallet value for net-worth display,
+    # since that money is genuinely yours regardless of who bought it.
+    total_value += get_bot_owned_crypto_value(market_df)
+
+    return total_value

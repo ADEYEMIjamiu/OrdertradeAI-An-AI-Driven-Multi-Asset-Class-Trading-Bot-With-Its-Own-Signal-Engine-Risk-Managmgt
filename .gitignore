@@ -7,3 +7,9 @@ __pycache__/
 logs/
 .streamlit/secrets.toml
 emergency_stop.flag
+
+# Runtime state files -- only ever exist on the droplet, never meant to
+# be part of source control.
+etoro_position_state.json
+alpaca_highest_profit_state.json
+backups/

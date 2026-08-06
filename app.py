@@ -5,6 +5,7 @@ import ta
 import joblib
 import os
 import time
+import json
 
 if "AUTO_TRADING" not in st.session_state:
     st.session_state.AUTO_TRADING = False
@@ -2392,13 +2393,63 @@ def combine_for_paper_engine(stock_signals, paper_only_signals):
     return pd.concat(frames, ignore_index=True)
 
 
+
+# 2026-08-06: st.session_state.highest_profit (the peak profit % reached
+# per stock position, used below to trail an exit down from that peak
+# rather than a fixed take-profit level) used to live ONLY in
+# st.session_state. That's fine within one running process, but this
+# app's systemd service restarts on every deploy (and can restart for
+# other reasons too) -- session_state is wiped clean on restart, so a
+# position that had climbed to +5% and was being actively trailed would
+# silently forget that peak the moment the service bounced, and either
+# re-arm from whatever the price happens to be at that instant (losing
+# the lock it had already earned) or, worse, never trigger the trailing
+# exit it should have. Persisting to a small JSON file survives restarts,
+# the same fix already applied to eToro's position snapshot
+# (etoro_broker._POSITION_STATE_FILE) for the identical underlying
+# reason.
+_HIGHEST_PROFIT_STATE_FILE = "alpaca_highest_profit_state.json"
+
+
+def _load_highest_profit_state():
+    try:
+        with open(_HIGHEST_PROFIT_STATE_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_highest_profit_state(state):
+    try:
+        with open(_HIGHEST_PROFIT_STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        print(f"[apply_risk_management] could not persist highest_profit state: {e}")
+
+
 def apply_risk_management(market_df):
     if LIVE_TRADING:
         try:
             alpaca_positions = get_open_positions()
 
             if "highest_profit" not in st.session_state:
-                st.session_state.highest_profit = {}
+                # Restore from disk instead of starting empty, so a
+                # position that was already being trailed before a
+                # restart keeps its earned peak instead of losing it.
+                st.session_state.highest_profit = _load_highest_profit_state()
+
+            # Drop any ticker no longer actually held (closed manually on
+            # Alpaca's side, or closed by this same function while the
+            # service happened to be down) -- otherwise a stale peak could
+            # sit in the file forever and, worse, wrongly seed the
+            # trailing calculation if that ticker is ever bought again.
+            # Deliberately NOT normalized (upper/strip) -- must match the
+            # exact, unmodified `position.symbol` key used as `ticker`
+            # throughout the rest of this function below.
+            held_tickers = {position.symbol for position in alpaca_positions}
+            for stale_ticker in list(st.session_state.highest_profit.keys()):
+                if stale_ticker not in held_tickers:
+                    del st.session_state.highest_profit[stale_ticker]
 
             for position in alpaca_positions:
                 ticker = position.symbol
@@ -2485,6 +2536,11 @@ def apply_risk_management(market_df):
                         realized_pnl=qty * (current_price - entry_price),
                     )
                     del st.session_state.highest_profit[ticker]
+
+            # One write per call covers every update and deletion above --
+            # cheap (small JSON, local disk) and keeps the on-disk state
+            # from ever drifting more than one script pass behind memory.
+            _save_highest_profit_state(st.session_state.highest_profit)
 
         except Exception as e:
             st.session_state.trade_messages.append(

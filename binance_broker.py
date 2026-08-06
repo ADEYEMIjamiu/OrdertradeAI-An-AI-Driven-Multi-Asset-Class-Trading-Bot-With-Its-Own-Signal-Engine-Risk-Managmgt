@@ -35,6 +35,17 @@ def _to_binance_symbol(ticker: str) -> str:
     return f"{base}/USDT"
 
 
+def get_current_price(ticker: str) -> float:
+    """
+    Current last-traded price for a tracked crypto ticker. Used by
+    apply_crypto_risk_management() in app.py to check open positions
+    against their stop-loss/take-profit bands.
+    """
+    symbol = _to_binance_symbol(ticker)
+    ticker_data = exchange.fetch_ticker(symbol)
+    return float(ticker_data["last"])
+
+
 def check_broker_connection():
     """
     Validate the Binance testnet connection. Mirrors the shape of

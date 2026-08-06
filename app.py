@@ -64,6 +64,7 @@ from engines.digest_engine import calculate_performance_digest
 import telegram_notifier
 import emergency_stop
 import account_store
+import etoro_broker
 from engines.priority_engine import calculate_priority
 from engines.scoring_engine import calculate_trade_score
 from engines.trade_planner import create_trade_plan
@@ -156,7 +157,13 @@ from config import (
     BLOCK_BUYS_ON_BROKER_WARNING,
     BLOCK_ALL_ON_BROKER_CRITICAL,
     REQUIRE_ALPACA_PAPER_ENVIRONMENT,
-    AUTO_LIVE_TRADING_LOCKED
+    AUTO_LIVE_TRADING_LOCKED,
+    ALPACA_VALIDATION_START,
+    ETORO_LIVE_TRADING,
+    AUTO_ETORO_TRADING_LOCKED,
+    REQUIRE_ETORO_DEMO_ENVIRONMENT,
+    MAX_FOREX_POSITIONS,
+    MAX_COMMODITIES_POSITIONS,
 )
 
 st.set_page_config(page_title="OrderTrade AI", layout="wide")
@@ -475,7 +482,7 @@ def get_live_account_metrics():
         "positions_count": len(st.session_state.positions)
     }
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 def get_alpaca_performance_metrics():
     """
@@ -599,6 +606,24 @@ def get_alpaca_performance_metrics():
                     ),
                 }
             )
+
+        # Drop anything filled before the validation-period cutoff -- the
+        # Alpaca paper account has real order history from earlier dev
+        # testing (e.g. 2026-07-24) that must not leak into "clean slate"
+        # performance numbers. See ALPACA_VALIDATION_START in config.py.
+        # Orders with no timestamp at all are excluded too, since we can't
+        # verify which side of the cutoff they fall on.
+        def _is_after_validation_start(order_time):
+            if order_time is None:
+                return False
+            if order_time.tzinfo is None:
+                order_time = order_time.replace(tzinfo=timezone.utc)
+            return order_time >= ALPACA_VALIDATION_START
+
+        filled_orders = [
+            order for order in filled_orders
+            if _is_after_validation_start(order["time"])
+        ]
 
         # Sort oldest to newest before FIFO matching
         filled_orders.sort(
@@ -1621,6 +1646,438 @@ def execute_binance_trades(buy_signals, sell_signals):
                 f"Binance testnet SELL failed for {ticker}: {e}"
             )
 
+# Which of this project's own FOREX/COMMODITIES tickers (from
+# data/asset_universe.py) belong to which asset class -- needed here to
+# enforce MAX_FOREX_POSITIONS/MAX_COMMODITIES_POSITIONS independently
+# per class (same reasoning as MAX_CRYPTO_POSITIONS in config.py: each
+# class gets its own budget so one doesn't starve the other). Kept as an
+# explicit list rather than reading ASSET_UNIVERSE directly so this
+# doesn't silently start trying to route a newly-added ticker through
+# eToro before its symbol mapping (see etoro_broker.resolve_project_ticker)
+# has actually been verified live.
+_ETORO_ASSET_CLASS_TICKERS = {
+    "FOREX": ["EURUSD=X", "GBPUSD=X", "USDJPY=X"],
+    "COMMODITIES": ["GC=F", "CL=F", "SI=F"],
+}
+
+
+def execute_etoro_trades(buy_signals, sell_signals):
+    """
+    Execute approved FOREX/COMMODITIES BUY/SELL signals through eToro
+    (Demo account -- see REQUIRE_ETORO_DEMO_ENVIRONMENT guard below).
+
+    Modelled directly on execute_binance_trades() above (same reused
+    risk/sizing/logging calls), with two eToro-specific differences:
+      - eToro identifies positions by a numeric position_id, not by
+        ticker -- SELL has to look the position up first to get the ID
+        close_position() needs.
+      - MAX_FOREX_POSITIONS/MAX_COMMODITIES_POSITIONS are enforced here
+        directly against eToro's own live position list, since these
+        signals bypass the local paper-trading engine entirely once
+        ETORO_LIVE_TRADING is on -- the paper engine's own limit checks
+        never see them.
+
+    Live-tested 2026-08-03: an earlier version called
+    etoro_broker.find_position_by_symbol() repeatedly -- once per "already
+    holds" check, then again once per ticker in the asset class just to
+    count open positions for the cap above -- and each call fetches
+    eToro's portfolio fresh over the network. With several
+    FOREX/COMMODITIES signals in one pass that was a dozen-plus
+    sequential eToro API calls, and a single slow one (a real
+    requests.exceptions.ReadTimeout, confirmed live) crashed the entire
+    Streamlit page instead of just skipping that one trade. This now
+    fetches the position list ONCE per execution pass (wrapped so a
+    failure here aborts cleanly with a message rather than crashing) and
+    reuses that local snapshot for every check below.
+
+    Only ever called from a manual "Execute Trades" click -- see
+    AUTO_ETORO_TRADING_LOCKED in the Auto-Trading section further down,
+    which deliberately never calls this, per explicit user request
+    (2026-08-03) that eToro trades require a human click, unlike
+    stocks/crypto's optional auto-trading loop.
+    """
+    if emergency_stop.is_stopped():
+        st.session_state.trade_messages.append(
+            "🛑 Trade blocked: Emergency Stop is active."
+        )
+        return
+
+    if REQUIRE_ETORO_DEMO_ENVIRONMENT and not etoro_broker.IS_DEMO:
+        st.session_state.trade_messages.append(
+            "🛑 eToro trade blocked: ETORO_ENVIRONMENT is not 'demo' and "
+            "REQUIRE_ETORO_DEMO_ENVIRONMENT is True. This is a deliberate "
+            "safety lock -- do not bypass it without an explicit, separate "
+            "decision to go live on eToro."
+        )
+        return
+
+    def _load_positions_by_symbol():
+        """
+        One network call, returns {eToro symbolFull: position dict}. On
+        any failure (including a slow/timed-out request), returns None
+        so callers can abort cleanly instead of crashing the page.
+        """
+        try:
+            return {p["symbol"]: p for p in etoro_broker.get_positions()}
+        except Exception as e:
+            print(f"[execute_etoro_trades] could not load eToro positions: {e}")
+            return None
+
+    def _find_position(positions_by_symbol, project_ticker):
+        etoro_symbol = etoro_broker.resolve_project_ticker(project_ticker)
+        return positions_by_symbol.get(etoro_symbol)
+
+    def _reconcile_after_failure(ticker, action):
+        """
+        A client-side error (almost always a ReadTimeout) does NOT tell us
+        whether eToro actually processed the order -- the request can time
+        out waiting for a response while the order still goes through on
+        their end. Live-tested 2026-08-03: exactly this was checked
+        manually via SSH after a batch of timeouts, and it genuinely varies
+        (some timed-out orders had gone through, some hadn't). Blindly
+        treating every failure as "nothing happened" risks a duplicate
+        order on retry; blindly treating every failure as "it went through"
+        risks never retrying a trade that really did fail. This makes that
+        one-off manual check automatic, using find_position_by_symbol()
+        (which does a fresh, un-cached portfolio fetch and raises on
+        failure rather than swallowing it, unlike get_positions()) so the
+        trade_messages log tells the user definitively whether it's safe
+        to retry, instead of leaving that to a manual diagnostic every
+        time.
+
+        BUY and SELL have opposite "safe to retry" polarity: a position
+        existing now means a BUY likely succeeded (don't retry) but a
+        SELL/close likely failed (retry is fine); a position being absent
+        means the reverse. Best-effort only -- if this check itself fails,
+        it says so plainly rather than guessing.
+        """
+        try:
+            position = etoro_broker.find_position_by_symbol(ticker)
+        except Exception as reconcile_error:
+            return (
+                f" RECONCILIATION check also failed ({reconcile_error}) -- "
+                "verify manually on the eToro dashboard before retrying."
+            )
+
+        has_position = position is not None
+
+        if action == "BUY":
+            if has_position:
+                return (
+                    " RECONCILIATION: a position for this ticker now exists "
+                    "on eToro despite the error above -- the BUY likely "
+                    "went through. Do NOT resubmit; check the eToro "
+                    "dashboard first."
+                )
+            return (
+                " RECONCILIATION: no matching position found on eToro -- "
+                "the BUY most likely did not go through. Should be safe to "
+                "retry."
+            )
+
+        # SELL
+        if has_position:
+            return (
+                " RECONCILIATION: the position is still open on eToro -- "
+                "the SELL/close most likely did not go through. Should be "
+                "safe to retry."
+            )
+        return (
+            " RECONCILIATION: no matching position found on eToro anymore "
+            "-- the SELL/close likely went through despite the error above. "
+            "Do NOT resubmit."
+        )
+
+    positions_by_symbol = _load_positions_by_symbol()
+    if positions_by_symbol is None:
+        st.session_state.trade_messages.append(
+            "eToro trades skipped: could not load eToro positions "
+            "(connection issue). Nothing was submitted -- try again."
+        )
+        return
+
+    # =========================================================
+    # BUY EXECUTION
+    # =========================================================
+    for _, row in buy_signals.iterrows():
+        ticker = str(row["Ticker"]).upper().strip()
+        asset_class = row.get("Asset Class", "FOREX")
+
+        existing_position = _find_position(positions_by_symbol, ticker)
+
+        if existing_position is not None:
+            st.session_state.trade_messages.append(
+                f"BUY skipped for {ticker}: eToro already holds this position."
+            )
+            continue
+
+        # Per-asset-class position cap, checked against the same local
+        # snapshot -- no extra network calls per candidate ticker.
+        class_tickers = _ETORO_ASSET_CLASS_TICKERS.get(asset_class, [])
+        max_positions = (
+            MAX_FOREX_POSITIONS if asset_class == "FOREX" else MAX_COMMODITIES_POSITIONS
+        )
+        open_in_class = sum(
+            1 for t in class_tickers
+            if _find_position(positions_by_symbol, t) is not None
+        )
+        if open_in_class >= max_positions:
+            st.session_state.trade_messages.append(
+                f"BUY skipped for {ticker}: {asset_class} position limit "
+                f"reached ({open_in_class}/{max_positions})."
+            )
+            continue
+
+        try:
+            trade_amount = calculate_trade_amount(
+                row["AI Confidence %"],
+                market_df
+            )
+
+            allowed, reason = risk_check_before_trade(
+                ticker, trade_amount, market_df
+            )
+            if not allowed:
+                st.session_state.trade_messages.append(
+                    f"BUY skipped for {ticker}: {reason}"
+                )
+                continue
+
+            result = etoro_broker.buy(ticker, trade_amount)
+            fill_price = result.get("executed_price") or float(row.get("Price ($)", 0) or 0)
+
+            oms_order = create_order(
+                ticker=ticker,
+                side="BUY",
+                quantity=trade_amount / fill_price if fill_price else 0,
+                trade_amount=trade_amount,
+                price=fill_price,
+                asset_class=asset_class,
+                broker="etoro",
+                strategy=row.get("Strategy", "UNKNOWN"),
+                confidence=row.get("AI Confidence %", 0),
+                ai_trade_score=row.get("AI Trade Score", 0),
+                priority=row.get("Priority", "N/A"),
+                stop_loss=row.get("Stop Loss"),
+                take_profit=row.get("Take Profit"),
+            )
+            oms_order = mark_order_filled(
+                oms_order,
+                filled_price=fill_price,
+                filled_quantity=trade_amount / fill_price if fill_price else 0,
+            )
+            oms_order["broker_order_id"] = result.get("position_id") or "PENDING"
+            save_order(oms_order)
+
+            log_trade(
+                ticker=ticker,
+                action="BUY",
+                price=fill_price,
+                shares=trade_amount / fill_price if fill_price else 0,
+                amount=trade_amount,
+                confidence=float(row["AI Confidence %"]),
+                trend_score=float(row["Trend Score"]),
+                reason="AI BUY Signal",
+                mode="ETORO_DEMO",
+            )
+
+            if result.get("position_id") is not None:
+                # Only notify Telegram once eToro has actually confirmed
+                # the position -- previously this fired unconditionally
+                # right after the order POST, so a submitted-but-unfilled
+                # order (see the else branch below) produced a Telegram
+                # "filled" message that turned out to be wrong. Live-
+                # tested 2026-08-03: USDJPY=X and SI=F both sent "filled"
+                # Telegram alerts while buy() itself reported no confirmed
+                # position, and neither ticker showed up in the eToro
+                # portfolio minutes later -- the notification was telling
+                # the user something that hadn't actually happened.
+                telegram_notifier.notify_trade_fill(
+                    ticker=ticker,
+                    action="BUY",
+                    price=fill_price,
+                    shares=trade_amount / fill_price if fill_price else 0,
+                    amount=trade_amount,
+                    asset_class=asset_class,
+                    mode="ETORO_DEMO",
+                    confidence=row.get("AI Confidence %"),
+                    trade_grade=row.get("Trade Grade"),
+                )
+                # trailing_stop_set is set by etoro_broker.buy() only for
+                # FOREX/COMMODITIES (leveraged CFD) trades -- it's absent
+                # entirely for stocks/crypto orders routed through the same
+                # code path, hence .get() rather than a plain lookup.
+                trailing_note = (
+                    " Trailing stop enabled -- profit will lock in as price moves in our favor."
+                    if result.get("trailing_stop_set")
+                    else ""
+                )
+                st.session_state.trade_messages.append(
+                    f"BUY sent for {ticker}: ${trade_amount:,.2f} filled on "
+                    f"eToro Demo (position {result['position_id']})."
+                    f"{trailing_note}"
+                )
+                # Keep the local snapshot in sync for the rest of this
+                # loop -- otherwise a second BUY signal in the same
+                # asset class within this same pass wouldn't see the
+                # position that was just opened, and the position-cap
+                # check above would undercount.
+                etoro_symbol = etoro_broker.resolve_project_ticker(ticker)
+                positions_by_symbol[etoro_symbol] = {
+                    "symbol": ticker,
+                    "qty": trade_amount,
+                    "position_id": result["position_id"],
+                    "direction": "LONG",
+                    "open_price": result.get("executed_price"),
+                    "current_price": None,
+                    "net_profit": None,
+                }
+            else:
+                # Matches buy()'s own docstring: a stock-style order placed
+                # outside its market's hours won't have a position_id yet.
+                # Forex/commodities trade far closer to 24/5, so this is
+                # unexpected for them specifically and worth flagging.
+                st.session_state.trade_messages.append(
+                    f"BUY sent for {ticker} on eToro Demo, but no position "
+                    f"confirmed yet -- check the eToro dashboard before "
+                    f"assuming it filled. Raw order: {result['raw']}"
+                )
+
+        except Exception as e:
+            failed_order = create_order(
+                ticker=ticker,
+                side="BUY",
+                quantity=0,
+                trade_amount=0,
+                price=float(row.get("Price ($)", 0) or 0),
+                asset_class=asset_class,
+                broker="etoro",
+                strategy=row.get("Strategy", "UNKNOWN"),
+                confidence=row.get("AI Confidence %", 0),
+                ai_trade_score=row.get("AI Trade Score", 0),
+                priority=row.get("Priority", "N/A"),
+            )
+            save_order(mark_order_failed(failed_order, e))
+
+            st.session_state.trade_messages.append(
+                f"eToro BUY failed for {ticker}: {e}"
+                + _reconcile_after_failure(ticker, "BUY")
+            )
+
+        # Small pause between tickers -- live-tested 2026-08-03: a batch of
+        # 3-4 FOREX/COMMODITIES signals processed back-to-back (each one
+        # already doing up to 6 of its own requests via buy()'s poll loop)
+        # produced a cluster of ReadTimeouts, including one where the
+        # reconciliation check itself also timed out. Spacing requests out
+        # a little reduces how hard this loop bursts eToro's API in a
+        # short window -- cheap insurance against self-inflicted timeouts,
+        # separate from the per-request timeout bump above.
+        time.sleep(2)
+
+    # Reload once, for real, since BUY orders above may have changed
+    # eToro's position list -- same reasoning as execute_alpaca_trades()/
+    # execute_binance_trades() reloading before their own SELL loops. If
+    # this fails, fall back to the (possibly slightly stale) snapshot
+    # from the BUY loop rather than aborting SELLs entirely.
+    reloaded = _load_positions_by_symbol()
+    if reloaded is not None:
+        positions_by_symbol = reloaded
+
+    # =========================================================
+    # SELL EXECUTION
+    # =========================================================
+    for _, row in sell_signals.iterrows():
+        ticker = str(row["Ticker"]).upper().strip()
+        asset_class = row.get("Asset Class", "FOREX")
+
+        try:
+            position = _find_position(positions_by_symbol, ticker)
+
+            if position is None:
+                st.session_state.trade_messages.append(
+                    f"SELL skipped for {ticker}: no eToro position found."
+                )
+                continue
+
+            close_result = etoro_broker.close_position(position["position_id"])
+
+            current_price = float(row.get("Price ($)", 0) or position.get("open_price") or 0)
+            qty = position["qty"] / current_price if current_price else 0
+
+            oms_order = create_order(
+                ticker=ticker,
+                side="SELL",
+                quantity=qty,
+                trade_amount=position["qty"],
+                price=current_price,
+                asset_class=asset_class,
+                broker="etoro",
+                strategy=row.get("Strategy", "UNKNOWN"),
+                confidence=row.get("AI Confidence %", 0),
+                ai_trade_score=row.get("AI Trade Score", 0),
+                priority=row.get("Priority", "N/A"),
+            )
+            oms_order = mark_order_filled(
+                oms_order, filled_price=current_price, filled_quantity=qty
+            )
+            oms_order["broker_order_id"] = position["position_id"]
+            save_order(oms_order)
+
+            log_trade(
+                ticker=ticker,
+                action="SELL",
+                price=current_price,
+                shares=qty,
+                amount=position["qty"],
+                confidence=float(row["AI Confidence %"]),
+                trend_score=float(row["Trend Score"]),
+                reason="AI SELL Signal",
+                mode="ETORO_DEMO",
+            )
+
+            telegram_notifier.notify_trade_fill(
+                ticker=ticker,
+                action="SELL",
+                price=current_price,
+                shares=qty,
+                amount=position["qty"],
+                asset_class=asset_class,
+                mode="ETORO_DEMO",
+                confidence=row.get("AI Confidence %"),
+                trade_grade=row.get("Trade Grade"),
+            )
+
+            st.session_state.trade_messages.append(
+                f"SELL sent for {ticker}: position {position['position_id']} "
+                f"closed on eToro Demo. Raw: {close_result}"
+            )
+
+        except Exception as e:
+            failed_order = create_order(
+                ticker=ticker,
+                side="SELL",
+                quantity=0,
+                trade_amount=0,
+                price=float(row.get("Price ($)", 0) or 0),
+                asset_class=asset_class,
+                broker="etoro",
+                strategy=row.get("Strategy", "UNKNOWN"),
+                confidence=row.get("AI Confidence %", 0),
+                ai_trade_score=row.get("AI Trade Score", 0),
+                priority=row.get("Priority", "N/A"),
+            )
+            save_order(mark_order_failed(failed_order, e))
+
+            st.session_state.trade_messages.append(
+                f"eToro SELL failed for {ticker}: {e}"
+                + _reconcile_after_failure(ticker, "SELL")
+            )
+
+        # Same reasoning as the BUY loop above -- space requests out to
+        # avoid bursting eToro's API.
+        time.sleep(2)
+
+
 def filter_by_asset_class(df, asset_class):
     """
     Safely filter a signals DataFrame by Asset Class.
@@ -1708,14 +2165,26 @@ def apply_risk_management(market_df):
                 highest_profit = st.session_state.highest_profit[ticker]
                 trailing_exit_level = highest_profit - TRAILING_PROFIT_DROP
 
-                if change_percent <= -STOP_LOSS_PERCENT:
+                # STOP_LOSS_PERCENT/TAKE_PROFIT_PERCENT come from config.py
+                # as fractions (0.03 = "3%", per the inline comment there),
+                # but change_percent above is a real percentage number
+                # (e.g. -3.5 meaning -3.5%) -- comparing them directly was
+                # off by 100x, so a "3%" stop-loss was actually triggering
+                # at a 0.03 PERCENTAGE-POINT move (a rounding error's worth
+                # of price noise), not an actual 3% move. This is almost
+                # certainly the real reason positions were being closed
+                # within seconds of opening rather than the intended band
+                # being merely "tight". TRAILING_PROFIT_START/DROP below
+                # are already defined directly in percentage-points (1.5,
+                # 0.75) so they don't need this conversion.
+                if change_percent <= -(STOP_LOSS_PERCENT * 100):
                     sell_stock(ticker, qty)
                     st.session_state.trade_messages.append(
                         f"STOP LOSS triggered for {ticker}. Sold {round(qty, 4)} shares at ${round(current_price, 2)}"
                     )
                     del st.session_state.highest_profit[ticker]
 
-                elif change_percent >= TAKE_PROFIT_PERCENT:
+                elif change_percent >= (TAKE_PROFIT_PERCENT * 100):
                     sell_stock(ticker, qty)
                     st.session_state.trade_messages.append(
                         f"TAKE PROFIT triggered for {ticker}. Sold {round(qty, 4)} shares at ${round(current_price, 2)}"
@@ -1773,6 +2242,142 @@ def apply_risk_management(market_df):
 
             del st.session_state.positions[ticker]
 
+
+def apply_crypto_risk_management():
+    """
+    Automatic stop-loss/take-profit for Binance testnet crypto positions,
+    mirroring what apply_risk_management() does for Alpaca stock positions
+    above. Added 2026-07-30 alongside turning ALLOW_CRYPTO_PYRAMIDING off
+    -- previously crypto had no automatic exit at all, so positions only
+    ever grew (via pyramiding) and essentially never closed, which is why
+    Binance testnet USDT only ever drained and never came back.
+
+    Binance's wallet-balance API (binance_broker.get_positions()) has no
+    concept of "entry price" -- it's a spot balance, not a tracked
+    position like Alpaca gives us -- so entry price is looked up from the
+    most recent FILLED BUY order for that symbol in the persisted order
+    book (engines/order_manager.py). This is only reliable with pyramiding
+    off: with at most one open lot per coin, "most recent BUY fill" is
+    unambiguous. If pyramiding is ever turned back on, this would need to
+    become a proper weighted-average cost basis instead.
+    """
+    import binance_broker
+    import engines.order_manager as order_manager
+
+    try:
+        positions = binance_broker.get_positions()
+    except Exception as e:
+        st.session_state.trade_messages.append(
+            f"Crypto risk management skipped: could not load Binance "
+            f"positions: {e}"
+        )
+        return
+
+    if not positions:
+        return
+
+    try:
+        recent_orders = order_manager.load_orders(limit=200)
+    except Exception as e:
+        st.session_state.trade_messages.append(
+            f"Crypto risk management skipped: could not load order "
+            f"history: {e}"
+        )
+        return
+
+    for position in positions:
+        ticker = str(position["symbol"]).upper().strip()
+        qty = float(position["qty"])
+
+        entry_order = next(
+            (
+                o for o in recent_orders
+                if str(o.get("ticker", "")).upper().strip() == ticker
+                and str(o.get("broker", "")).lower() == "binance"
+                and str(o.get("side", "")).upper() == "BUY"
+                and str(o.get("status", "")).upper() == "FILLED"
+                and o.get("filled_price")
+            ),
+            None,
+        )
+
+        if entry_order is None:
+            continue
+
+        entry_price = float(entry_order["filled_price"])
+        if entry_price <= 0:
+            continue
+
+        try:
+            current_price = binance_broker.get_current_price(ticker)
+        except Exception:
+            continue
+
+        change_percent = ((current_price / entry_price) - 1) * 100
+
+        if change_percent <= -(STOP_LOSS_PERCENT * 100):
+            exit_reason = "STOP LOSS"
+        elif change_percent >= (TAKE_PROFIT_PERCENT * 100):
+            exit_reason = "TAKE PROFIT"
+        else:
+            continue
+
+        try:
+            binance_broker.sell_crypto(ticker, qty)
+        except Exception as e:
+            st.session_state.trade_messages.append(
+                f"Crypto {exit_reason} failed for {ticker}: {e}"
+            )
+            continue
+
+        oms_order = create_order(
+            ticker=ticker,
+            side="SELL",
+            quantity=qty,
+            trade_amount=qty * current_price,
+            price=current_price,
+            asset_class="CRYPTO",
+            broker="binance",
+            strategy="Risk Management",
+            confidence=0,
+            ai_trade_score=0,
+            priority="N/A",
+        )
+        oms_order = mark_order_filled(
+            oms_order, filled_price=current_price, filled_quantity=qty
+        )
+        save_order(oms_order)
+
+        realized_pnl = qty * (current_price - entry_price)
+
+        log_trade(
+            ticker=ticker,
+            action="SELL",
+            price=current_price,
+            shares=qty,
+            amount=qty * current_price,
+            confidence=0,
+            trend_score=0,
+            reason=exit_reason,
+            mode="BINANCE_TESTNET",
+        )
+
+        telegram_notifier.notify_trade_fill(
+            ticker=ticker,
+            action="SELL",
+            price=current_price,
+            shares=qty,
+            amount=qty * current_price,
+            asset_class="CRYPTO",
+            mode="BINANCE_TESTNET",
+            realized_pnl=realized_pnl,
+        )
+
+        st.session_state.trade_messages.append(
+            f"{exit_reason} triggered for {ticker}. Sold "
+            f"{round(qty, 6)} units at ${round(current_price, 2)} "
+            f"(entry ${round(entry_price, 2)})."
+        )
 
 
 # NOTE: get_exposure_percent used to be redefined here, shadowing the
@@ -1958,6 +2563,7 @@ market_df["Priority"] = market_df.apply(calculate_priority, axis=1)
 
 # Apply risk-management values first
 apply_risk_management(market_df)
+apply_crypto_risk_management()
 
 # Calculate current portfolio information
 portfolio_value = calculate_portfolio_value(market_df)
@@ -2011,6 +2617,7 @@ else:
     )
 
 apply_risk_management(market_df)
+apply_crypto_risk_management()
 
 portfolio_value = calculate_portfolio_value(market_df)
 invested_value = get_open_positions_value(market_df)
@@ -2220,6 +2827,18 @@ st.divider()
 
 st.subheader("🧠 AI Decision Engine")
 
+# 2026-08-06: this table previously had no timestamp anywhere on it, unlike
+# the "Last Execution Attempt" section further down (which shows
+# "Processed at: ..."). That's confusing on a page that auto-refreshes --
+# a user comparing this table against an older execution result has no way
+# to tell the two apart came from different points in time, and it can look
+# like tickers vanished or appeared for no reason when really the AI's
+# signals just moved between refreshes. Mirrors the exact "time" format
+# used at the actual execution-result "Processed at:" caption below
+# (datetime.now().strftime("%Y-%m-%d %H:%M:%S")) so the two timestamps are
+# directly comparable at a glance.
+st.caption(f"Signals generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
 # =========================================
 # 🔥 ENSURE REQUIRED COLUMNS EXIST (ADD HERE)
 # =========================================
@@ -2398,19 +3017,11 @@ if st.button("Execute Trades"):
         manual_buy_stocks = filter_by_asset_class(manual_buy_signals, "US_STOCKS")
         manual_sell_stocks = filter_by_asset_class(manual_sell_signals, "US_STOCKS")
 
-        # PAPER_ONLY_ASSET_CLASSES (forex, commodities) have no real
-        # broker connected yet, so approved trades in those classes
-        # can't be submitted here the way stocks can via Alpaca.
-        # Surface that instead of silently dropping them.
-        manual_buy_paper_only = collect_paper_only_signals(manual_buy_signals)
-        manual_sell_paper_only = collect_paper_only_signals(manual_sell_signals)
-        if not manual_buy_paper_only.empty or not manual_sell_paper_only.empty:
-            st.session_state.trade_messages.append(
-                f"{'/'.join(PAPER_ONLY_ASSET_CLASSES)} signals were approved "
-                "but not submitted: no live broker is connected for them "
-                "yet. They only execute through local paper trading "
-                "(LIVE_TRADING = False)."
-            )
+        # FOREX/COMMODITIES (PAPER_ONLY_ASSET_CLASSES) are now handled in
+        # one unconditional block below, alongside crypto -- both route
+        # through their own real broker (eToro / Binance) independent of
+        # this LIVE_TRADING toggle, which only ever concerns stocks via
+        # Alpaca. See that block for eToro's manual-confirm-only handling.
 
         if (
             manual_buy_stocks.empty
@@ -2441,24 +3052,13 @@ if st.button("Execute Trades"):
             stock_buy_signals = filter_by_asset_class(buy_signals, "US_STOCKS")
             stock_sell_signals = filter_by_asset_class(sell_signals, "US_STOCKS")
 
-            # PAPER_ONLY_ASSET_CLASSES (forex, commodities) have no real
-            # broker integration yet, so they share the exact same local
-            # paper-trading engine as stocks -- same fake cash pool,
-            # same fake position book -- rather than being blocked
-            # entirely or given their own separate simulated wallets.
-            paper_only_buy_signals = collect_paper_only_signals(buy_signals)
-            paper_only_sell_signals = collect_paper_only_signals(sell_signals)
-
-            paper_buy_signals = combine_for_paper_engine(
-                stock_buy_signals, paper_only_buy_signals
-            )
-            paper_sell_signals = combine_for_paper_engine(
-                stock_sell_signals, paper_only_sell_signals
-            )
-
+            # FOREX/COMMODITIES no longer merge into this call -- see the
+            # unconditional block below, which routes them through eToro
+            # (or local paper as a fallback) independent of this
+            # LIVE_TRADING toggle.
             execute_paper_trades(
-                paper_buy_signals,
-                paper_sell_signals
+                stock_buy_signals,
+                stock_sell_signals
             )
 
     # Crypto always executes on Binance testnet, independent of the
@@ -2468,6 +3068,27 @@ if st.button("Execute Trades"):
 
     if not crypto_buy_signals.empty or not crypto_sell_signals.empty:
         execute_binance_trades(crypto_buy_signals, crypto_sell_signals)
+
+    # FOREX/COMMODITIES (PAPER_ONLY_ASSET_CLASSES): route through eToro
+    # Demo when enabled, independent of the LIVE_TRADING toggle above
+    # (same reasoning as crypto/Binance just above -- that toggle only
+    # ever concerns stocks via Alpaca). Manual-confirm only: this whole
+    # button handler only ever runs from a human "Execute Trades" click,
+    # so no separate AUTO_ETORO_TRADING_LOCKED check is needed here --
+    # that gate lives in the Auto-Trading section further down instead.
+    manual_paper_only_buy = collect_paper_only_signals(buy_signals)
+    manual_paper_only_sell = collect_paper_only_signals(sell_signals)
+
+    if not manual_paper_only_buy.empty or not manual_paper_only_sell.empty:
+        if ETORO_LIVE_TRADING:
+            execute_etoro_trades(manual_paper_only_buy, manual_paper_only_sell)
+        else:
+            st.session_state.trade_messages.append(
+                f"{'/'.join(PAPER_ONLY_ASSET_CLASSES)} signals were approved "
+                "but not submitted to a live broker: ETORO_LIVE_TRADING is "
+                "False. Executing through local paper trading instead."
+            )
+            execute_paper_trades(manual_paper_only_buy, manual_paper_only_sell)
 
     st.session_state.last_execution_result = {
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -2578,28 +3199,28 @@ else:
         auto_buy_stocks = filter_by_asset_class(auto_buy, "US_STOCKS")
         auto_sell_stocks = filter_by_asset_class(auto_sell, "US_STOCKS")
 
-        # PAPER_ONLY_ASSET_CLASSES (forex, commodities) share stocks'
-        # local paper-trading engine -- see the matching comment in the
-        # manual Execute Trades block above.
-        auto_buy_paper_only = collect_paper_only_signals(auto_buy)
-        auto_sell_paper_only = collect_paper_only_signals(auto_sell)
-
         if LIVE_TRADING:
-            # NOTE: PAPER_ONLY_ASSET_CLASSES are intentionally excluded
-            # here. LIVE_TRADING routes through Alpaca, which cannot
-            # execute forex/commodities tickers -- those only ever trade
-            # through the local paper engine below until a real broker
-            # is integrated for them.
-            execute_alpaca_trades(auto_buy_stocks, auto_sell_stocks)
+            # AUTO_LIVE_TRADING_LOCKED was meant to keep Alpaca execution
+            # manual-only (require a human to click "Execute Trades")
+            # while auto-trading still runs crypto/forex/commodities on
+            # its own. It was defined in config.py and checked inside
+            # validate_alpaca_execution_environment() -- but that function
+            # was never actually called from anywhere, so the lock did
+            # nothing and stock BUYs kept auto-firing through this exact
+            # branch every autorefresh cycle regardless of the setting.
+            # Enforcing it here for real.
+            if AUTO_LIVE_TRADING_LOCKED:
+                st.session_state.trade_messages.append(
+                    "Auto-Trading: stock BUY/SELL signals skipped -- "
+                    "Alpaca execution is locked to manual confirmation "
+                    "(AUTO_LIVE_TRADING_LOCKED = True). Crypto below is "
+                    "unaffected; FOREX/COMMODITIES below is locked the "
+                    "same way, separately, via AUTO_ETORO_TRADING_LOCKED."
+                )
+            else:
+                execute_alpaca_trades(auto_buy_stocks, auto_sell_stocks)
         else:
-            auto_buy_paper = combine_for_paper_engine(
-                auto_buy_stocks, auto_buy_paper_only
-            )
-            auto_sell_paper = combine_for_paper_engine(
-                auto_sell_stocks, auto_sell_paper_only
-            )
-
-            execute_paper_trades(auto_buy_paper, auto_sell_paper)
+            execute_paper_trades(auto_buy_stocks, auto_sell_stocks)
 
         # Crypto always executes on Binance testnet, independent of
         # LIVE_TRADING (which only concerns stocks).
@@ -2608,6 +3229,27 @@ else:
 
         if not auto_buy_crypto.empty or not auto_sell_crypto.empty:
             execute_binance_trades(auto_buy_crypto, auto_sell_crypto)
+
+        # FOREX/COMMODITIES: eToro is manual-confirm only, same safety
+        # pattern as Alpaca above (AUTO_LIVE_TRADING_LOCKED) but its own
+        # separate flag -- auto-trading must never submit an eToro order
+        # on its own, per explicit user request (2026-08-03). Use the
+        # Execute Trades button for these instead.
+        auto_paper_only_buy = collect_paper_only_signals(auto_buy)
+        auto_paper_only_sell = collect_paper_only_signals(auto_sell)
+
+        if not auto_paper_only_buy.empty or not auto_paper_only_sell.empty:
+            if ETORO_LIVE_TRADING and AUTO_ETORO_TRADING_LOCKED:
+                st.session_state.trade_messages.append(
+                    f"Auto-Trading: {'/'.join(PAPER_ONLY_ASSET_CLASSES)} "
+                    "signals skipped -- eToro execution is locked to manual "
+                    "confirmation (AUTO_ETORO_TRADING_LOCKED = True). Use "
+                    "the Execute Trades button above."
+                )
+            elif ETORO_LIVE_TRADING:
+                execute_etoro_trades(auto_paper_only_buy, auto_paper_only_sell)
+            else:
+                execute_paper_trades(auto_paper_only_buy, auto_paper_only_sell)
 
     st.session_state.trade_execution_in_progress = False
     persist_account()

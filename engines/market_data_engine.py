@@ -30,7 +30,21 @@ def _utc_timestamp() -> str:
 def _normalise_symbol(symbol: str) -> str:
     """
     Normalise a market-data symbol before sending it to the
-    external data provider.
+    external data provider (yfinance).
+
+    Share-class tickers are a real gotcha here: Alpaca's own API requires
+    the dot notation (confirmed on Alpaca's forum -- "BRK.B" is correct
+    for their data/trading API), but yfinance uses a hyphen instead
+    ("BRK-B") -- passing "BRK.B" to yfinance returns nothing (empty/None
+    across the board) rather than an error, which is exactly what showed
+    up as an ERROR row for BRK.B on 2026-07-30 right after adding it.
+    asset_universe.py's ticker list is the single source of truth used
+    for BOTH the yfinance data fetch and the Alpaca order (see
+    execute_alpaca_trades in app.py, which uses row["Ticker"] as-is) --
+    so rather than keep two different ticker strings in sync everywhere,
+    this converts dots to hyphens ONLY for the yfinance-facing call here.
+    Alpaca execution elsewhere in the codebase still sees the original
+    "BRK.B" from asset_universe.py, since this function is data-fetch-only.
     """
     if symbol is None:
         raise ValueError("Market-data symbol cannot be None.")
@@ -42,6 +56,11 @@ def _normalise_symbol(symbol: str) -> str:
 
     if not clean_symbol:
         raise ValueError("Market-data symbol cannot be empty.")
+
+    # Share-class dot notation (BRK.B, BF.B, etc.) -- yfinance-specific,
+    # does not affect forex (=X) or commodities (=F) tickers since those
+    # never contain a dot.
+    clean_symbol = clean_symbol.replace(".", "-")
 
     return clean_symbol
 

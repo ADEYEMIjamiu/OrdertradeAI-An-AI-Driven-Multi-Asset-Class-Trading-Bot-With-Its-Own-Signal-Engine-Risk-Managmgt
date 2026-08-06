@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from engines.performance_engine import get_closed_trades_and_open_lots
 from data.asset_universe import get_enabled_symbols
+from config import CRYPTO_VALIDATION_START
 
 
 def _ticker_asset_class_map():
@@ -97,14 +98,35 @@ def calculate_performance_digest(period_days=1):
     """
     closed_trades, open_lots = get_closed_trades_and_open_lots()
 
+    ticker_map = _ticker_asset_class_map()
+
+    # Drop crypto round-trips whose ENTRY (the BUY that opened the lot)
+    # happened before CRYPTO_VALIDATION_START. These are the old
+    # pre-pyramiding-fix positions -- see the comment on
+    # CRYPTO_VALIDATION_START in config.py for the full story. Only
+    # applies to CRYPTO; stocks/forex/commodities never had this bug, so
+    # they're returned as-is.
+    def _counts_toward_digest(trade):
+        asset_class = ticker_map.get(
+            trade["ticker"], _classify_unknown_ticker(trade["ticker"])
+        )
+        if asset_class != "CRYPTO":
+            return True
+
+        entry_time = _parse_time(trade["entry_time"])
+        if entry_time is None:
+            return True  # malformed/missing timestamp -- don't silently drop it
+
+        return entry_time >= CRYPTO_VALIDATION_START
+
+    closed_trades = [t for t in closed_trades if _counts_toward_digest(t)]
+
     if period_days is not None:
         cutoff = datetime.now() - timedelta(days=period_days)
         closed_trades = [
             t for t in closed_trades
             if (_parse_time(t["exit_time"]) or datetime.min) >= cutoff
         ]
-
-    ticker_map = _ticker_asset_class_map()
 
     by_class_trades = {}
     for t in closed_trades:

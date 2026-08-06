@@ -163,7 +163,35 @@ def can_open_position(ticker):
             return False, "Maximum commodities positions reached."
         return True, ""
 
-    # Already holding?
+    # Already holding? / too many positions?
+    #
+    # This used to check st.session_state.positions and
+    # _get_stock_position_count() unconditionally, even when LIVE_TRADING
+    # is on. That's local-paper leftover state -- once stocks started
+    # routing through real Alpaca (2026-07-30), that local dict still had
+    # 5 old local-paper positions sitting in it, so every single Alpaca
+    # BUY got blocked with "Already holding this stock" or "Maximum
+    # portfolio positions reached" even though the real Alpaca account had
+    # zero open positions and plenty of free cash. Mirrors the LIVE_TRADING
+    # branch risk_check_before_trade() already uses below.
+    if LIVE_TRADING:
+        try:
+            owned_symbols = {
+                str(position.symbol).upper().strip()
+                for position in get_open_positions()
+            }
+        except Exception:
+            owned_symbols = set()
+
+        if ticker in owned_symbols:
+            if not ALLOW_PYRAMIDING:
+                return False, "Already holding this stock."
+
+        if len(owned_symbols) >= MAX_POSITIONS:
+            return False, "Maximum portfolio positions reached."
+
+        return True, ""
+
     if ticker in st.session_state.positions:
         if not ALLOW_PYRAMIDING:
             return False, "Already holding this stock."

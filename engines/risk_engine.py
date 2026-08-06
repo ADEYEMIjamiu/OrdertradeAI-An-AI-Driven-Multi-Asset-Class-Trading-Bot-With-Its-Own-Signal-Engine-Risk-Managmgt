@@ -7,6 +7,7 @@ from engines.regime_engine import get_market_regime, get_market_risk_level
 
 from config import (
     LIVE_TRADING,
+    ETORO_LIVE_TRADING,
     MIN_TRADE_AMOUNT,
     MAX_TRADE_AMOUNT,
     ALLOW_PYRAMIDING,
@@ -22,6 +23,7 @@ from config import (
     NORMAL_SCORE_SIZE_MULTIPLIER,
     LOW_SCORE_SIZE_MULTIPLIER,
 )
+from data.asset_universe import ASSET_UNIVERSE
 
 
 def calculate_trade_amount(confidence, market_df=None):
@@ -79,13 +81,54 @@ def _is_commodity_ticker(ticker):
     return str(ticker).upper().endswith("=F")
 
 
+def _get_etoro_position_count(asset_class):
+    """
+    Real eToro-backed count for FOREX/COMMODITIES. Fixed 2026-08-06:
+    this used to always count from st.session_state.positions (the local
+    paper-trading dict), with a comment claiming "no real forex broker
+    yet." That stopped being true once etoro_broker.py went live
+    (2026-08-03) -- real FOREX/COMMODITIES trades route through eToro
+    and never touch st.session_state.positions at all when
+    ETORO_LIVE_TRADING is on, so the old count was silently checking a
+    dict that real trades never update. It hadn't caused a visible bug
+    yet because execute_etoro_trades() in app.py already has its own,
+    correct real-position cap check that runs first -- but this function
+    is also called as a second gate right after it (via
+    risk_check_before_trade()), and would have quietly rubber-stamped
+    that gate as "0 open" forever, or blocked things incorrectly, the
+    moment anything relied on it alone. Mirrors the exact
+    positions-by-symbol / resolve_project_ticker pattern already used in
+    execute_etoro_trades().
+    """
+    try:
+        import etoro_broker
+        positions_by_symbol = {p["symbol"] for p in etoro_broker.get_positions()}
+    except Exception:
+        return 0
+
+    project_tickers = ASSET_UNIVERSE.get(asset_class, {}).get("symbols", [])
+    count = 0
+    for ticker in project_tickers:
+        try:
+            etoro_symbol = etoro_broker.resolve_project_ticker(ticker)
+        except Exception:
+            continue
+        if etoro_symbol in positions_by_symbol:
+            count += 1
+    return count
+
+
 def _get_forex_position_count():
     """
-    Forex has no real broker yet, so (unlike crypto) there's no separate
-    wallet/journal to count from -- it shares st.session_state.positions
-    with stocks. Counting only forex-suffixed tickers here keeps its cap
-    independent of how many stock positions happen to be open.
+    Real eToro count when ETORO_LIVE_TRADING is on (the normal case --
+    see _get_etoro_position_count() docstring for why). Falls back to
+    the old local-paper count only when eToro trading is switched off
+    and FOREX signals are genuinely routing through the local paper
+    engine instead, where st.session_state.positions is the correct and
+    only source of truth.
     """
+    if ETORO_LIVE_TRADING:
+        return _get_etoro_position_count("FOREX")
     return sum(
         1 for t in st.session_state.positions if _is_forex_ticker(t)
     )
@@ -93,6 +136,8 @@ def _get_forex_position_count():
 
 def _get_commodity_position_count():
     """Same reasoning as _get_forex_position_count(), for commodities."""
+    if ETORO_LIVE_TRADING:
+        return _get_etoro_position_count("COMMODITIES")
     return sum(
         1 for t in st.session_state.positions if _is_commodity_ticker(t)
     )

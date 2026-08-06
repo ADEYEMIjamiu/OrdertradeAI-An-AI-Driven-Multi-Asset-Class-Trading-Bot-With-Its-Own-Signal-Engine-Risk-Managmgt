@@ -187,6 +187,39 @@ def notify_trade_fill(
     send_telegram_message("\n".join(lines))
 
 
+def notify_position_closed_automatically(
+    ticker, position_id, asset_class="FOREX/COMMODITIES", mode="ETORO_DEMO"
+):
+    """
+    Alert that a position closed on its own -- a broker-side stop-loss,
+    take-profit, or trailing stop firing -- rather than this app deciding
+    to sell it. Added 2026-08-06 alongside eToro's trailing stop feature,
+    specifically because eToro's exits happen entirely on eToro's own
+    servers with no callback to this app (unlike Alpaca/Binance, where
+    THIS code decides to sell and already knows the instant it happens --
+    see notify_trade_fill() calls in apply_risk_management() and
+    apply_crypto_risk_management() in app.py). The only way this app
+    notices at all is etoro_broker.check_for_closed_positions() comparing
+    "what's open now" against a saved snapshot of what was open last
+    time.
+
+    Deliberately does NOT claim an exact close price, P&L, or which of
+    the three triggers (stop-loss/take-profit/trailing) caused it --
+    detecting that the position is simply gone doesn't tell us any of
+    that without an extra eToro API lookup this project hasn't
+    live-tested yet. Reporting a specific number here without actually
+    knowing it would be worse than plainly saying "check the dashboard."
+    """
+    lines = [
+        f"🔴 POSITION CLOSED — {ticker} ({asset_class})",
+        f"Position {position_id} closed automatically -- likely a "
+        f"stop-loss, take-profit, or trailing stop.",
+        f"Check the eToro dashboard for the exact close price and reason.",
+        f"Mode: {mode}",
+    ]
+    send_telegram_message("\n".join(lines))
+
+
 def notify_digest(period_label, overall, by_asset_class):
     """
     Format and send a Performance Digest as a Telegram message.

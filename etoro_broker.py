@@ -39,6 +39,7 @@ this in:
     Trading Bot" guide splits it, so it's preserved as-is here.
 """
 
+import json
 import os
 import time
 import uuid
@@ -712,6 +713,80 @@ def set_trailing_stop(position_id: int, stop_loss_rate: float, take_profit_rate:
     )
     response.raise_for_status()
     return response.json()
+
+
+# 2026-08-06: used by check_for_closed_positions() below to notice when a
+# position closes broker-side (stop-loss, take-profit, trailing stop) with
+# no callback to this app at all. Deliberately a plain file on disk, NOT
+# Streamlit session_state -- session_state resets to empty every time the
+# systemd service restarts (which happens on every deploy, and has
+# happened many times in one evening of testing alone). Without durable
+# storage here, every restart would make it look like every currently-open
+# position "just closed" simultaneously, firing a false alert for each one
+# the moment the service came back up. A plain relative filename matches
+# the same pattern engines/order_manager.py already uses for
+# trade_journal.db -- both rely on the systemd service's working directory
+# being the project root.
+_POSITION_STATE_FILE = "etoro_position_state.json"
+
+
+def _load_known_positions():
+    try:
+        with open(_POSITION_STATE_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_known_positions(positions_by_id):
+    with open(_POSITION_STATE_FILE, "w") as f:
+        json.dump(positions_by_id, f)
+
+
+def check_for_closed_positions():
+    """
+    Detect eToro positions that were open the last time this was called
+    but aren't open anymore -- i.e. closed by eToro itself, broker-side,
+    via a stop-loss, take-profit, or trailing stop. See the
+    _POSITION_STATE_FILE comment above for why this needs a durable
+    on-disk snapshot rather than in-memory state.
+
+    This project's own code only ever calls close_position() for FOREX/
+    COMMODITIES in response to an explicit SELL signal (execute_etoro_
+    trades() in app.py) -- it never decides on its own to close one of
+    these, unlike Alpaca stocks/Binance crypto where THIS code makes that
+    call and therefore already knows the instant it happens. Comparing
+    "open now" against "open last check" is the only way this app can
+    notice an eToro-side close at all.
+
+    Returns a list of {"symbol", "position_id"} dicts, one entry per
+    position that disappeared since the last call -- an empty list is
+    normal and expected on most calls. A transient get_positions()
+    failure returns [] without touching the saved snapshot, so a brief
+    eToro API hiccup can't be mistaken for every open position closing at
+    once.
+    """
+    try:
+        current_positions = get_positions()
+    except Exception:
+        return []
+
+    previous = _load_known_positions()
+    current_by_id = {
+        str(p["position_id"]): p["symbol"]
+        for p in current_positions
+        if p.get("position_id") is not None
+    }
+
+    closed = [
+        {"symbol": symbol, "position_id": position_id}
+        for position_id, symbol in previous.items()
+        if position_id not in current_by_id
+    ]
+
+    _save_known_positions(current_by_id)
+
+    return closed
 
 
 if __name__ == "__main__":

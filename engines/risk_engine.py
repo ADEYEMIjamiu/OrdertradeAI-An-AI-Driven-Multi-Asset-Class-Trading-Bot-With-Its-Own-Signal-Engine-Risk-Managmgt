@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from broker import get_account, get_open_positions
 from broker import broker
 from engines.regime_engine import get_market_regime, get_market_risk_level
+from engines.order_manager import load_orders
 
 from config import (
     LIVE_TRADING,
@@ -309,28 +310,72 @@ def risk_check_before_trade(ticker, trade_amount, market_df):
     if exposure >= MAX_PORTFOLIO_EXPOSURE * 100:
         return False, "Maximum portfolio exposure reached."
 
-    # 4. Daily trade limit
+    # 4 & 5. Daily trade limit + per-ticker cooldown.
+    #
+    # Fixed 2026-08-07: both of these used to read from
+    # st.session_state.trade_log / st.session_state.last_trade_time.
+    # Tracing through every execution path that actually places a real
+    # trade (execute_alpaca_trades, execute_binance_trades,
+    # execute_etoro_trades, execute_paper_trades in app.py) found that
+    # ONLY execute_paper_trades and execute_binance_trades ever wrote to
+    # those two session_state structures -- execute_alpaca_trades() and
+    # execute_etoro_trades() never touched either one. Since LIVE_TRADING
+    # and ETORO_LIVE_TRADING are both on, essentially every real stock
+    # and forex/commodities trade this bot places was silently invisible
+    # to both checks below: MAX_TRADES_PER_DAY only ever counted crypto,
+    # and TRADE_COOLDOWN_MINUTES never applied to stocks or
+    # forex/commodities at all. On top of that, session_state resets on
+    # every service restart (deploys, or health_check.sh's self-heal),
+    # so even crypto's numbers would silently reset to zero mid-day.
+    #
+    # Fix: read from the persistent order book (trade_journal.db, via
+    # engines.order_manager.load_orders()) instead. Every one of the
+    # four execution paths above already calls create_order()+
+    # save_order() on every fill, so this sees every real trade across
+    # every broker, and survives restarts -- no new state file needed,
+    # this data was already being recorded correctly, just never read
+    # back for these two checks.
+    try:
+        recent_orders = load_orders(limit=500)
+    except Exception:
+        recent_orders = []
+
+    def _order_timestamp(order):
+        timestamp_text = (
+            order.get("filled_at") or order.get("updated_at") or order.get("created_at")
+        )
+        if not timestamp_text:
+            return None
+        try:
+            return datetime.fromisoformat(timestamp_text)
+        except Exception:
+            return None
+
+    # 4. Daily trade limit -- global across all brokers/asset classes,
+    # matching the original check's scope.
     today = datetime.now().date()
     trades_today = 0
-
-    for trade in st.session_state.trade_log:
-        if "Time" in trade:
-            try:
-                trade_date = datetime.fromisoformat(trade["Time"]).date()
-                if trade_date == today:
-                    trades_today += 1
-            except Exception:
-                pass
+    for order in recent_orders:
+        ts = _order_timestamp(order)
+        if ts is not None and ts.date() == today:
+            trades_today += 1
 
     if trades_today >= MAX_TRADES_PER_DAY:
         return False, "Maximum daily trades reached."
 
-    # 5. Cooldown per ticker
-    if "last_trade_time" not in st.session_state:
-        st.session_state.last_trade_time = {}
+    # 5. Cooldown per ticker -- most recent order for this exact ticker,
+    # across all brokers.
+    ticker_normalized = str(ticker).upper().strip()
+    last_trade_for_ticker = None
+    for order in recent_orders:
+        if str(order.get("ticker", "")).upper().strip() != ticker_normalized:
+            continue
+        ts = _order_timestamp(order)
+        if ts is not None and (last_trade_for_ticker is None or ts > last_trade_for_ticker):
+            last_trade_for_ticker = ts
 
-    if ticker in st.session_state.last_trade_time:
-        elapsed = datetime.now() - st.session_state.last_trade_time[ticker]
+    if last_trade_for_ticker is not None:
+        elapsed = datetime.now() - last_trade_for_ticker
 
         if elapsed < timedelta(minutes=TRADE_COOLDOWN_MINUTES):
             return False, "Cooldown active."

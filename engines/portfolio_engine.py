@@ -1,7 +1,85 @@
+def _add_real_stock_and_etoro_values(allocation):
+    """
+    Adds real US_STOCKS (Alpaca) and FOREX/COMMODITIES (eToro) values to
+    an allocation dict in place. Shared by calculate_asset_allocation()
+    and calculate_asset_allocation_for_limits() below.
+
+    Fixed 2026-08-07: both functions used to derive US_STOCKS and
+    FOREX/COMMODITIES exposure entirely from the `positions` dict passed
+    in (st.session_state.positions), the same local-paper leftover state
+    already found to be silently stale for real Alpaca stock trades
+    (LIVE_TRADING) and real eToro forex/commodities trades
+    (ETORO_LIVE_TRADING) elsewhere in this project (see
+    engines/risk_engine.py's 2026-08-06/07 fixes for the same class of
+    bug). Real trades never touch that dict, so MAX_ASSET_CLASS_EXPOSURE
+    below was silently never actually enforced for stocks or
+    forex/commodities -- their allocation always looked near-zero
+    regardless of real holdings. Crypto already had its own real-data
+    fix (see the try/except below, pre-existing). This brings the other
+    two asset classes up to the same standard, using real broker data
+    exactly like execute_alpaca_trades()/execute_etoro_trades() do
+    for their own position-cap checks.
+    """
+    from config import LIVE_TRADING, ETORO_LIVE_TRADING
+
+    if LIVE_TRADING:
+        try:
+            from broker import get_open_positions
+            stock_value = sum(
+                float(position.market_value) for position in get_open_positions()
+            )
+            if stock_value > 0:
+                allocation["US_STOCKS"] = allocation.get("US_STOCKS", 0) + stock_value
+        except Exception:
+            pass
+
+    if ETORO_LIVE_TRADING:
+        try:
+            import etoro_broker
+            from data.asset_universe import ASSET_UNIVERSE
+
+            etoro_positions = etoro_broker.get_positions()
+            for asset_class in ("FOREX", "COMMODITIES"):
+                class_value = 0.0
+                for project_ticker in ASSET_UNIVERSE.get(asset_class, {}).get("symbols", []):
+                    etoro_symbol = etoro_broker.resolve_project_ticker(project_ticker)
+                    for position in etoro_positions:
+                        if position["symbol"] == etoro_symbol:
+                            # eToro's "qty" field is the invested/margin
+                            # USD amount, not a unit count -- see
+                            # etoro_broker.get_positions()'s docstring.
+                            class_value += float(position.get("qty") or 0)
+                if class_value > 0:
+                    allocation[asset_class] = allocation.get(asset_class, 0) + class_value
+        except Exception:
+            pass
+
+
 def calculate_asset_allocation(positions, market_df):
     """
     Calculates exposure by asset class.
+
+    `positions` (st.session_state.positions) is only actually
+    authoritative for US_STOCKS when LIVE_TRADING is off and for
+    FOREX/COMMODITIES when ETORO_LIVE_TRADING is off -- i.e. only when
+    those asset classes are genuinely running through the local
+    paper-trading engine. When the real brokers are on,
+    _add_real_stock_and_etoro_values() overrides/adds the real figures
+    instead. See that function's docstring for why this matters.
     """
+
+    from config import LIVE_TRADING, ETORO_LIVE_TRADING
+
+    # Asset classes the real-broker path below will supply instead --
+    # skipped here so a stale/leftover local `positions` entry (e.g. old
+    # dev-era stock positions still sitting in local_account.db, per
+    # config.py's LIVE_TRADING comment) can't get ADDED on top of the
+    # real figure and double-count.
+    _real_data_classes = set()
+    if LIVE_TRADING:
+        _real_data_classes.add("US_STOCKS")
+    if ETORO_LIVE_TRADING:
+        _real_data_classes.update({"FOREX", "COMMODITIES"})
 
     allocation = {}
 
@@ -12,6 +90,10 @@ def calculate_asset_allocation(positions, market_df):
             continue
 
         asset_class = row.iloc[0].get("Asset Class", "UNKNOWN")
+
+        if asset_class in _real_data_classes:
+            continue
+
         price = float(row.iloc[0]["Price ($)"])
         shares = float(position.get("shares", 0))
 
@@ -28,6 +110,8 @@ def calculate_asset_allocation(positions, market_df):
             allocation["CRYPTO"] = allocation.get("CRYPTO", 0) + crypto_value
     except Exception:
         pass
+
+    _add_real_stock_and_etoro_values(allocation)
 
     return allocation
 
@@ -247,7 +331,21 @@ def calculate_asset_allocation_for_limits(positions, market_df):
 
     calculate_asset_allocation() itself is left untouched: the Asset
     Allocation table should keep showing real, full holdings.
+
+    Fixed 2026-08-07: same real-broker-data fix as
+    calculate_asset_allocation() above, for the same reason -- this is
+    the function that actually feeds MAX_ASSET_CLASS_EXPOSURE below,
+    which gates real trade execution, so the stale-`positions` bug here
+    mattered even more than in the display-only version. See
+    _add_real_stock_and_etoro_values()'s docstring for the full story.
     """
+    from config import LIVE_TRADING, ETORO_LIVE_TRADING
+
+    _real_data_classes = set()
+    if LIVE_TRADING:
+        _real_data_classes.add("US_STOCKS")
+    if ETORO_LIVE_TRADING:
+        _real_data_classes.update({"FOREX", "COMMODITIES"})
 
     allocation = {}
 
@@ -258,6 +356,10 @@ def calculate_asset_allocation_for_limits(positions, market_df):
             continue
 
         asset_class = row.iloc[0].get("Asset Class", "UNKNOWN")
+
+        if asset_class in _real_data_classes:
+            continue
+
         price = float(row.iloc[0]["Price ($)"])
         shares = float(position.get("shares", 0))
 
@@ -272,6 +374,8 @@ def calculate_asset_allocation_for_limits(positions, market_df):
             allocation["CRYPTO"] = allocation.get("CRYPTO", 0) + crypto_value
     except Exception:
         pass
+
+    _add_real_stock_and_etoro_values(allocation)
 
     return allocation
 

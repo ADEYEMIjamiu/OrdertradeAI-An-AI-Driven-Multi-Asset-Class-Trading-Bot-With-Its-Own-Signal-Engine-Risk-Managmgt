@@ -63,6 +63,8 @@ from engines.position_sizing_engine import calculate_position_size
 from engines.execution_engine import sort_trade_queue, filter_executable_trades
 from engines import performance_engine
 from engines.digest_engine import calculate_performance_digest
+from engines.readiness_engine import calculate_readiness_scorecard
+from engines import equity_tracker
 import telegram_notifier
 import emergency_stop
 import account_store
@@ -3097,6 +3099,14 @@ risk_level, risk_multiplier = get_market_risk_level(market_df)
 
 portfolio_value = calculate_portfolio_value(market_df)
 
+# Durable equity-curve snapshot for the Real-Money Readiness
+# Scorecard's max-drawdown calculation (engines/equity_tracker.py).
+# Throttled internally to once per 15 minutes, so it's safe to call on
+# every script run. This is the last/most complete portfolio_value
+# recalculation in the script, right before it's used for the actual
+# risk dashboard below.
+equity_tracker.log_equity_snapshot(portfolio_value)
+
 # NOTE: this used to be recomputed here as (portfolio_value - cash) /
 # portfolio_value, a *fraction* (0-1), separate from -- and inconsistent
 # with -- the get_exposure_percent() *percentage* (0-100) used by the
@@ -3913,6 +3923,59 @@ else:
         "Telegram alerts aren't configured yet -- add TELEGRAM_BOT_TOKEN "
         "and TELEGRAM_CHAT_ID to .env to enable trade-fill alerts and "
         "the button above."
+    )
+
+st.divider()
+
+st.subheader("🎯 Real-Money Readiness Scorecard")
+st.caption(
+    "A data-driven checklist for when this bot has actually earned a "
+    "move from paper/demo/testnet to real capital -- not a decision "
+    "this makes on its own, just an honest read of the numbers so far."
+)
+
+scorecard = calculate_readiness_scorecard()
+
+sc1, sc2 = st.columns(2)
+with sc1:
+    st.metric(
+        "Validation Days",
+        f"{scorecard['days_elapsed']}/{scorecard['days_required']}",
+    )
+with sc2:
+    drawdown_display = (
+        "N/A (not enough history yet)"
+        if scorecard["max_drawdown_percent"] is None
+        else f"{scorecard['max_drawdown_percent']:.1f}% / {scorecard['max_drawdown_limit']}% limit"
+    )
+    st.metric("Max Drawdown", drawdown_display)
+
+scorecard_rows = []
+for asset_class, stats in scorecard["rows"].items():
+    pf = stats["profit_factor"]
+    scorecard_rows.append({
+        "Asset Class": asset_class,
+        "Trades Closed": f"{stats['trades_closed']} / {scorecard['min_trades_required']}",
+        "Win Rate %": round(stats["win_rate"], 1),
+        "Profit Factor": "N/A" if pf is None else f"{pf:.2f} (min {scorecard['min_profit_factor']})",
+        "Total P&L": f"${stats['total_pnl']:,.2f}",
+        "Ready?": "✅ Yes" if stats["ready"] else "⏳ Not yet",
+    })
+
+# OVERALL first, then asset classes alphabetically.
+scorecard_rows.sort(key=lambda r: (r["Asset Class"] != "OVERALL", r["Asset Class"]))
+st.dataframe(pd.DataFrame(scorecard_rows), width="stretch", hide_index=True)
+
+if not scorecard["time_ready"]:
+    st.info(
+        f"Still building track record -- {scorecard['days_required'] - scorecard['days_elapsed']} "
+        "more day(s) before the time bar alone is met, regardless of stats."
+    )
+elif scorecard["rows"].get("OVERALL", {}).get("ready"):
+    st.success(
+        "Overall stats have cleared every bar. Worth a real, separate "
+        "decision before actually switching any broker off paper/demo/"
+        "testnet -- this scorecard informs that decision, it doesn't make it."
     )
 
 st.divider()

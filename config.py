@@ -247,6 +247,32 @@ REQUIRE_ALPACA_PAPER_ENVIRONMENT = True
 # separate decision, the same discipline used for Alpaca above.
 REQUIRE_ETORO_DEMO_ENVIRONMENT = True
 
+# ============================================================
+# REAL-MONEY READINESS SCORECARD (engines/readiness_engine.py)
+# ============================================================
+# User-confirmed thresholds, 2026-08-07, for deciding when this bot has
+# actually earned a move from paper/demo/testnet to real capital -- a
+# data-driven bar instead of a gut call. See readiness_engine.py's
+# module docstring for the full reasoning behind each number.
+
+# "Day zero" for the scorecard's 30-day clock. Deliberately today's date
+# rather than some earlier point in this project's messy dev history
+# (pre-pyramiding-fix crypto, pre-Alpaca-live stocks, etc. -- see
+# ALPACA_VALIDATION_START / CRYPTO_VALIDATION_START above) -- this is
+# meant to certify a clean, representative run of the bot as it exists
+# NOW, not relitigate old bugs that are already fixed.
+READINESS_VALIDATION_START = datetime(2026, 8, 7)
+
+READINESS_MIN_DAYS = 30
+READINESS_MIN_TRADES = 20
+READINESS_MIN_PROFIT_FACTOR = 1.3
+
+# Not explicitly asked as a number -- 20% is a reasonable starting
+# default (large enough to not flag normal volatility, small enough to
+# still mean something). Adjust here if a different comfort level is
+# wanted; nothing else needs to change.
+READINESS_MAX_DRAWDOWN_PERCENT = 20
+
 # Backward compatibility (DO NOT REMOVE)
 STOP_LOSS_PERCENT = STOP_LOSS
 TAKE_PROFIT_PERCENT = TAKE_PROFIT

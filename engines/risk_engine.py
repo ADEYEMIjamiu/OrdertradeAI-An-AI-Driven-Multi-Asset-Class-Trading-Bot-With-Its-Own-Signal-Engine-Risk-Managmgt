@@ -506,9 +506,22 @@ def get_open_positions_value(market_df):
     total_value = 0.0
 
     if LIVE_TRADING:
-        positions = broker.get_positions()
-        for pos in positions:
-            total_value += float(pos.market_value)
+        # Fixed 2026-08-08: this call had NO error handling at all, unlike
+        # every other broker.get_positions()/get_open_positions() call in
+        # this file (see get_exposure_percent() a few lines up, which
+        # already wraps the identical call in try/except). Alpaca having
+        # a real, if temporary, outage ("service temporary unavailable")
+        # took down the ENTIRE dashboard with an unhandled
+        # alpaca.common.exceptions.APIError -- not just this one number
+        # going blank, the whole Streamlit script crashed mid-render.
+        # Matches the same "don't let a broker hiccup break the whole
+        # page" reasoning already applied everywhere else here.
+        try:
+            positions = broker.get_positions()
+            for pos in positions:
+                total_value += float(pos.market_value)
+        except Exception:
+            pass
     else:
         for ticker, position in st.session_state.positions.items():
             latest_price = market_df.loc[market_df["Ticker"] == ticker, "Price ($)"].values

@@ -47,6 +47,7 @@ from engines.market_data_engine import get_market_data
 from engines.order_manager import (
     create_order,
     mark_order_filled,
+    mark_order_submitted,
     mark_order_rejected,
     mark_order_failed,
     save_order,
@@ -94,6 +95,7 @@ from engines.broker_sync_engine import (
     get_broker_state_health,
     broker_execution_gate,
     get_ai_trading_readiness,
+    reconcile_alpaca_orders,
 )
 from broker import (
     get_account,
@@ -221,6 +223,17 @@ if LIVE_TRADING:
         account = get_account()
     except Exception as e:
         st.error(f"Unable to connect to Alpaca: {e}")
+
+    # Catch up any Alpaca order the local journal still shows as
+    # PENDING/SUBMITTED against Alpaca's real status -- e.g. a market
+    # order queued while the market was closed, which finally filled
+    # since the last time this page loaded. Cheap and safe: skipped
+    # entirely if nothing is pending, and any broker outage here just
+    # leaves the journal as-is rather than breaking the page.
+    try:
+        reconcile_alpaca_orders()
+    except Exception:
+        pass
 
 # Auto-refresh -- required for genuinely unattended 24/7 operation
 # (otherwise trades only ever happen when a human clicks something).
@@ -1178,7 +1191,7 @@ def execute_alpaca_trades(buy_signals, sell_signals):
                 )
                 continue
 
-            buy_stock(ticker, trade_amount)
+            alpaca_response = buy_stock(ticker, trade_amount)
 
             current_price = float(row["Price ($)"])
             estimated_shares = (
@@ -1202,9 +1215,30 @@ def execute_alpaca_trades(buy_signals, sell_signals):
                 stop_loss=row.get("Stop Loss"),
                 take_profit=row.get("Take Profit"),
             )
-            order = mark_order_filled(
-                order, filled_price=current_price, filled_quantity=estimated_shares
-            )
+
+            broker_order_id = str(getattr(alpaca_response, "id", "") or "") or None
+            response_status = str(getattr(alpaca_response, "status", "") or "").lower()
+
+            order = mark_order_submitted(order, broker_order_id=broker_order_id)
+
+            # Alpaca's response right after submit_order() usually still
+            # reads "accepted"/"pending_new" even when the real fill
+            # happens a moment later, so only trust an explicit "filled"
+            # here. Anything else stays SUBMITTED and is caught up by
+            # reconcile_alpaca_orders() on the next page load, instead of
+            # being optimistically marked FILLED before Alpaca actually
+            # confirms it (see 2026-08-08 rotation incident, where a
+            # market-closed order was logged FILLED here while Alpaca
+            # itself still showed it pending).
+            if "filled" in response_status:
+                response_filled_qty = getattr(alpaca_response, "filled_qty", None)
+                response_filled_price = getattr(alpaca_response, "filled_avg_price", None)
+                order = mark_order_filled(
+                    order,
+                    filled_price=float(response_filled_price) if response_filled_price else current_price,
+                    filled_quantity=float(response_filled_qty) if response_filled_qty else estimated_shares,
+                )
+
             save_order(order)
 
             log_trade(
@@ -1301,7 +1335,7 @@ def execute_alpaca_trades(buy_signals, sell_signals):
                         position_found = True
                         break
 
-                    sell_stock(ticker, qty)
+                    alpaca_response = sell_stock(ticker, qty)
 
                     current_price = float(row["Price ($)"])
 
@@ -1318,9 +1352,25 @@ def execute_alpaca_trades(buy_signals, sell_signals):
                         ai_trade_score=row.get("AI Trade Score", 0),
                         priority=row.get("Priority", "N/A"),
                     )
-                    sell_order = mark_order_filled(
-                        sell_order, filled_price=current_price, filled_quantity=qty
-                    )
+
+                    broker_order_id = str(getattr(alpaca_response, "id", "") or "") or None
+                    response_status = str(getattr(alpaca_response, "status", "") or "").lower()
+
+                    sell_order = mark_order_submitted(sell_order, broker_order_id=broker_order_id)
+
+                    # See the matching comment in the BUY loop above --
+                    # only trust an explicit "filled" status from the
+                    # submit response itself; otherwise leave it SUBMITTED
+                    # for reconcile_alpaca_orders() to catch up later.
+                    if "filled" in response_status:
+                        response_filled_qty = getattr(alpaca_response, "filled_qty", None)
+                        response_filled_price = getattr(alpaca_response, "filled_avg_price", None)
+                        sell_order = mark_order_filled(
+                            sell_order,
+                            filled_price=float(response_filled_price) if response_filled_price else current_price,
+                            filled_quantity=float(response_filled_qty) if response_filled_qty else qty,
+                        )
+
                     save_order(sell_order)
 
                     log_trade(
@@ -1865,12 +1915,22 @@ def execute_etoro_trades(buy_signals, sell_signals):
                 stop_loss=row.get("Stop Loss"),
                 take_profit=row.get("Take Profit"),
             )
-            oms_order = mark_order_filled(
-                oms_order,
-                filled_price=fill_price,
-                filled_quantity=trade_amount / fill_price if fill_price else 0,
-            )
-            oms_order["broker_order_id"] = result.get("position_id") or "PENDING"
+            # 2026-08-08: this used to call mark_order_filled()
+            # unconditionally right here, before ever checking whether
+            # eToro actually confirmed a position -- so the "no position
+            # confirmed yet" case handled a few lines below still got
+            # logged as FILLED in the Order Book. Same class of bug just
+            # found and fixed for Alpaca's execute_alpaca_trades(): only
+            # mark FILLED when the broker has actually confirmed it.
+            if result.get("position_id") is not None:
+                oms_order["broker_order_id"] = result["position_id"]
+                oms_order = mark_order_filled(
+                    oms_order,
+                    filled_price=fill_price,
+                    filled_quantity=trade_amount / fill_price if fill_price else 0,
+                )
+            else:
+                oms_order = mark_order_submitted(oms_order, broker_order_id=None)
             save_order(oms_order)
 
             log_trade(
@@ -2298,6 +2358,39 @@ def execute_rotation(candidate, market_df):
     that click can trigger this.
     """
     asset_class = candidate["asset_class"]
+
+    # 2026-08-08: A live rotation fired on a Saturday. The SELL leg was
+    # accepted by Alpaca but queued (US market closed, can't fill until
+    # next open) rather than executing immediately. Because that queued
+    # order and the still-open position existed at the same time, the
+    # broker health check (see get_broker_state_health -- it treats an
+    # open position with an active order on it as a conflict) flipped to
+    # WARNING, which silently blocked the BUY leg from ever being
+    # attempted -- leaving the swap half-done with no clear explanation.
+    # Rotation assumes the SELL clears before the BUY fires in the same
+    # pass, so for US_STOCKS it only makes sense while the market is
+    # actually open. Gate it here instead of letting it fail confusingly
+    # downstream.
+    if asset_class == "US_STOCKS":
+        try:
+            stock_broker_health = check_broker_connection()
+            market_is_open = bool(stock_broker_health.get("market_open", False))
+        except Exception:
+            stock_broker_health = {}
+            market_is_open = False
+
+        if not market_is_open:
+            next_open = stock_broker_health.get("next_market_open", "the next session")
+            st.session_state.trade_messages.append(
+                f"🔄 Rotation not attempted for {candidate['weak_ticker']} -> "
+                f"{candidate['candidate_ticker']}: the US stock market is "
+                f"closed. Selling now would only queue the order, and the "
+                f"buy leg would then be blocked by the broker's own "
+                f"position/order safety check -- so nothing was submitted "
+                f"to avoid a half-completed swap. Next market open: "
+                f"{next_open}. Try again once the market reopens."
+            )
+            return
 
     weak_row = market_df.loc[
         market_df["Ticker"].astype(str).str.upper().str.strip() == candidate["weak_ticker"]
@@ -3339,6 +3432,12 @@ else:
                 f"{candidate['candidate_score']:.1f}) -- gap "
                 f"{candidate['gap']:.1f} points."
             )
+            if candidate["asset_class"] == "US_STOCKS" and not broker_health.get("market_open", False):
+                st.caption(
+                    "US stock market is currently closed -- confirming this "
+                    "now won't complete. Next open: "
+                    f"{broker_health.get('next_market_open', 'Unknown')}."
+                )
             if st.button("✅ Confirm Rotation", key=f"confirm_rotation_{candidate_key}"):
                 st.session_state.trade_messages = []
                 execute_rotation(candidate, market_df)

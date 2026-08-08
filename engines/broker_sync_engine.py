@@ -697,6 +697,114 @@ def get_ai_trading_readiness(
 
     return readiness
 
+def reconcile_alpaca_orders() -> dict[str, Any]:
+    """
+    Sync locally-journaled Alpaca orders that are still PENDING/SUBMITTED
+    against Alpaca's real order status.
+
+    2026-08-08: execute_alpaca_trades() used to mark every BUY/SELL
+    "FILLED" in the local order journal the instant it was submitted,
+    using the market_df row's displayed price -- without ever checking
+    back with Alpaca. That's usually harmless (paper fills are normally
+    near-instant during market hours) but breaks down the moment a fill
+    isn't instant -- e.g. a market order submitted while the US market is
+    closed, which Alpaca queues as "accepted" until the next open. The
+    local Order Book then claims FILLED while Alpaca (and the dashboard's
+    own Trade Log, which reads live from Alpaca) shows the order still
+    pending, with no price ever actually realised.
+
+    This function is the fix: it looks at every locally-journaled Alpaca
+    order still sitting in PENDING/SUBMITTED, checks Alpaca's real status
+    for it, and corrects the local record -- FILLED (with the real fill
+    price/qty) if Alpaca confirms it, CANCELLED if Alpaca rejected/
+    expired/cancelled it, or left alone if it's still genuinely pending.
+    Cheap to call on every page load: orders already FILLED/FAILED/
+    CANCELLED locally are skipped entirely, so a quiet order book costs
+    nothing.
+    """
+    from engines.order_manager import (
+        load_orders,
+        save_order,
+        mark_order_filled,
+        mark_order_cancelled,
+        ORDER_STATUS_PENDING,
+        ORDER_STATUS_SUBMITTED,
+    )
+
+    result = {"checked": 0, "updated": 0, "error": None}
+
+    try:
+        local_orders = load_orders(limit=200)
+    except Exception as exc:
+        result["error"] = f"Could not read local order journal: {exc}"
+        return result
+
+    pending_local = [
+        order
+        for order in local_orders
+        if order.get("broker") == "alpaca"
+        and order.get("status") in (ORDER_STATUS_PENDING, ORDER_STATUS_SUBMITTED)
+        and order.get("broker_order_id")
+    ]
+
+    result["checked"] = len(pending_local)
+
+    if not pending_local:
+        return result
+
+    try:
+        raw_orders = get_orders()
+    except Exception as exc:
+        result["error"] = f"Could not reach Alpaca to reconcile orders: {exc}"
+        return result
+
+    orders_by_id = {
+        str(getattr(order, "id", "")): order for order in raw_orders
+    }
+
+    settled_statuses = {
+        "canceled",
+        "cancelled",
+        "expired",
+        "rejected",
+        "stopped",
+        "suspended",
+    }
+
+    for local_order in pending_local:
+        broker_order = orders_by_id.get(str(local_order.get("broker_order_id")))
+
+        if broker_order is None:
+            continue
+
+        status = safe_text(getattr(broker_order, "status", None)).lower()
+
+        if status == "filled":
+            filled_qty = safe_float(getattr(broker_order, "filled_qty", None))
+            filled_price = safe_float(getattr(broker_order, "filled_avg_price", None))
+
+            local_order = mark_order_filled(
+                local_order,
+                filled_price=filled_price or local_order.get("price"),
+                filled_quantity=filled_qty or local_order.get("quantity"),
+            )
+            save_order(local_order)
+            result["updated"] += 1
+
+        elif status in settled_statuses:
+            local_order = mark_order_cancelled(
+                local_order, reason=f"Alpaca reported status: {status}"
+            )
+            save_order(local_order)
+            result["updated"] += 1
+
+        # Anything else (new/accepted/pending_new/partially_filled) is
+        # still genuinely in flight -- leave it as SUBMITTED and check
+        # again next reconcile pass.
+
+    return result
+
+
 def execute_order_with_alpaca(order: dict) -> dict:
 
     from broker import place_order

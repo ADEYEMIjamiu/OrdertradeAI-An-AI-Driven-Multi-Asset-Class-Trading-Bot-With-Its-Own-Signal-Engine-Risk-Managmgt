@@ -805,6 +805,82 @@ def reconcile_alpaca_orders() -> dict[str, Any]:
     return result
 
 
+def reconcile_etoro_orders() -> dict[str, Any]:
+    """
+    Catch up locally-journaled eToro BUY orders still sitting SUBMITTED
+    with no confirmed position.
+
+    2026-08-08: execute_etoro_trades()'s BUY loop was fixed to stop
+    marking an order FILLED before eToro actually confirmed a position --
+    but that only solved half the problem. eToro's own buy() docstring
+    says a stock-style order placed outside its market's hours can come
+    back with no position_id yet, and nothing ever came back later to
+    check whether a position eventually showed up for it. This is that
+    check -- the eToro equivalent of reconcile_alpaca_orders(), run the
+    same way (once per page load, cheap no-op when nothing's pending).
+
+    Matched by ticker rather than a broker order id, since eToro never
+    gives us one for an unconfirmed order -- the duplicate-position
+    guards already in execute_etoro_trades() mean there should never be
+    two open orders racing for the same eToro symbol at once.
+    """
+    from engines.order_manager import (
+        load_orders,
+        save_order,
+        mark_order_filled,
+        ORDER_STATUS_PENDING,
+        ORDER_STATUS_SUBMITTED,
+    )
+    import etoro_broker
+
+    result = {"checked": 0, "updated": 0, "error": None}
+
+    try:
+        local_orders = load_orders(limit=200)
+    except Exception as exc:
+        result["error"] = f"Could not read local order journal: {exc}"
+        return result
+
+    pending_local = [
+        order
+        for order in local_orders
+        if order.get("broker") == "etoro"
+        and order.get("side") == "BUY"
+        and order.get("status") in (ORDER_STATUS_PENDING, ORDER_STATUS_SUBMITTED)
+    ]
+
+    result["checked"] = len(pending_local)
+
+    if not pending_local:
+        return result
+
+    for local_order in pending_local:
+        ticker = str(local_order.get("ticker", "")).upper().strip()
+        if not ticker:
+            continue
+
+        try:
+            position = etoro_broker.find_position_by_symbol(ticker)
+        except Exception as exc:
+            result["error"] = f"Could not reach eToro to reconcile {ticker}: {exc}"
+            continue
+
+        if position is None:
+            # Still genuinely unconfirmed -- leave it for the next pass.
+            continue
+
+        local_order["broker_order_id"] = position.get("position_id")
+        local_order = mark_order_filled(
+            local_order,
+            filled_price=position.get("open_price") or local_order.get("price"),
+            filled_quantity=local_order.get("quantity"),
+        )
+        save_order(local_order)
+        result["updated"] += 1
+
+    return result
+
+
 def execute_order_with_alpaca(order: dict) -> dict:
 
     from broker import place_order

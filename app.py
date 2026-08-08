@@ -96,6 +96,7 @@ from engines.broker_sync_engine import (
     broker_execution_gate,
     get_ai_trading_readiness,
     reconcile_alpaca_orders,
+    reconcile_etoro_orders,
 )
 from broker import (
     get_account,
@@ -232,6 +233,14 @@ if LIVE_TRADING:
     # leaves the journal as-is rather than breaking the page.
     try:
         reconcile_alpaca_orders()
+    except Exception:
+        pass
+
+if ETORO_LIVE_TRADING:
+    # Same reconciliation idea as Alpaca above, for eToro's own
+    # unconfirmed-BUY case -- see reconcile_etoro_orders() docstring.
+    try:
+        reconcile_etoro_orders()
     except Exception:
         pass
 
@@ -2345,6 +2354,54 @@ def find_rotation_candidates(market_df, buy_signals):
     return candidates
 
 
+def _rotation_position_still_open(asset_class, ticker):
+    """
+    Re-check directly with the broker whether a position is still open,
+    used by execute_rotation() between its close and open legs.
+
+    2026-08-08: execute_rotation() fired both legs unconditionally --
+    close the weak position, then open the replacement -- with nothing
+    checking that the close actually worked in between. For Alpaca this
+    happened to be caught accidentally (a queued-but-unfilled sell order
+    trips the broker health WARNING gate, which then blocks the buy), but
+    that protection is Alpaca-specific: get_broker_state_health() only
+    looks at Alpaca positions/orders. eToro has no equivalent gate, so if
+    an eToro close ever failed or didn't confirm (market closed, timeout,
+    anything), the buy leg would still have fired right after it --
+    opening a new leveraged position without ever having closed the old
+    one, and quietly breaching the asset class's position cap in the
+    process. This checks reality directly with the broker instead of
+    trusting that "no exception was raised" means "the position is
+    actually gone" -- covering all three brokers the same way, and
+    failing safe (treats the position as still open, so it blocks the
+    buy) if the broker can't even be reached to check.
+    """
+    ticker = str(ticker).upper().strip()
+
+    try:
+        if asset_class == "US_STOCKS":
+            for position in get_open_positions():
+                if str(position.symbol).upper().strip() == ticker:
+                    return True
+            return False
+
+        elif asset_class == "CRYPTO":
+            import binance_broker
+            for position in binance_broker.get_positions():
+                if str(position["symbol"]).upper().strip() == ticker:
+                    return True
+            return False
+
+        else:
+            return etoro_broker.find_position_by_symbol(ticker) is not None
+
+    except Exception:
+        # Broker unreachable -- can't confirm the close actually
+        # happened, so fail safe and assume it's still open rather than
+        # risk opening a second position on top of an unconfirmed close.
+        return True
+
+
 def execute_rotation(candidate, market_df):
     """
     Closes the weak position and opens the suggested replacement, by
@@ -2406,14 +2463,32 @@ def execute_rotation(candidate, market_df):
     candidate_row_df = pd.DataFrame([candidate["candidate_row"]])
     empty_df = pd.DataFrame()
 
+    # Close leg only, for now -- the open leg is gated below on actually
+    # confirming this worked, not just on it not having raised.
     if asset_class == "US_STOCKS":
         execute_alpaca_trades(empty_df, weak_row)
-        execute_alpaca_trades(candidate_row_df, empty_df)
     elif asset_class == "CRYPTO":
         execute_binance_trades(empty_df, weak_row)
-        execute_binance_trades(candidate_row_df, empty_df)
     else:
         execute_etoro_trades(empty_df, weak_row)
+
+    if _rotation_position_still_open(asset_class, candidate["weak_ticker"]):
+        st.session_state.trade_messages.append(
+            f"🔄 Rotation stopped after attempting to close "
+            f"{candidate['weak_ticker']}: it still shows as an open "
+            f"position with the broker, so {candidate['candidate_ticker']} "
+            f"was NOT opened -- avoiding a double position on top of an "
+            f"unconfirmed close. Check the broker/Order Book for why the "
+            f"close didn't complete; if it's just delayed, try the "
+            f"rotation again once it clears."
+        )
+        return
+
+    if asset_class == "US_STOCKS":
+        execute_alpaca_trades(candidate_row_df, empty_df)
+    elif asset_class == "CRYPTO":
+        execute_binance_trades(candidate_row_df, empty_df)
+    else:
         execute_etoro_trades(candidate_row_df, empty_df)
 
     st.session_state.trade_messages.append(

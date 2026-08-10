@@ -2597,6 +2597,60 @@ def _save_highest_profit_state(state):
         print(f"[apply_risk_management] could not persist highest_profit state: {e}")
 
 
+def _journal_alpaca_risk_exit(ticker, qty, current_price, exit_reason):
+    """
+    Submit a SELL to Alpaca for an automatic risk-management exit
+    (stop-loss, take-profit, or trailing-stop) and persist it to the
+    order journal -- the same create_order/mark_order_submitted/
+    mark_order_filled/save_order sequence execute_alpaca_trades() already
+    uses for every signal-driven trade.
+
+    2026-08-10: discovered apply_risk_management()'s three exit branches
+    called sell_stock() directly with no order-journal write at all, so
+    every automatic stock exit that has EVER fired -- not just the one
+    that triggered this fix -- is missing from trade_journal.db. That's
+    the table the Performance Digest and Readiness Scorecard calculate
+    win rate/profit factor from, so any position that closed via
+    stop-loss/take-profit/trailing-stop rather than a normal signal SELL
+    has been silently leaving only its BUY half in the data. This closes
+    that gap going forward; it does not (and can't, since the real fill
+    price was never captured) backfill exits that already happened
+    before this fix deployed.
+    """
+    alpaca_response = sell_stock(ticker, qty)
+
+    order = create_order(
+        ticker=ticker,
+        side="SELL",
+        quantity=qty,
+        trade_amount=qty * current_price,
+        price=current_price,
+        asset_class="US_STOCKS",
+        broker="alpaca",
+        strategy=exit_reason,
+        confidence=0,
+        ai_trade_score=0,
+        priority="N/A",
+    )
+
+    broker_order_id = str(getattr(alpaca_response, "id", "") or "") or None
+    response_status = str(getattr(alpaca_response, "status", "") or "").lower()
+
+    order = mark_order_submitted(order, broker_order_id=broker_order_id)
+
+    if "filled" in response_status:
+        response_filled_qty = getattr(alpaca_response, "filled_qty", None)
+        response_filled_price = getattr(alpaca_response, "filled_avg_price", None)
+        order = mark_order_filled(
+            order,
+            filled_price=float(response_filled_price) if response_filled_price else current_price,
+            filled_quantity=float(response_filled_qty) if response_filled_qty else qty,
+        )
+
+    save_order(order)
+    return alpaca_response
+
+
 def apply_risk_management(market_df):
     if LIVE_TRADING:
         try:
@@ -2621,91 +2675,102 @@ def apply_risk_management(market_df):
                 if stale_ticker not in held_tickers:
                     del st.session_state.highest_profit[stale_ticker]
 
+            # STOP_LOSS_PERCENT/TAKE_PROFIT_PERCENT come from config.py
+            # as fractions (0.03 = "3%", per the inline comment there),
+            # but change_percent below is a real percentage number
+            # (e.g. -3.5 meaning -3.5%) -- comparing them directly was
+            # off by 100x, so a "3%" stop-loss was actually triggering
+            # at a 0.03 PERCENTAGE-POINT move (a rounding error's worth
+            # of price noise), not an actual 3% move. This is almost
+            # certainly the real reason positions were being closed
+            # within seconds of opening rather than the intended band
+            # being merely "tight". TRAILING_PROFIT_START/DROP below
+            # are already defined directly in percentage-points (1.5,
+            # 0.75) so they don't need this conversion.
+            # 2026-08-06: none of these three exits used to notify
+            # Telegram at all -- only crypto's equivalent risk-
+            # management block (apply_crypto_risk_management() below)
+            # already did. A user would only find out a stock's stop
+            # loss / take profit / trailing lock fired by opening the
+            # dashboard themselves. Added notify_trade_fill() to all
+            # three, matching exactly the call already used for
+            # crypto exits, including realized_pnl so the alert shows
+            # profit/loss, not just that a sale happened.
             for position in alpaca_positions:
-                ticker = position.symbol
-                entry_price = float(position.avg_entry_price)
-                current_price = float(position.current_price)
-                qty = float(position.qty)
+                # Each position's exit attempt gets its own try/except so
+                # a problem on one ticker (e.g. a journal-write hiccup)
+                # can't silently skip stop-loss/take-profit protection for
+                # every OTHER held position in the same pass -- this used
+                # to be one big try/except around the whole loop.
+                try:
+                    ticker = position.symbol
+                    entry_price = float(position.avg_entry_price)
+                    current_price = float(position.current_price)
+                    qty = float(position.qty)
 
-                change_percent = ((current_price / entry_price) - 1) * 100
+                    change_percent = ((current_price / entry_price) - 1) * 100
 
-                previous_high = st.session_state.highest_profit.get(ticker, change_percent)
-                st.session_state.highest_profit[ticker] = max(previous_high, change_percent)
+                    previous_high = st.session_state.highest_profit.get(ticker, change_percent)
+                    st.session_state.highest_profit[ticker] = max(previous_high, change_percent)
 
-                highest_profit = st.session_state.highest_profit[ticker]
-                trailing_exit_level = highest_profit - TRAILING_PROFIT_DROP
+                    highest_profit = st.session_state.highest_profit[ticker]
+                    trailing_exit_level = highest_profit - TRAILING_PROFIT_DROP
 
-                # STOP_LOSS_PERCENT/TAKE_PROFIT_PERCENT come from config.py
-                # as fractions (0.03 = "3%", per the inline comment there),
-                # but change_percent above is a real percentage number
-                # (e.g. -3.5 meaning -3.5%) -- comparing them directly was
-                # off by 100x, so a "3%" stop-loss was actually triggering
-                # at a 0.03 PERCENTAGE-POINT move (a rounding error's worth
-                # of price noise), not an actual 3% move. This is almost
-                # certainly the real reason positions were being closed
-                # within seconds of opening rather than the intended band
-                # being merely "tight". TRAILING_PROFIT_START/DROP below
-                # are already defined directly in percentage-points (1.5,
-                # 0.75) so they don't need this conversion.
-                # 2026-08-06: none of these three exits used to notify
-                # Telegram at all -- only crypto's equivalent risk-
-                # management block (apply_crypto_risk_management() below)
-                # already did. A user would only find out a stock's stop
-                # loss / take profit / trailing lock fired by opening the
-                # dashboard themselves. Added notify_trade_fill() to all
-                # three, matching exactly the call already used for
-                # crypto exits, including realized_pnl so the alert shows
-                # profit/loss, not just that a sale happened.
-                if change_percent <= -(STOP_LOSS_PERCENT * 100):
-                    sell_stock(ticker, qty)
+                    if change_percent <= -(STOP_LOSS_PERCENT * 100):
+                        _journal_alpaca_risk_exit(ticker, qty, current_price, "STOP_LOSS")
+                        st.session_state.trade_messages.append(
+                            f"STOP LOSS triggered for {ticker}. Sold {round(qty, 4)} shares at ${round(current_price, 2)}"
+                        )
+                        telegram_notifier.notify_trade_fill(
+                            ticker=ticker,
+                            action="SELL",
+                            price=current_price,
+                            shares=qty,
+                            amount=qty * current_price,
+                            asset_class="US_STOCKS",
+                            mode="ALPACA_LIVE" if LIVE_TRADING else "LOCAL_PAPER",
+                            realized_pnl=qty * (current_price - entry_price),
+                        )
+                        del st.session_state.highest_profit[ticker]
+
+                    elif change_percent >= (TAKE_PROFIT_PERCENT * 100):
+                        _journal_alpaca_risk_exit(ticker, qty, current_price, "TAKE_PROFIT")
+                        st.session_state.trade_messages.append(
+                            f"TAKE PROFIT triggered for {ticker}. Sold {round(qty, 4)} shares at ${round(current_price, 2)}"
+                        )
+                        telegram_notifier.notify_trade_fill(
+                            ticker=ticker,
+                            action="SELL",
+                            price=current_price,
+                            shares=qty,
+                            amount=qty * current_price,
+                            asset_class="US_STOCKS",
+                            mode="ALPACA_LIVE" if LIVE_TRADING else "LOCAL_PAPER",
+                            realized_pnl=qty * (current_price - entry_price),
+                        )
+                        del st.session_state.highest_profit[ticker]
+
+                    elif highest_profit >= TRAILING_PROFIT_START and change_percent <= trailing_exit_level:
+                        _journal_alpaca_risk_exit(ticker, qty, current_price, "TRAILING_STOP")
+                        st.session_state.trade_messages.append(
+                            f"TRAILING PROFIT LOCK triggered for {ticker}. Highest profit was {round(highest_profit, 2)}%, sold at {round(change_percent, 2)}%"
+                        )
+                        telegram_notifier.notify_trade_fill(
+                            ticker=ticker,
+                            action="SELL",
+                            price=current_price,
+                            shares=qty,
+                            amount=qty * current_price,
+                            asset_class="US_STOCKS",
+                            mode="ALPACA_LIVE" if LIVE_TRADING else "LOCAL_PAPER",
+                            realized_pnl=qty * (current_price - entry_price),
+                        )
+                        del st.session_state.highest_profit[ticker]
+
+                except Exception as e:
                     st.session_state.trade_messages.append(
-                        f"STOP LOSS triggered for {ticker}. Sold {round(qty, 4)} shares at ${round(current_price, 2)}"
+                        f"Risk management failed for {getattr(position, 'symbol', '?')}: {e}"
                     )
-                    telegram_notifier.notify_trade_fill(
-                        ticker=ticker,
-                        action="SELL",
-                        price=current_price,
-                        shares=qty,
-                        amount=qty * current_price,
-                        asset_class="US_STOCKS",
-                        mode="ALPACA_LIVE" if LIVE_TRADING else "LOCAL_PAPER",
-                        realized_pnl=qty * (current_price - entry_price),
-                    )
-                    del st.session_state.highest_profit[ticker]
-
-                elif change_percent >= (TAKE_PROFIT_PERCENT * 100):
-                    sell_stock(ticker, qty)
-                    st.session_state.trade_messages.append(
-                        f"TAKE PROFIT triggered for {ticker}. Sold {round(qty, 4)} shares at ${round(current_price, 2)}"
-                    )
-                    telegram_notifier.notify_trade_fill(
-                        ticker=ticker,
-                        action="SELL",
-                        price=current_price,
-                        shares=qty,
-                        amount=qty * current_price,
-                        asset_class="US_STOCKS",
-                        mode="ALPACA_LIVE" if LIVE_TRADING else "LOCAL_PAPER",
-                        realized_pnl=qty * (current_price - entry_price),
-                    )
-                    del st.session_state.highest_profit[ticker]
-
-                elif highest_profit >= TRAILING_PROFIT_START and change_percent <= trailing_exit_level:
-                    sell_stock(ticker, qty)
-                    st.session_state.trade_messages.append(
-                        f"TRAILING PROFIT LOCK triggered for {ticker}. Highest profit was {round(highest_profit, 2)}%, sold at {round(change_percent, 2)}%"
-                    )
-                    telegram_notifier.notify_trade_fill(
-                        ticker=ticker,
-                        action="SELL",
-                        price=current_price,
-                        shares=qty,
-                        amount=qty * current_price,
-                        asset_class="US_STOCKS",
-                        mode="ALPACA_LIVE" if LIVE_TRADING else "LOCAL_PAPER",
-                        realized_pnl=qty * (current_price - entry_price),
-                    )
-                    del st.session_state.highest_profit[ticker]
 
             # One write per call covers every update and deletion above --
             # cheap (small JSON, local disk) and keeps the on-disk state

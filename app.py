@@ -3579,8 +3579,31 @@ else:
                     f"{broker_health.get('next_market_open', 'Unknown')}."
                 )
             if st.button("✅ Confirm Rotation", key=f"confirm_rotation_{candidate_key}"):
+                # 2026-08-11: this button never had the same autorefresh
+                # guard the manual Execute Trades button and Auto-Trading
+                # already use (see the AUTO REFRESH section comment near
+                # the top of this file) -- so the 5-minute refresh timer
+                # could fire mid-rotation and cut the script off before
+                # execute_rotation() finished, with no error and no
+                # record of what happened. Setting the same flag here
+                # closes that gap the same way it's already closed
+                # elsewhere.
+                st.session_state.trade_execution_in_progress = True
+
                 st.session_state.trade_messages = []
                 execute_rotation(candidate, market_df)
+
+                # Also record this in last_execution_result -- previously
+                # only the manual Execute Trades button did this, so a
+                # rotation attempt never showed up in the "Last Execution
+                # Attempt" section at all, even when it worked. That made
+                # a genuinely-interrupted rotation look identical to a
+                # successful one that just wasn't visible anywhere.
+                st.session_state.last_execution_result = {
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "messages": list(st.session_state.trade_messages),
+                }
+                st.session_state.trade_execution_in_progress = False
                 st.rerun()
 
 st.divider()

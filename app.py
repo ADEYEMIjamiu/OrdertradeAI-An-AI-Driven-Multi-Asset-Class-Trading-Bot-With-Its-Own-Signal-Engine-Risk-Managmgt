@@ -2491,11 +2491,32 @@ def execute_rotation(candidate, market_df):
     else:
         execute_etoro_trades(candidate_row_df, empty_df)
 
-    st.session_state.trade_messages.append(
-        f"🔄 Rotation executed: closed {candidate['weak_ticker']} "
-        f"(score {candidate['weak_score']:.1f}, held {candidate['hours_held']:.1f}h) "
-        f"to open {candidate['candidate_ticker']} (score {candidate['candidate_score']:.1f})."
-    )
+    # 2026-08-11: This final message used to fire unconditionally right
+    # after the buy leg was attempted, regardless of whether it actually
+    # succeeded. A live rotation showed exactly that gap -- AAPL closed
+    # cleanly, but the WMT buy was skipped by the daily trade limit
+    # (a real, separate safety gate, working as intended), and yet this
+    # message still declared "Rotation executed: closed AAPL... to open
+    # WMT..." -- claiming success on a swap that was only half done. Same
+    # principle as the close-leg check above: confirm reality with the
+    # broker before declaring success, instead of trusting that "no
+    # exception was raised" means the buy went through.
+    if _rotation_position_still_open(asset_class, candidate["candidate_ticker"]):
+        st.session_state.trade_messages.append(
+            f"🔄 Rotation executed: closed {candidate['weak_ticker']} "
+            f"(score {candidate['weak_score']:.1f}, held {candidate['hours_held']:.1f}h) "
+            f"to open {candidate['candidate_ticker']} (score {candidate['candidate_score']:.1f})."
+        )
+    else:
+        st.session_state.trade_messages.append(
+            f"⚠️ Rotation partially completed: {candidate['weak_ticker']} "
+            f"was closed, but {candidate['candidate_ticker']} was NOT "
+            f"opened -- see the buy message above for why (e.g. daily "
+            f"trade limit, insufficient cash, broker rejection). You're "
+            f"now holding cash instead of {candidate['candidate_ticker']}; "
+            f"try the rotation again once the blocking condition clears, "
+            f"or place that buy manually."
+        )
 
 
 def filter_by_asset_class(df, asset_class):

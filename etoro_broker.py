@@ -613,6 +613,18 @@ def buy(ticker: str, usd_amount: float):
                 take_profit_rate=order_payload.get("takeProfitRate"),
             )
             trailing_stop_set = True
+            # 2026-08-13: this used to be silent on success -- the only
+            # log line this branch ever produced was on failure, so once
+            # journald rotated old entries out there was no way to check,
+            # after the fact, whether a given position's trailing stop
+            # actually got set. Logging the success explicitly means every
+            # future forex/commodities trade leaves a permanent, greppable
+            # record either way (success or failure), instead of forcing
+            # a guess from silence.
+            print(
+                f"Trailing stop set for position {position_id} ({ticker}): "
+                f"stopLossRate={order_payload['stopLossRate']}"
+            )
         except Exception as trailing_error:
             print(
                 f"Could not set trailing stop for position {position_id} "

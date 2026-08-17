@@ -37,6 +37,26 @@ Market Data → Signal (ML model) → Strategy Scoring → Trade Planning
 
 **24/7 unattended operation.** Deployed on a small cloud VPS behind Nginx with HTTP Basic Auth, run as a systemd service (auto-restart on crash, starts on boot), with a safety guard around Streamlit's autorefresh to reduce the risk of interrupted trade execution.
 
+## Screenshots
+
+**Dashboard overview** — live portfolio value, cash, mode, and market regime, refreshed on every page load.
+![Dashboard overview](screenshots/01-dashboard-overview.png)
+
+**Live market watchlist** — every tracked ticker with the AI's confidence score, trend signal, strategy, and trade decision.
+![Live market watchlist](screenshots/02-live-market-watchlist.png)
+
+**Performance, verified against the broker** — P&L, win rate, and trades closed, cross-checked against Alpaca's own fill records (not just internal bookkeeping).
+![Performance verification](screenshots/03-performance-verification.png)
+
+**Real-Money Readiness Scorecard** — a data-driven bar (min trades, profit factor, drawdown limit, validation days) the bot has to clear before it's trusted with real capital.
+![Readiness scorecard](screenshots/04-readiness-scorecard.png)
+
+**Equity curve** — portfolio value over the validation run.
+![Equity curve](screenshots/05-equity-curve.png)
+
+**System status** — live health check across market data, the trained model, and every connected broker.
+![System status](screenshots/06-system-status.png)
+
 ## Tech stack
 
 - **Language / framework:** Python, Streamlit

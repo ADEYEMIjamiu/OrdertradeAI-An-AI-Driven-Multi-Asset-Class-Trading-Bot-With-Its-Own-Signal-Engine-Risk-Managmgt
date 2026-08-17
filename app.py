@@ -3085,6 +3085,11 @@ def update_equity_history(portfolio_value):
         st.session_state.equity_history = st.session_state.equity_history[-50:]
 
 
+st.caption(
+    f"🕒 {datetime.now().strftime('%A, %B %d, %Y — %H:%M:%S')} (server time, UTC) "
+    "— updates on each page refresh."
+)
+
 st.title("🤖 OrderTrade AI")
 st.write("Live market dashboard for AI trading decisions")
 

@@ -4310,9 +4310,45 @@ if LIVE_TRADING:
                 )
             )
 
-            st.line_chart(
-                broker_equity_df.set_index("Time")
+            # Real Alpaca trades here are sized around $100 against a
+            # $100k base account, so real day-to-day moves are only a
+            # few dollars -- invisible against st.line_chart's default
+            # y-axis (which scales from near zero up to the full
+            # portfolio value). Zooming to the data's own range instead,
+            # same fix already used below for the local-paper fallback
+            # chart, so real movement is actually visible here too.
+            import altair as alt
+
+            broker_values = broker_equity_df["Portfolio Value"]
+            broker_value_min = float(broker_values.min())
+            broker_value_max = float(broker_values.max())
+
+            if broker_value_max == broker_value_min:
+                broker_padding = max(abs(broker_value_max) * 0.01, 1.0)
+            else:
+                broker_padding = (broker_value_max - broker_value_min) * 0.1
+
+            broker_equity_chart = (
+                alt.Chart(broker_equity_df)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("Time:T", title="Time"),
+                    y=alt.Y(
+                        "Portfolio Value:Q",
+                        title="Portfolio Value ($)",
+                        scale=alt.Scale(
+                            domain=[
+                                broker_value_min - broker_padding,
+                                broker_value_max + broker_padding,
+                            ]
+                        ),
+                    ),
+                    tooltip=["Time", "Portfolio Value"],
+                )
+                .properties(height=320)
             )
+
+            st.altair_chart(broker_equity_chart, use_container_width=True)
         else:
             st.info(
                 "Alpaca portfolio history currently contains "
@@ -4579,14 +4615,6 @@ try:
 except Exception as e:
     st.warning(f"Could not load Order Book: {e}")
 
-st.subheader("🧾 AI Order Manager")
-
-if len(st.session_state.trade_log) > 0:
-    ai_order_log_df = pd.DataFrame(st.session_state.trade_log)
-    st.dataframe(ai_order_log_df, width="stretch")
-else:
-    st.info("No AI-managed orders yet.")
-    
 st.subheader("📜 Trade Log")
 
 if LIVE_TRADING:

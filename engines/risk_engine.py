@@ -351,17 +351,35 @@ def risk_check_before_trade(ticker, trade_amount, market_df):
         except Exception:
             return None
 
-    # 4. Daily trade limit -- global across all brokers/asset classes,
-    # matching the original check's scope.
+    # 4. Daily trade limit -- scoped per asset class, not shared across
+    # all of them. This used to count every order placed today across
+    # stocks, crypto, forex and commodities against one combined budget
+    # of MAX_TRADES_PER_DAY. In practice that meant a busy day of stock
+    # activity (including automatic stop-loss/take-profit/trailing exits,
+    # which count as trades too) could exhaust the shared budget before
+    # crypto's auto-trading loop -- which always runs last in each pass,
+    # see the auto-trading block below -- ever got a turn, silently
+    # stalling it with no visible error. Each asset class now gets its
+    # own independent budget of MAX_TRADES_PER_DAY, the same pattern
+    # already used for position caps (MAX_CRYPTO_POSITIONS etc. above).
+    current_asset_class = (
+        "CRYPTO" if is_crypto
+        else "FOREX" if is_forex
+        else "COMMODITIES" if is_commodity
+        else "US_STOCKS"
+    )
+
     today = datetime.now().date()
     trades_today = 0
     for order in recent_orders:
+        if str(order.get("asset_class", "")).upper() != current_asset_class:
+            continue
         ts = _order_timestamp(order)
         if ts is not None and ts.date() == today:
             trades_today += 1
 
     if trades_today >= MAX_TRADES_PER_DAY:
-        return False, "Maximum daily trades reached."
+        return False, f"Maximum daily trades reached for {current_asset_class}."
 
     # 5. Cooldown per ticker -- most recent order for this exact ticker,
     # across all brokers.

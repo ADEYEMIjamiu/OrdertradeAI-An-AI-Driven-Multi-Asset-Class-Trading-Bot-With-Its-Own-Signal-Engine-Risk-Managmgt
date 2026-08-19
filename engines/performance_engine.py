@@ -14,8 +14,11 @@ was positive, which is always true) and never actually computed profit.
 """
 
 from collections import defaultdict, deque
+from datetime import datetime
 
 from trade_journal import load_trade_journal
+from data.asset_universe import get_enabled_symbols
+from config import CRYPTO_VALIDATION_START
 
 
 def _load_trades_chronological():
@@ -200,6 +203,63 @@ def calculate_performance_metrics():
     }
 
 
+def _ticker_asset_class_map():
+    """Same lookup engines/digest_engine.py uses -- duplicated here rather
+    than imported from there to avoid a circular import (digest_engine
+    already imports get_closed_trades_and_open_lots from this module)."""
+    return {
+        asset["symbol"]: asset["asset_class"]
+        for asset in get_enabled_symbols()
+    }
+
+
+def _classify_unknown_ticker(ticker):
+    ticker = str(ticker).upper()
+    if ticker.endswith("-USD"):
+        return "CRYPTO"
+    if ticker.endswith("=X"):
+        return "FOREX"
+    if ticker.endswith("=F"):
+        return "COMMODITIES"
+    return "US_STOCKS"
+
+
+def _parse_time(value):
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+
+
+def _filter_pre_pyramiding_fix_crypto(closed_trades):
+    """
+    Drop crypto round-trips whose ENTRY (the BUY that opened the lot)
+    happened before CRYPTO_VALIDATION_START -- the same pre-pyramiding-fix
+    exclusion engines/digest_engine.py already applies (see the comment
+    on CRYPTO_VALIDATION_START in config.py for the full story). Without
+    this, Sharpe/Sortino and the monthly breakdown below would silently
+    include the old bulk-pyramided crypto trades and understate
+    performance with data from a bug that's already been fixed.
+    Stocks/forex/commodities never had this bug, so they pass through.
+    """
+    ticker_map = _ticker_asset_class_map()
+
+    def _is_valid(trade):
+        asset_class = ticker_map.get(
+            trade["ticker"], _classify_unknown_ticker(trade["ticker"])
+        )
+        if asset_class != "CRYPTO":
+            return True
+
+        entry_time = _parse_time(trade["entry_time"])
+        if entry_time is None:
+            return True  # malformed/missing timestamp -- don't silently drop it
+
+        return entry_time >= CRYPTO_VALIDATION_START
+
+    return [t for t in closed_trades if _is_valid(t)]
+
+
 def calculate_risk_adjusted_metrics():
     """
     Sharpe and Sortino ratios computed from the per-trade percent-return
@@ -219,6 +279,7 @@ def calculate_risk_adjusted_metrics():
     standard deviation from a single data point isn't meaningful.
     """
     closed_trades, _ = get_closed_trades_and_open_lots()
+    closed_trades = _filter_pre_pyramiding_fix_crypto(closed_trades)
     n = len(closed_trades)
 
     if n < 2:
@@ -262,6 +323,7 @@ def calculate_monthly_returns():
     "win_rate", "total_pnl"} dicts, sorted oldest month first.
     """
     closed_trades, _ = get_closed_trades_and_open_lots()
+    closed_trades = _filter_pre_pyramiding_fix_crypto(closed_trades)
 
     months = defaultdict(list)
     for t in closed_trades:

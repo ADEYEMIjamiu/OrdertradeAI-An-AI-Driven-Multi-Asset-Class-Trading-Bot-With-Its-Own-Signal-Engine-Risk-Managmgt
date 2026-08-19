@@ -4141,7 +4141,7 @@ if monthly_returns:
     })
     monthly_returns_df["Win Rate %"] = monthly_returns_df["Win Rate %"].round(1)
     monthly_returns_df["Total P&L ($)"] = monthly_returns_df["Total P&L ($)"].round(2)
-    st.dataframe(monthly_returns_df, use_container_width=True, hide_index=True)
+    st.dataframe(monthly_returns_df, width="stretch", hide_index=True)
 
 with c2:
     st.metric(

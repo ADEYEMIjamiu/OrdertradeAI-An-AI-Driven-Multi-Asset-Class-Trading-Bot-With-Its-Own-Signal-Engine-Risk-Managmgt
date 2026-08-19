@@ -4087,6 +4087,57 @@ if not LIVE_TRADING:
             f"${performance.get('Max Drawdown', 0):,.2f}"
         )
 
+# Sharpe/Sortino and the monthly breakdown are computed from the trade
+# journal (performance_engine), same as the block above -- but unlike
+# that block, these render regardless of LIVE_TRADING. The journal is
+# broker-agnostic (every execution path writes to it), so there's no
+# reason to hide risk-adjusted stats just because stocks are routing
+# through real Alpaca fills instead of the local simulator.
+risk_adjusted_metrics = performance_engine.calculate_risk_adjusted_metrics()
+
+e1, e2 = st.columns(2)
+
+with e1:
+    sharpe_ratio = risk_adjusted_metrics.get("sharpe_ratio")
+    st.metric(
+        "Sharpe Ratio (per trade)",
+        "N/A" if sharpe_ratio is None else f"{sharpe_ratio:.2f}"
+    )
+
+with e2:
+    sortino_ratio = risk_adjusted_metrics.get("sortino_ratio")
+    st.metric(
+        "Sortino Ratio (per trade)",
+        "N/A" if sortino_ratio is None else f"{sortino_ratio:.2f}"
+    )
+
+if risk_adjusted_metrics.get("sample_size", 0) < 2:
+    st.caption(
+        "Sharpe/Sortino need at least 2 closed trades to compute a "
+        "meaningful standard deviation -- showing N/A until then."
+    )
+else:
+    st.caption(
+        "Computed per-trade from closed-trade % returns (not an "
+        "annualized daily-return Sharpe/Sortino) -- risk-free rate "
+        "assumed 0."
+    )
+
+monthly_returns = performance_engine.calculate_monthly_returns()
+if monthly_returns:
+    st.markdown("**Monthly Return Breakdown**")
+    monthly_returns_df = pd.DataFrame(monthly_returns).rename(columns={
+        "month": "Month",
+        "trades_closed": "Trades Closed",
+        "wins": "Wins",
+        "losses": "Losses",
+        "win_rate": "Win Rate %",
+        "total_pnl": "Total P&L ($)",
+    })
+    monthly_returns_df["Win Rate %"] = monthly_returns_df["Win Rate %"].round(1)
+    monthly_returns_df["Total P&L ($)"] = monthly_returns_df["Total P&L ($)"].round(2)
+    st.dataframe(monthly_returns_df, use_container_width=True, hide_index=True)
+
 with c2:
     st.metric(
         "Portfolio Exposure",

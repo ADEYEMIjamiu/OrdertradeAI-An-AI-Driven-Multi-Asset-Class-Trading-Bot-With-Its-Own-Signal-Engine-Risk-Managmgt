@@ -200,6 +200,94 @@ def calculate_performance_metrics():
     }
 
 
+def calculate_risk_adjusted_metrics():
+    """
+    Sharpe and Sortino ratios computed from the per-trade percent-return
+    distribution of the same FIFO-matched closed trades used by
+    calculate_performance_metrics() above.
+
+    These are PER-TRADE ratios, not annualized daily-return Sharpe/Sortino.
+    Trades don't land on a fixed daily cadence, so annualizing by an
+    assumed trade frequency would manufacture false precision this early
+    in the validation run. Risk-free rate is treated as 0 -- at this
+    account size and time horizon it wouldn't move the number enough to
+    matter, and fabricating a benchmark rate would be less honest than
+    just being explicit that it's excluded.
+
+    Returns None for both ratios (with the actual sample size still
+    reported) when there are fewer than 2 closed trades, since a
+    standard deviation from a single data point isn't meaningful.
+    """
+    closed_trades, _ = get_closed_trades_and_open_lots()
+    n = len(closed_trades)
+
+    if n < 2:
+        return {"sharpe_ratio": None, "sortino_ratio": None, "sample_size": n}
+
+    returns = [t["pnl_percent"] / 100 for t in closed_trades]
+    mean_return = sum(returns) / n
+
+    variance = sum((r - mean_return) ** 2 for r in returns) / (n - 1)
+    std_dev = variance ** 0.5
+    sharpe_ratio = (mean_return / std_dev) if std_dev > 0 else None
+
+    # Sortino: semi-deviation from a 0% target, computed over ALL trades
+    # (not just the losers) in the denominator -- the standard definition,
+    # so a strategy with zero losing trades so far doesn't produce an
+    # undefined/divide-by-zero ratio the way profit factor does.
+    downside_sq_sum = sum(min(r, 0.0) ** 2 for r in returns)
+    downside_deviation = (downside_sq_sum / n) ** 0.5
+    sortino_ratio = (mean_return / downside_deviation) if downside_deviation > 0 else None
+
+    return {
+        "sharpe_ratio": sharpe_ratio,
+        "sortino_ratio": sortino_ratio,
+        "sample_size": n,
+    }
+
+
+def calculate_monthly_returns():
+    """
+    Realized P&L grouped by calendar month, keyed off each closed trade's
+    exit_time (when the SELL that closed it actually filled). Lets you see
+    whether performance is trending up or down over time instead of only
+    ever seeing one all-time total.
+
+    Journal timestamps are stored as "YYYY-MM-DD HH:MM:SS" strings (see
+    trade_journal.log_trade), so the first 7 characters are always a
+    "YYYY-MM" key -- no datetime parsing needed. Rows with a missing or
+    malformed timestamp are skipped rather than guessed at.
+
+    Returns a list of {"month", "trades_closed", "wins", "losses",
+    "win_rate", "total_pnl"} dicts, sorted oldest month first.
+    """
+    closed_trades, _ = get_closed_trades_and_open_lots()
+
+    months = defaultdict(list)
+    for t in closed_trades:
+        month_key = str(t.get("exit_time") or "")[:7]
+        if len(month_key) != 7:
+            continue
+        months[month_key].append(t)
+
+    result = []
+    for month_key in sorted(months.keys()):
+        trades = months[month_key]
+        wins = [t for t in trades if t["pnl"] > 0]
+        losses = [t for t in trades if t["pnl"] <= 0]
+
+        result.append({
+            "month": month_key,
+            "trades_closed": len(trades),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": (len(wins) / len(trades) * 100) if trades else 0.0,
+            "total_pnl": sum(t["pnl"] for t in trades),
+        })
+
+    return result
+
+
 if __name__ == "__main__":
     # Quick manual check: python3 -m engines.performance_engine
     metrics = calculate_performance_metrics()
@@ -212,3 +300,9 @@ if __name__ == "__main__":
     print(f"Profit Factor:  {'N/A (no losses yet)' if pf is None else f'{pf:.2f}'}")
     print(f"Expectancy:     ${metrics['expectancy']:.2f} per trade")
     print(f"Max Drawdown:   ${metrics['max_drawdown']:.2f}")
+
+    risk_adjusted = calculate_risk_adjusted_metrics()
+    sharpe = risk_adjusted["sharpe_ratio"]
+    sortino = risk_adjusted["sortino_ratio"]
+    print(f"Sharpe Ratio:   {'N/A (need 2+ closed trades)' if sharpe is None else f'{sharpe:.2f}'} (per trade)")
+    print(f"Sortino Ratio:  {'N/A (need 2+ closed trades)' if sortino is None else f'{sortino:.2f}'} (per trade)")

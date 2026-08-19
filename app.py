@@ -76,6 +76,7 @@ from engines.trade_planner import create_trade_plan
 from engines.approval_engine import approve_trade
 from engines.risk_engine import (
     calculate_portfolio_value,
+    calculate_bot_attributable_portfolio_value,
     get_open_positions_value,
     get_exposure_percent,
     calculate_trade_amount,
@@ -3361,10 +3362,14 @@ portfolio_value = calculate_portfolio_value(market_df)
 # Durable equity-curve snapshot for the Real-Money Readiness
 # Scorecard's max-drawdown calculation (engines/equity_tracker.py).
 # Throttled internally to once per 15 minutes, so it's safe to call on
-# every script run. This is the last/most complete portfolio_value
-# recalculation in the script, right before it's used for the actual
-# risk dashboard below.
-equity_tracker.log_equity_snapshot(portfolio_value)
+# every script run. Deliberately NOT the same portfolio_value used for
+# the net-worth display above -- that includes the full raw Binance
+# wallet balance (testnet dust, etc.), which isn't attributable to the
+# bot's own trading and would misrepresent drawdown. See
+# calculate_bot_attributable_portfolio_value()'s docstring.
+equity_tracker.log_equity_snapshot(
+    calculate_bot_attributable_portfolio_value(market_df)
+)
 
 # NOTE: this used to be recomputed here as (portfolio_value - cash) /
 # portfolio_value, a *fraction* (0-1), separate from -- and inconsistent
@@ -4199,6 +4204,22 @@ _DIGEST_PERIOD_DAYS = {
 digest = calculate_performance_digest(
     period_days=_DIGEST_PERIOD_DAYS[digest_period_choice]
 )
+
+# digest["open_positions_by_asset_class"]["US_STOCKS"] counts distinct
+# tickers with an unmatched BUY still sitting in the trade journal --
+# not what Alpaca actually holds right now. Any SELL that historically
+# failed to get journaled (this project has had real bugs of that
+# exact shape) leaves that ticker "open" in the journal forever, even
+# after it was really closed on the broker. Overriding with a live,
+# broker-verified count here so this table can't overstate real
+# exposure; falls back to the journal count if the broker call fails,
+# same defensive pattern used everywhere else a broker call touches
+# the dashboard.
+if LIVE_TRADING:
+    try:
+        digest["open_positions_by_asset_class"]["US_STOCKS"] = len(get_open_positions())
+    except Exception:
+        pass
 
 digest_overall = digest["overall"]
 

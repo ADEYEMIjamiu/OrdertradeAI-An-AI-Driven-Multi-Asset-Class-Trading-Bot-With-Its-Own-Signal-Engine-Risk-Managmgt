@@ -486,6 +486,35 @@ def calculate_portfolio_value(market_df):
 
     return value
 
+def calculate_bot_attributable_portfolio_value(market_df):
+    """
+    Portfolio value for the equity/drawdown snapshot (engines/
+    equity_tracker.py) specifically -- uses only the crypto the bot
+    itself actually bought (get_bot_owned_crypto_value(), same source
+    already used to fix the exposure-percent gate), instead of the full
+    raw Binance wallet value calculate_portfolio_value() uses.
+
+    calculate_portfolio_value() is intentionally left untouched: it's
+    correctly used elsewhere for net-worth display, where the full
+    wallet balance genuinely is your money regardless of who bought it.
+    But that same full-wallet number is the wrong thing to judge trading
+    PERFORMANCE against -- pre-seeded testnet dust and legacy pre-fix
+    pyramided positions swinging in value isn't the bot's skill, and
+    letting that swing register as "drawdown" misrepresents how the
+    strategy has actually performed.
+    """
+    value = st.session_state.cash
+
+    for ticker, position in st.session_state.positions.items():
+        latest_price = market_df.loc[market_df["Ticker"] == ticker, "Price ($)"].values
+        if len(latest_price) > 0:
+            value += position["shares"] * latest_price[0]
+
+    value += get_bot_owned_crypto_value(market_df)
+
+    return value
+
+
 def get_bot_owned_crypto_value(market_df):
     """
     Value of ONLY the crypto this bot has actually bought itself, derived

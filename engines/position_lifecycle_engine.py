@@ -45,6 +45,7 @@ from config import (
     PARTIAL_PROFIT_TRIGGER_PERCENT,
     PARTIAL_PROFIT_TAKE_FRACTION,
     MAX_HOLD_DAYS,
+    MAX_HOLD_DAYS_HARD,
 )
 
 _STATE_FILE = "position_lifecycle_state.json"
@@ -144,9 +145,25 @@ def partial_profit_quantity(total_qty):
 
 def should_time_exit(opened_at, change_percent):
     """
-    True only once the position has been open at least MAX_HOLD_DAYS
-    AND is at or above break-even (change_percent >= 0). Never forces
-    an exit while still at a loss -- that stays the stop-loss's job.
+    Two-tier time-based exit.
+
+    SOFT (MAX_HOLD_DAYS, flat-or-better only): once open at least
+    MAX_HOLD_DAYS and at or above break-even, close it -- locks in profit
+    (or a flat exit) rather than risking giving it back while still
+    waiting for the full take-profit target. Never forces an exit while
+    still at a loss on its own -- that was the stop-loss's job alone.
+
+    HARD (MAX_HOLD_DAYS_HARD, regardless of P&L): once open at least
+    MAX_HOLD_DAYS_HARD, close it no matter what -- even at a loss. Added
+    2026-08-23 per explicit user decision: a position stuck between the
+    stop-loss floor and break-even, neither winning nor losing enough to
+    resolve on its own, could otherwise sit indefinitely (confirmed live:
+    BNB-USD and ETH-USD both sat 26 days before this existed), tying up
+    capital that could be redeployed faster elsewhere. This does NOT
+    increase the maximum possible loss on a position -- the stop-loss
+    still fires first and independently if breached; this only forces
+    resolution of the dead zone between "stopped out" and "flat or
+    better" that the soft rule above can't reach.
     """
     if opened_at is None:
         return False
@@ -159,7 +176,11 @@ def should_time_exit(opened_at, change_percent):
         return False
 
     days_open = (datetime.now() - opened_at_dt).total_seconds() / 86400
-    if days_open < MAX_HOLD_DAYS:
-        return False
 
-    return change_percent >= 0
+    if days_open >= MAX_HOLD_DAYS_HARD:
+        return True
+
+    if days_open >= MAX_HOLD_DAYS and change_percent >= 0:
+        return True
+
+    return False

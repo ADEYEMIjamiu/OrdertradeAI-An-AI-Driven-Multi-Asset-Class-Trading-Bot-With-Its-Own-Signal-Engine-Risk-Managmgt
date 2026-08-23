@@ -147,6 +147,7 @@ from config import (
     TRAILING_PROFIT_DROP,
     PARTIAL_PROFIT_TAKE_FRACTION,
     MAX_HOLD_DAYS,
+    MAX_HOLD_DAYS_HARD,
     MAX_OPEN_POSITIONS,
     MAX_PORTFOLIO_EXPOSURE,
     TRADE_COOLDOWN_MINUTES,
@@ -2894,11 +2895,17 @@ def apply_risk_management(market_df):
 
                     elif should_time_exit(lifecycle_state["opened_at"], change_percent):
                         _journal_alpaca_risk_exit(ticker, qty, current_price, "TIME_LIMIT_EXIT")
+                        # Distinguish which tier fired for a clear message --
+                        # see position_lifecycle_engine.should_time_exit().
+                        exit_tier = (
+                            f"hard {MAX_HOLD_DAYS_HARD}-day limit (regardless of P&L)"
+                            if change_percent < 0
+                            else f"{MAX_HOLD_DAYS}-day limit, flat-or-better"
+                        )
                         st.session_state.trade_messages.append(
-                            f"TIME LIMIT EXIT triggered for {ticker}: open longer than "
-                            f"{MAX_HOLD_DAYS} days without hitting target. Sold "
-                            f"{round(qty, 4)} shares at ${round(current_price, 2)} "
-                            f"({round(change_percent, 2)}%)."
+                            f"TIME LIMIT EXIT triggered for {ticker}: hit the "
+                            f"{exit_tier}. Sold {round(qty, 4)} shares at "
+                            f"${round(current_price, 2)} ({round(change_percent, 2)}%)."
                         )
                         telegram_notifier.notify_trade_fill(
                             ticker=ticker,
@@ -3137,7 +3144,15 @@ def apply_crypto_risk_management():
         elif change_percent >= (TAKE_PROFIT_PERCENT * 100):
             exit_reason = "TAKE PROFIT"
         elif should_time_exit(lifecycle_state["opened_at"], change_percent):
-            exit_reason = "TIME LIMIT EXIT"
+            # Distinguish which tier fired -- see
+            # position_lifecycle_engine.should_time_exit() for the two-tier
+            # rule (soft: flat-or-better after MAX_HOLD_DAYS; hard: closes
+            # regardless of P&L after MAX_HOLD_DAYS_HARD).
+            exit_reason = (
+                f"TIME LIMIT EXIT (hard {MAX_HOLD_DAYS_HARD}-day limit)"
+                if change_percent < 0
+                else f"TIME LIMIT EXIT ({MAX_HOLD_DAYS}-day limit, flat-or-better)"
+            )
         else:
             continue
 

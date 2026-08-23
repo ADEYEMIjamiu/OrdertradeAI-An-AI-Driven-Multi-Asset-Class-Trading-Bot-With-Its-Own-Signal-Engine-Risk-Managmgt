@@ -100,6 +100,14 @@ PARTIAL_PROFIT_TRIGGER_PERCENT = 2.5
 PARTIAL_PROFIT_TAKE_FRACTION = 0.5
 MAX_HOLD_DAYS = 5
 
+# Hard time-based exit -- closes a position after this many days
+# regardless of profit or loss, unlike MAX_HOLD_DAYS above (which only
+# closes if flat-or-better). Never increases the maximum possible loss --
+# the stop-loss still fires first if breached; this only forces
+# resolution of positions stuck between the stop-loss floor and
+# break-even that would otherwise sit indefinitely.
+MAX_HOLD_DAYS_HARD = 7
+
 TRADE_COOLDOWN_MINUTES = 60
 
 # Crypto scalping engine overrides -- see engines/risk_engine.py's

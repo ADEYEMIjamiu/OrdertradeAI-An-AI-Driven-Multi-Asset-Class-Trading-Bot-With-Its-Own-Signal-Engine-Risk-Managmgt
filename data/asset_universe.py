@@ -65,6 +65,19 @@ ASSET_UNIVERSE = {
             # Binance's own AI markets page (binance.com/markets/coinInfo-AI)
             "FET-USD", "WLD-USD", "INJ-USD", "THETA-USD", "LPT-USD",
             "RENDER-USD", "KAITO-USD", "VIRTUAL-USD",
+
+            # Added 2026-08-23 at user request, after noticing several
+            # coins with real live volume/momentum weren't tracked at
+            # all (ZEC/PYTH/AAVE/BCH each independently confirmed via
+            # CoinMarketCap's top-gainers list and/or Binance's own
+            # top-50-by-volume ranking). Verified the same two ways as
+            # every other symbol here via check_new_crypto_candidates.py:
+            # tradable on Binance TESTNET, and has usable yfinance
+            # history. TRUMP-USD and UNI-USD were considered from the
+            # same shortlist but failed the yfinance check (no data
+            # under the plain "-USD" ticker, same collision issue as
+            # UNI/POL/TAO/GRT/IO above) -- left out for now.
+            "ZEC-USD", "PYTH-USD", "AAVE-USD", "BCH-USD",
         ],
         "enabled": True
     },

@@ -4534,7 +4534,14 @@ for asset_class in all_asset_classes:
         "Losses": stats["losses"],
         "Win Rate %": round(stats["win_rate"], 1),
         "Total P&L ($)": round(stats["total_pnl"], 2),
-        "Profit Factor": "N/A" if pf is None else round(pf, 2),
+        # Kept as a string in both branches deliberately -- mixing a str
+        # ("N/A") and a float in the same pandas column crashes Streamlit's
+        # Arrow-based table renderer with "Expected bytes, got a 'float'
+        # object" the first time any asset class has zero losing trades
+        # (pf is None) while another has real closed trades (pf is a
+        # float). Confirmed live 2026-08-23 via journalctl. The
+        # scorecard_rows table just below already does it this way.
+        "Profit Factor": "N/A" if pf is None else f"{pf:.2f}",
         "Expectancy/Trade ($)": round(stats["expectancy"], 2),
         "Open Positions Now": digest["open_positions_by_asset_class"].get(asset_class, 0),
     })

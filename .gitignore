@@ -13,3 +13,13 @@ emergency_stop.flag
 etoro_position_state.json
 alpaca_highest_profit_state.json
 backups/
+
+# Private strategy config -- see config.example.py's header comment for why.
+config.py
+
+# Trained model artifacts -- large binary, deployed separately, not
+# meant to bloat the repo.
+models/
+
+# Stray SQLite journal files from local testing.
+*.db-journal

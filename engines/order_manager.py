@@ -87,6 +87,40 @@ def save_order(order):
     return order
 
 
+def get_most_recent_filled_buy(ticker, broker):
+    """
+    Return the single most recent FILLED BUY order for a specific
+    ticker/broker, as a dict, or None if there isn't one.
+
+    Added 2026-08-23. apply_crypto_risk_management() previously found a
+    position's entry price by loading load_orders(limit=200) -- the 200
+    most recent orders ACROSS ALL TICKERS AND BROKERS -- and filtering
+    that capped list in Python for a match. With 20+ crypto positions
+    open simultaneously and heavy trading volume (rotation, the AI's own
+    continuous buying/selling), an older position's original BUY order
+    routinely aged out of that 200-order window entirely. Confirmed
+    live: 13 of 21 held crypto positions had no discoverable entry price
+    under that approach, so risk management silently skipped every one
+    of them, every cycle, with no error or message anywhere -- they had
+    zero stop-loss/take-profit/lifecycle protection despite being real,
+    currently-open positions. This queries the database directly for
+    that one ticker instead, so it can never be starved out by unrelated
+    order volume on other tickers.
+    """
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("""
+        SELECT * FROM orders
+        WHERE UPPER(ticker) = UPPER(?) AND LOWER(broker) = LOWER(?)
+          AND UPPER(side) = 'BUY' AND UPPER(status) = 'FILLED'
+          AND filled_price IS NOT NULL
+        ORDER BY updated_at DESC
+        LIMIT 1
+    """, (ticker, broker)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def load_orders(limit=200):
     """
     Return the most recent orders (all brokers, all statuses) as a list

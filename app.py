@@ -66,6 +66,22 @@ from engines import performance_engine
 from engines.digest_engine import calculate_performance_digest
 from engines.readiness_engine import calculate_readiness_scorecard
 from engines import equity_tracker
+from engines.asset_toggle_engine import (
+    is_asset_class_enabled,
+    set_asset_class_enabled,
+    get_all_toggles,
+    ASSET_CLASSES,
+)
+from engines.position_lifecycle_engine import (
+    get_position_state,
+    update_position_state,
+    clear_position_state,
+    should_activate_breakeven,
+    effective_stop_loss_percent,
+    should_take_partial_profit,
+    partial_profit_quantity,
+    should_time_exit,
+)
 import telegram_notifier
 import emergency_stop
 import account_store
@@ -83,6 +99,7 @@ from engines.risk_engine import (
     can_open_position,
     risk_check_before_trade,
     get_dynamic_buy_confidence,
+    get_live_forex_commodity_position_count,
 )
 from engines.regime_engine import (
     get_market_risk_level,
@@ -128,6 +145,8 @@ from config import (
     MAX_TRADES_PER_DAY,
     TRAILING_PROFIT_START,
     TRAILING_PROFIT_DROP,
+    PARTIAL_PROFIT_TAKE_FRACTION,
+    MAX_HOLD_DAYS,
     MAX_OPEN_POSITIONS,
     MAX_PORTFOLIO_EXPOSURE,
     TRADE_COOLDOWN_MINUTES,
@@ -1148,6 +1167,16 @@ def execute_alpaca_trades(buy_signals, sell_signals):
     # =========================================================
     # BUY EXECUTION
     # =========================================================
+    # NOTE: toggled-off only skips the BUY loop below (via the empty
+    # buy_signals swap) -- SELL EXECUTION further down in this same
+    # function must always still run, so this must never be a `return`.
+    if not is_asset_class_enabled("US_STOCKS") and not buy_signals.empty:
+        st.session_state.trade_messages.append(
+            "BUY skipped for all US_STOCKS signals: asset class is "
+            "toggled off in Asset Class Controls."
+        )
+        buy_signals = buy_signals.iloc[0:0]
+
     for _, row in buy_signals.iterrows():
         ticker = str(row["Ticker"]).upper().strip()
         buy_gate_allowed, buy_gate_reason = broker_execution_gate("BUY")
@@ -1468,6 +1497,16 @@ def execute_binance_trades(buy_signals, sell_signals):
             f"Could not load Binance testnet positions: {e}"
         )
         return
+
+    # NOTE: toggled-off only skips the BUY loop below -- SELL EXECUTION
+    # further down in this same function must always still run, so this
+    # must never be a `return`.
+    if not is_asset_class_enabled("CRYPTO") and not buy_signals.empty:
+        st.session_state.trade_messages.append(
+            "BUY skipped for all CRYPTO signals: asset class is toggled "
+            "off in Asset Class Controls."
+        )
+        buy_signals = buy_signals.iloc[0:0]
 
     # =========================================================
     # BUY EXECUTION
@@ -1866,6 +1905,13 @@ def execute_etoro_trades(buy_signals, sell_signals):
     for _, row in buy_signals.iterrows():
         ticker = str(row["Ticker"]).upper().strip()
         asset_class = row.get("Asset Class", "FOREX")
+
+        if not is_asset_class_enabled(asset_class):
+            st.session_state.trade_messages.append(
+                f"BUY skipped for {ticker}: {asset_class} is toggled off "
+                f"in Asset Class Controls."
+            )
+            continue
 
         existing_position = _find_position(positions_by_symbol, ticker)
 
@@ -2738,10 +2784,64 @@ def apply_risk_management(market_df):
                     highest_profit = st.session_state.highest_profit[ticker]
                     trailing_exit_level = highest_profit - TRAILING_PROFIT_DROP
 
-                    if change_percent <= -(STOP_LOSS_PERCENT * 100):
-                        _journal_alpaca_risk_exit(ticker, qty, current_price, "STOP_LOSS")
+                    # --- Position lifecycle management (break-even stop,
+                    # partial profit-taking, time-based exit) -- see
+                    # engines/position_lifecycle_engine.py's module
+                    # docstring for why this exists. ---
+                    lifecycle_key = f"US_STOCKS:{ticker}"
+                    lifecycle_state = get_position_state(lifecycle_key)
+
+                    if should_activate_breakeven(change_percent, lifecycle_state["breakeven_active"]):
+                        update_position_state(lifecycle_key, breakeven_active=True)
+                        lifecycle_state["breakeven_active"] = True
                         st.session_state.trade_messages.append(
-                            f"STOP LOSS triggered for {ticker}. Sold {round(qty, 4)} shares at ${round(current_price, 2)}"
+                            f"{ticker}: profit reached {round(change_percent, 2)}% -- "
+                            f"stop-loss moved to break-even."
+                        )
+
+                    if should_take_partial_profit(change_percent, lifecycle_state["partial_taken"]):
+                        partial_qty = round(partial_profit_quantity(qty), 6)
+                        if partial_qty > 0:
+                            _journal_alpaca_risk_exit(ticker, partial_qty, current_price, "PARTIAL_PROFIT")
+                            update_position_state(lifecycle_key, partial_taken=True)
+                            realized = partial_qty * (current_price - entry_price)
+                            st.session_state.trade_messages.append(
+                                f"PARTIAL PROFIT taken for {ticker}: sold {round(partial_qty, 4)} "
+                                f"shares ({int(PARTIAL_PROFIT_TAKE_FRACTION * 100)}%) at "
+                                f"${round(current_price, 2)} (+{round(change_percent, 2)}%), "
+                                f"banking ${round(realized, 2)}. Remainder still open."
+                            )
+                            telegram_notifier.notify_trade_fill(
+                                ticker=ticker,
+                                action="SELL",
+                                price=current_price,
+                                shares=partial_qty,
+                                amount=partial_qty * current_price,
+                                asset_class="US_STOCKS",
+                                mode="ALPACA_LIVE" if LIVE_TRADING else "LOCAL_PAPER",
+                                realized_pnl=realized,
+                            )
+                        # Alpaca's position object won't reflect the reduced
+                        # size until the next refresh -- skip the exit
+                        # checks below for this pass rather than evaluate
+                        # them against a qty that's now stale.
+                        continue
+
+                    effective_stop_pct = effective_stop_loss_percent(
+                        -(STOP_LOSS_PERCENT * 100), lifecycle_state["breakeven_active"]
+                    )
+                    stop_exit_reason = (
+                        "BREAKEVEN_STOP"
+                        if lifecycle_state["breakeven_active"]
+                        and change_percent > -(STOP_LOSS_PERCENT * 100)
+                        else "STOP_LOSS"
+                    )
+
+                    if change_percent <= effective_stop_pct:
+                        _journal_alpaca_risk_exit(ticker, qty, current_price, stop_exit_reason)
+                        st.session_state.trade_messages.append(
+                            f"{stop_exit_reason.replace('_', ' ')} triggered for {ticker}. "
+                            f"Sold {round(qty, 4)} shares at ${round(current_price, 2)}"
                         )
                         telegram_notifier.notify_trade_fill(
                             ticker=ticker,
@@ -2754,6 +2854,7 @@ def apply_risk_management(market_df):
                             realized_pnl=qty * (current_price - entry_price),
                         )
                         del st.session_state.highest_profit[ticker]
+                        clear_position_state(lifecycle_key)
 
                     elif change_percent >= (TAKE_PROFIT_PERCENT * 100):
                         _journal_alpaca_risk_exit(ticker, qty, current_price, "TAKE_PROFIT")
@@ -2771,6 +2872,7 @@ def apply_risk_management(market_df):
                             realized_pnl=qty * (current_price - entry_price),
                         )
                         del st.session_state.highest_profit[ticker]
+                        clear_position_state(lifecycle_key)
 
                     elif highest_profit >= TRAILING_PROFIT_START and change_percent <= trailing_exit_level:
                         _journal_alpaca_risk_exit(ticker, qty, current_price, "TRAILING_STOP")
@@ -2788,6 +2890,28 @@ def apply_risk_management(market_df):
                             realized_pnl=qty * (current_price - entry_price),
                         )
                         del st.session_state.highest_profit[ticker]
+                        clear_position_state(lifecycle_key)
+
+                    elif should_time_exit(lifecycle_state["opened_at"], change_percent):
+                        _journal_alpaca_risk_exit(ticker, qty, current_price, "TIME_LIMIT_EXIT")
+                        st.session_state.trade_messages.append(
+                            f"TIME LIMIT EXIT triggered for {ticker}: open longer than "
+                            f"{MAX_HOLD_DAYS} days without hitting target. Sold "
+                            f"{round(qty, 4)} shares at ${round(current_price, 2)} "
+                            f"({round(change_percent, 2)}%)."
+                        )
+                        telegram_notifier.notify_trade_fill(
+                            ticker=ticker,
+                            action="SELL",
+                            price=current_price,
+                            shares=qty,
+                            amount=qty * current_price,
+                            asset_class="US_STOCKS",
+                            mode="ALPACA_LIVE" if LIVE_TRADING else "LOCAL_PAPER",
+                            realized_pnl=qty * (current_price - entry_price),
+                        )
+                        del st.session_state.highest_profit[ticker]
+                        clear_position_state(lifecycle_key)
 
                 except Exception as e:
                     st.session_state.trade_messages.append(
@@ -2861,6 +2985,10 @@ def apply_crypto_risk_management():
     off: with at most one open lot per coin, "most recent BUY fill" is
     unambiguous. If pyramiding is ever turned back on, this would need to
     become a proper weighted-average cost basis instead.
+
+    FIX 2026-08-23: entry-price lookup now queries order_manager directly
+    per-ticker (get_most_recent_filled_buy) instead of filtering a capped
+    200-order recent-orders list -- see that function's docstring for why.
     """
     import binance_broker
     import engines.order_manager as order_manager
@@ -2877,30 +3005,25 @@ def apply_crypto_risk_management():
     if not positions:
         return
 
-    try:
-        recent_orders = order_manager.load_orders(limit=200)
-    except Exception as e:
-        st.session_state.trade_messages.append(
-            f"Crypto risk management skipped: could not load order "
-            f"history: {e}"
-        )
-        return
-
     for position in positions:
         ticker = str(position["symbol"]).upper().strip()
         qty = float(position["qty"])
 
-        entry_order = next(
-            (
-                o for o in recent_orders
-                if str(o.get("ticker", "")).upper().strip() == ticker
-                and str(o.get("broker", "")).lower() == "binance"
-                and str(o.get("side", "")).upper() == "BUY"
-                and str(o.get("status", "")).upper() == "FILLED"
-                and o.get("filled_price")
-            ),
-            None,
-        )
+        # FIX 2026-08-23: was filtering order_manager.load_orders(limit=200)
+        # -- the 200 most recent orders ACROSS ALL TICKERS -- in Python,
+        # which silently lost entry-price coverage for any position whose
+        # original BUY had aged out of that shared window (confirmed live:
+        # 13 of 21 held positions had no discoverable entry this way). This
+        # queries the database directly for THIS ticker, so unrelated order
+        # volume on other tickers can never starve it out.
+        try:
+            entry_order = order_manager.get_most_recent_filled_buy(ticker, "binance")
+        except Exception as e:
+            st.session_state.trade_messages.append(
+                f"Crypto risk management skipped for {ticker}: could not "
+                f"load order history: {e}"
+            )
+            continue
 
         if entry_order is None:
             continue
@@ -2916,10 +3039,105 @@ def apply_crypto_risk_management():
 
         change_percent = ((current_price / entry_price) - 1) * 100
 
-        if change_percent <= -(STOP_LOSS_PERCENT * 100):
-            exit_reason = "STOP LOSS"
+        # --- Position lifecycle management (break-even stop, partial
+        # profit-taking, time-based exit) -- see
+        # engines/position_lifecycle_engine.py's module docstring for
+        # why this exists. Crypto previously had no trailing-lock or any
+        # profit-protection at all beyond the binary stop-loss/
+        # take-profit below, so a position could ride all the way from
+        # near +5% back down to -3% and give back everything it earned. ---
+        lifecycle_key = f"CRYPTO:{ticker}"
+        lifecycle_state = get_position_state(lifecycle_key)
+
+        if should_activate_breakeven(change_percent, lifecycle_state["breakeven_active"]):
+            update_position_state(lifecycle_key, breakeven_active=True)
+            lifecycle_state["breakeven_active"] = True
+            st.session_state.trade_messages.append(
+                f"{ticker}: profit reached {round(change_percent, 2)}% -- "
+                f"stop-loss moved to break-even."
+            )
+
+        if should_take_partial_profit(change_percent, lifecycle_state["partial_taken"]):
+            partial_qty = round(partial_profit_quantity(qty), 6)
+            if partial_qty > 0:
+                try:
+                    binance_broker.sell_crypto(ticker, partial_qty)
+                except Exception as e:
+                    st.session_state.trade_messages.append(
+                        f"Crypto PARTIAL PROFIT failed for {ticker}: {e}"
+                    )
+                    continue
+
+                partial_order = create_order(
+                    ticker=ticker,
+                    side="SELL",
+                    quantity=partial_qty,
+                    trade_amount=partial_qty * current_price,
+                    price=current_price,
+                    asset_class="CRYPTO",
+                    broker="binance",
+                    strategy="Partial Profit Taking",
+                    confidence=0,
+                    ai_trade_score=0,
+                    priority="N/A",
+                )
+                partial_order = mark_order_filled(
+                    partial_order, filled_price=current_price, filled_quantity=partial_qty
+                )
+                save_order(partial_order)
+
+                partial_realized = partial_qty * (current_price - entry_price)
+
+                log_trade(
+                    ticker=ticker,
+                    action="SELL",
+                    price=current_price,
+                    shares=partial_qty,
+                    amount=partial_qty * current_price,
+                    confidence=0,
+                    trend_score=0,
+                    reason="PARTIAL_PROFIT",
+                    mode="BINANCE_TESTNET",
+                )
+
+                telegram_notifier.notify_trade_fill(
+                    ticker=ticker,
+                    action="SELL",
+                    price=current_price,
+                    shares=partial_qty,
+                    amount=partial_qty * current_price,
+                    asset_class="CRYPTO",
+                    mode="BINANCE_TESTNET",
+                    realized_pnl=partial_realized,
+                )
+
+                update_position_state(lifecycle_key, partial_taken=True)
+                st.session_state.trade_messages.append(
+                    f"PARTIAL PROFIT taken for {ticker}: sold {round(partial_qty, 6)} "
+                    f"units ({int(PARTIAL_PROFIT_TAKE_FRACTION * 100)}%) at "
+                    f"${round(current_price, 2)} (+{round(change_percent, 2)}%), "
+                    f"banking ${round(partial_realized, 2)}. Remainder still open."
+                )
+            # Binance's wallet balance won't reflect the reduced size
+            # until the next refresh -- skip the exit checks below for
+            # this pass rather than evaluate them against a stale qty.
+            continue
+
+        effective_stop_pct = effective_stop_loss_percent(
+            -(STOP_LOSS_PERCENT * 100), lifecycle_state["breakeven_active"]
+        )
+
+        if change_percent <= effective_stop_pct:
+            exit_reason = (
+                "BREAKEVEN STOP"
+                if lifecycle_state["breakeven_active"]
+                and change_percent > -(STOP_LOSS_PERCENT * 100)
+                else "STOP LOSS"
+            )
         elif change_percent >= (TAKE_PROFIT_PERCENT * 100):
             exit_reason = "TAKE PROFIT"
+        elif should_time_exit(lifecycle_state["opened_at"], change_percent):
+            exit_reason = "TIME LIMIT EXIT"
         else:
             continue
 
@@ -2979,6 +3197,7 @@ def apply_crypto_risk_management():
             f"{round(qty, 6)} units at ${round(current_price, 2)} "
             f"(entry ${round(entry_price, 2)})."
         )
+        clear_position_state(lifecycle_key)
 
 
 # NOTE: get_exposure_percent used to be redefined here, shadowing the
@@ -3106,6 +3325,33 @@ else:
     if st.button("🛑 EMERGENCY STOP — Halt All Trading"):
         emergency_stop.activate("Manually triggered from dashboard")
         st.rerun()
+
+# ============================================================
+# ASSET CLASS CONTROLS
+# ============================================================
+# Turns AI trade ENTRY on/off per asset class -- e.g. "only crypto today."
+# Only gates new BUYs; SELL exits, stop-loss, take-profit, and trailing
+# stops always fire regardless of these toggles (see
+# engines/asset_toggle_engine.py's module docstring for why). State is
+# persisted in asset_toggles.db, so it survives a service restart.
+st.subheader("🎛️ Asset Class Controls")
+st.caption(
+    "Turn AI trade entry on/off per asset class. Existing positions are "
+    "never affected -- SELLs, stop-losses, and take-profits always run "
+    "regardless of these switches."
+)
+_current_toggles = get_all_toggles()
+_toggle_cols = st.columns(len(ASSET_CLASSES))
+for _col, _asset_class in zip(_toggle_cols, ASSET_CLASSES):
+    with _col:
+        _new_value = st.toggle(
+            _asset_class.replace("_", " ").title(),
+            value=_current_toggles[_asset_class],
+            key=f"asset_toggle_{_asset_class}",
+        )
+        if _new_value != _current_toggles[_asset_class]:
+            set_asset_class_enabled(_asset_class, _new_value)
+            st.rerun()
 
 st.divider()
 
@@ -4220,6 +4466,21 @@ if LIVE_TRADING:
         digest["open_positions_by_asset_class"]["US_STOCKS"] = len(get_open_positions())
     except Exception:
         pass
+
+# Same staleness bug as US_STOCKS above, for FOREX/COMMODITIES: the real
+# eToro-backed position cap (engines/risk_engine.py's
+# _get_etoro_position_count, fixed 2026-08-06) already reads live eToro
+# data, but this digest table was still reading the same stale journal
+# count as stocks were. Overriding with the live-verified count here too;
+# falls back to the journal count if the eToro call fails.
+if ETORO_LIVE_TRADING:
+    for _asset_class in ("FOREX", "COMMODITIES"):
+        try:
+            digest["open_positions_by_asset_class"][_asset_class] = (
+                get_live_forex_commodity_position_count(_asset_class)
+            )
+        except Exception:
+            pass
 
 digest_overall = digest["overall"]
 

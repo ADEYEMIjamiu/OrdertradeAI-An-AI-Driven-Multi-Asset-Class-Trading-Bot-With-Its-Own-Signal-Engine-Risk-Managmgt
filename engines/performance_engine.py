@@ -118,13 +118,32 @@ def get_open_positions_cost_basis():
     for every position still open (unmatched BUY lots), derived straight
     from the trade journal via FIFO. Works for stocks and crypto alike,
     since it only cares about BUY/SELL rows, not which broker placed them.
+
+    Crypto lots opened before CRYPTO_VALIDATION_START are excluded. This
+    is the position-cap / exposure counterpart to the closed-trade
+    filtering already applied in digest_engine.py and
+    _filter_pre_pyramiding_fix_crypto() below -- without it, this was the
+    one remaining place a pre-pyramiding-fix crypto lot could sit
+    "open" forever (e.g. a SELL that silently failed to journal) and
+    count toward the live crypto position cap and exposure gate, with no
+    independent live-broker check to catch it the way stocks/forex/
+    commodities now have. Stocks are unaffected -- this only touches
+    "-USD" tickers.
     """
     _, open_lots = get_closed_trades_and_open_lots()
 
     result = {}
     for ticker, lots in open_lots.items():
-        total_shares = sum(lot["shares"] for lot in lots)
-        total_cost = sum(lot["shares"] * lot["price"] for lot in lots)
+        is_crypto = str(ticker).upper().endswith("-USD")
+        total_shares = 0.0
+        total_cost = 0.0
+        for lot in lots:
+            if is_crypto:
+                lot_time = _parse_time(lot["time"])
+                if lot_time is not None and lot_time < CRYPTO_VALIDATION_START:
+                    continue
+            total_shares += lot["shares"]
+            total_cost += lot["shares"] * lot["price"]
         if total_shares > 1e-9:
             result[ticker] = {"shares": total_shares, "cost_basis": total_cost}
 

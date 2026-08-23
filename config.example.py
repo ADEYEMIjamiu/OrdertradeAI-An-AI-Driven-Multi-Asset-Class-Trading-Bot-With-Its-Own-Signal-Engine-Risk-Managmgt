@@ -33,7 +33,12 @@ RISK_PER_TRADE = 0.01
 MAX_POSITION_SIZE = 0.20
 
 BUY_CONFIDENCE = 0.35
-SELL_CONFIDENCE = 0.35
+# Keep this LOWER than BUY_CONFIDENCE, not equal to it -- equal thresholds
+# collapse the HOLD zone to nothing (BUY on confidence >= BUY_CONFIDENCE,
+# SELL on confidence <= SELL_CONFIDENCE, so with no gap between them every
+# value is forced into one or the other, never HOLD). See config.py's
+# comment (2026-08-22 fix) for how this was discovered live in production.
+SELL_CONFIDENCE = 0.25
 
 # Fixed stop-loss/take-profit band. Widen or tighten based on how
 # much intraday noise your tracked tickers actually have -- too
@@ -72,7 +77,7 @@ MAX_PORTFOLIO_EXPOSURE = 0.50
 # position budget, separate from stocks -- otherwise stocks filling
 # their slots first can silently lock the other asset classes out
 # of ever opening a position.
-MAX_CRYPTO_POSITIONS = 4
+MAX_CRYPTO_POSITIONS = 8
 MAX_FOREX_POSITIONS = 3
 MAX_COMMODITIES_POSITIONS = 3
 
@@ -89,7 +94,18 @@ MAX_TRADES_PER_DAY = 5
 TRAILING_PROFIT_START = 1.2   # placeholder -- tune to your own strategy
 TRAILING_PROFIT_DROP = 0.6    # placeholder -- tune to your own strategy
 
+# Position lifecycle management -- see engines/position_lifecycle_engine.py
+BREAKEVEN_STOP_TRIGGER_PERCENT = 1.0
+PARTIAL_PROFIT_TRIGGER_PERCENT = 2.5
+PARTIAL_PROFIT_TAKE_FRACTION = 0.5
+MAX_HOLD_DAYS = 5
+
 TRADE_COOLDOWN_MINUTES = 60
+
+# Crypto scalping engine overrides -- see engines/risk_engine.py's
+# can_open_position() for how these apply (crypto only).
+CRYPTO_MAX_TRADES_PER_DAY = 30
+CRYPTO_TRADE_COOLDOWN_MINUTES = 5
 
 MARKET_RISK_LOW = 0.5
 MARKET_RISK_MEDIUM = 1.0
@@ -161,7 +177,7 @@ REQUIRE_ETORO_DEMO_ENVIRONMENT = True
 
 READINESS_VALIDATION_START = datetime(2026, 1, 1)
 
-READINESS_MIN_DAYS = 30
+READINESS_MIN_DAYS = 37
 READINESS_MIN_TRADES = 20
 READINESS_MIN_PROFIT_FACTOR = 1.3
 READINESS_MAX_DRAWDOWN_PERCENT = 20

@@ -20,6 +20,8 @@ from config import (
     MAX_PORTFOLIO_EXPOSURE,
     MAX_TRADES_PER_DAY,
     TRADE_COOLDOWN_MINUTES,
+    CRYPTO_MAX_TRADES_PER_DAY,
+    CRYPTO_TRADE_COOLDOWN_MINUTES,
     HIGH_SCORE_SIZE_MULTIPLIER,
     NORMAL_SCORE_SIZE_MULTIPLIER,
     LOW_SCORE_SIZE_MULTIPLIER,
@@ -117,6 +119,27 @@ def _get_etoro_position_count(asset_class):
         if etoro_symbol in positions_by_symbol:
             count += 1
     return count
+
+
+def get_live_forex_commodity_position_count(asset_class):
+    """
+    Public wrapper around _get_etoro_position_count(), for callers outside
+    this module (the Performance Digest display in app.py) that need the
+    real, live-eToro-verified FOREX/COMMODITIES open-position count --
+    the same kind of override already applied to the digest's US_STOCKS
+    count on 2026-08-19 (see the comment at that call site in app.py).
+
+    Why this was needed: digest_engine.py's open_positions_by_asset_class
+    counts distinct tickers with an unmatched BUY still sitting in the
+    trade journal, for every asset class uniformly. That's the exact
+    pattern that made the US_STOCKS digest count go stale (it showed 16
+    when the broker only had 3 open). FOREX/COMMODITIES real risk
+    enforcement was already fixed to use live eToro data on 2026-08-06
+    (_get_etoro_position_count above), but the digest DISPLAY for these
+    two asset classes was never updated to match -- it's been reading the
+    same stale journal source as stocks was, this whole time.
+    """
+    return _get_etoro_position_count(asset_class)
 
 
 def _get_forex_position_count():
@@ -340,6 +363,22 @@ def risk_check_before_trade(ticker, trade_amount, market_df):
     except Exception:
         recent_orders = []
 
+    # FIX 2026-08-23: exclude synthetic "adopted entry" bookkeeping orders
+    # (strategy prefix "ADOPTED_ENTRY_") from the daily-trade-limit and
+    # cooldown checks below. These are one-time entry-price backfills
+    # created by adopt_entry_for_orphaned_positions.py for positions with
+    # no recorded original BUY (see order_manager.get_most_recent_filled_buy()'s
+    # docstring) -- they never represent a real AI trading decision, but
+    # they're real rows in the same order book these checks read from.
+    # Confirmed live: 12 such orders consumed 12 of the day's 30-trade
+    # crypto budget the moment they were created, with zero real trading
+    # behind them. Entry-price lookups still see them (that's the point
+    # of writing them) -- only these two throttling checks exclude them.
+    recent_orders = [
+        o for o in recent_orders
+        if not str(o.get("strategy", "")).startswith("ADOPTED_ENTRY_")
+    ]
+
     def _order_timestamp(order):
         timestamp_text = (
             order.get("filled_at") or order.get("updated_at") or order.get("created_at")
@@ -378,7 +417,21 @@ def risk_check_before_trade(ticker, trade_amount, market_df):
         if ts is not None and ts.date() == today:
             trades_today += 1
 
-    if trades_today >= MAX_TRADES_PER_DAY:
+    # CRYPTO gets its own, faster daily-trade budget and cooldown (see
+    # CRYPTO_MAX_TRADES_PER_DAY/CRYPTO_TRADE_COOLDOWN_MINUTES in
+    # config.py, added 2026-08-22 for the crypto scalping engine,
+    # roadmap item #9) -- stocks/forex/commodities keep the shared
+    # defaults above unchanged.
+    max_trades_for_class = (
+        CRYPTO_MAX_TRADES_PER_DAY if current_asset_class == "CRYPTO"
+        else MAX_TRADES_PER_DAY
+    )
+    cooldown_minutes_for_class = (
+        CRYPTO_TRADE_COOLDOWN_MINUTES if current_asset_class == "CRYPTO"
+        else TRADE_COOLDOWN_MINUTES
+    )
+
+    if trades_today >= max_trades_for_class:
         return False, f"Maximum daily trades reached for {current_asset_class}."
 
     # 5. Cooldown per ticker -- most recent order for this exact ticker,
@@ -395,7 +448,7 @@ def risk_check_before_trade(ticker, trade_amount, market_df):
     if last_trade_for_ticker is not None:
         elapsed = datetime.now() - last_trade_for_ticker
 
-        if elapsed < timedelta(minutes=TRADE_COOLDOWN_MINUTES):
+        if elapsed < timedelta(minutes=cooldown_minutes_for_class):
             return False, "Cooldown active."
 
     return True, "OK"

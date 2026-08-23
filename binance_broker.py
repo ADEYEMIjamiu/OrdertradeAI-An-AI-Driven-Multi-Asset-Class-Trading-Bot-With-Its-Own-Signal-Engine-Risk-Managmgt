@@ -13,6 +13,8 @@ import os
 import ccxt
 from dotenv import load_dotenv
 
+from data.asset_universe import ASSET_UNIVERSE
+
 load_dotenv()
 
 API_KEY = os.getenv("BINANCE_TESTNET_API_KEY")
@@ -101,15 +103,31 @@ def get_available_usdt():
 def get_positions():
     """
     Return current non-zero crypto holdings for ONLY the assets this
-    project actually trades (BTC, ETH, SOL, BNB).
+    project actually trades.
 
     Important: Binance testnet accounts come pre-seeded with dozens of
     unrelated fake test tokens (random dust) that have nothing to do with
     this bot's trades. Without filtering, every one of those would show
     up here as a "position", which is misleading. We only care about
     assets that match our own crypto asset universe.
+
+    FIX 2026-08-22: TRACKED_ASSETS used to be a hardcoded 4-symbol set
+    ({"BTC","ETH","SOL","BNB"}) left over from before the crypto universe
+    was expanded to 23 tickers earlier this session. That meant every
+    newly-added ticker (ADA, DOGE, LPT, DOT, KAITO, FET, TRX, etc.) was
+    invisible to this function -- which in turn made the pyramiding-
+    prevention check in app.py's execute_binance_trades() (built from
+    this function's output) blind to those tickers too. Confirmed live:
+    LPT-USD, FET-USD, and KAITO-USD each got bought twice ~3.5 hours
+    apart at nearly identical prices -- pyramiding that ALLOW_CRYPTO_
+    PYRAMIDING=False should have blocked. Now derived dynamically from
+    the actual asset universe so this can never silently drift out of
+    sync with it again.
     """
-    TRACKED_ASSETS = {"BTC", "ETH", "SOL", "BNB"}
+    TRACKED_ASSETS = {
+        ticker.replace("-USD", "")
+        for ticker in ASSET_UNIVERSE["CRYPTO"]["symbols"]
+    }
 
     try:
         balance = exchange.fetch_balance()

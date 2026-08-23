@@ -40,7 +40,32 @@ ASSET_UNIVERSE = {
 
     "CRYPTO": {
         "broker": "binance",
-        "symbols": ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD"],
+        # Expanded 2026-08-22 at user request from the original 4
+        # (BTC/ETH/SOL/BNB) -- Binance testnet actually lists 489 USDT
+        # pairs (confirmed live via check_binance_testnet_pairs.py), far
+        # more than this project ever traded. Each new symbol below was
+        # verified two ways before being added: (1) tradable on Binance
+        # TESTNET specifically, not just mainnet, and (2) has usable
+        # price history via get_market_data() (yfinance) for the AI
+        # model's technical indicators -- both checked live via
+        # check_crypto_data_coverage.py. A few Binance-tradable coins
+        # (UNI, POL, TAO, GRT, IO) were left out for now because yfinance
+        # had no data under their plain "-USD" ticker, most likely due to
+        # ticker-collision suffixes on Yahoo's side -- worth revisiting
+        # individually later, not blocking this expansion.
+        "symbols": [
+            "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD",
+
+            # Established majors
+            "XRP-USD", "ADA-USD", "DOGE-USD", "AVAX-USD", "DOT-USD",
+            "LINK-USD", "LTC-USD", "TRX-USD", "ATOM-USD", "NEAR-USD",
+            "XLM-USD",
+
+            # AI-category tokens -- flagged directly by the user from
+            # Binance's own AI markets page (binance.com/markets/coinInfo-AI)
+            "FET-USD", "WLD-USD", "INJ-USD", "THETA-USD", "LPT-USD",
+            "RENDER-USD", "KAITO-USD", "VIRTUAL-USD",
+        ],
         "enabled": True
     },
 

@@ -87,6 +87,13 @@ def _match_round_trips(trades):
                     "pnl_percent": pnl_percent,
                     "entry_time": lot["time"],
                     "exit_time": trade["time"],
+                    # 2026-08-24: the SELL's own "reason" (AI SELL Signal,
+                    # STOP_LOSS, TAKE_PROFIT, BREAKEVEN_STOP, PARTIAL_PROFIT,
+                    # a TRAILING/TIME LIMIT variant, etc.) -- carried through
+                    # so calculate_strategy_breakdown() below can group
+                    # realized P&L by what actually closed each trade,
+                    # not just report one all-up total.
+                    "exit_reason": trade.get("reason") or "",
                 })
 
                 lot["shares"] -= matched_shares
@@ -366,6 +373,96 @@ def calculate_monthly_returns():
             "total_pnl": sum(t["pnl"] for t in trades),
         })
 
+    return result
+
+
+def _normalize_exit_reason(raw_reason):
+    """
+    Buckets the many raw exit_reason strings that have accumulated across
+    stocks and crypto into one consistent label per underlying strategy.
+
+    The two asset classes never agreed on a format: stocks use
+    underscores ("STOP_LOSS", "TRAILING_STOP"), crypto uses spaces
+    ("STOP LOSS") and, for TRAILING PROFIT LOCK / TIME LIMIT EXIT,
+    embeds a dynamic value in the string itself (e.g. "TRAILING PROFIT
+    LOCK (peak 3.4%)", "TIME LIMIT EXIT (hard 7-day limit)") -- which
+    would make every single one of those exits its own unique group if
+    matched literally. This normalizes by substring so grouping is
+    stable regardless of formatting or embedded numbers.
+    """
+    reason = str(raw_reason or "").upper()
+
+    if "AI BUY" in reason or "AI SELL" in reason:
+        return "AI Signal"
+    if "BREAKEVEN" in reason:
+        return "Breakeven Stop"
+    if "PARTIAL" in reason:
+        return "Partial Profit"
+    if "TRAILING" in reason:
+        return "Trailing Profit Lock"
+    if "STOP LOSS" in reason or "STOP_LOSS" in reason:
+        return "Stop Loss"
+    if "TAKE PROFIT" in reason or "TAKE_PROFIT" in reason:
+        return "Take Profit"
+    if "TIME LIMIT" in reason or "TIME_LIMIT" in reason:
+        return "Time Limit Exit"
+    if "ROTATION" in reason or "RISK MANAGEMENT" in reason:
+        return "Rotation / Manual"
+    if not reason:
+        return "Unknown (no reason logged)"
+    return raw_reason
+
+
+def calculate_strategy_breakdown():
+    """
+    Groups closed, FIFO-matched round-trip trades by what actually closed
+    them (see _normalize_exit_reason() above), so it's possible to see
+    which exit mechanism is actually making money versus which one might
+    be cutting winners short or letting losers run -- instead of only
+    ever seeing one blended win-rate/P&L total across every strategy at
+    once.
+
+    Excludes pre-pyramiding-fix crypto trades, same as
+    calculate_risk_adjusted_metrics()/calculate_monthly_returns() above,
+    so a bug that's already been fixed doesn't skew which strategy looks
+    good today.
+
+    Note: eToro (forex/commodities) exits happen broker-side once a
+    stop-loss/take-profit level is hit -- this bot never places the
+    closing SELL itself for those, so eToro exits aren't logged with a
+    reason and won't appear broken out here. Only stocks and crypto,
+    where every automatic exit is bot-initiated and journaled, get a
+    real per-strategy breakdown.
+
+    Returns a list of {"strategy", "trades_closed", "wins", "losses",
+    "win_rate", "total_pnl", "average_pnl"} dicts, sorted by total_pnl
+    descending (best-performing strategy first).
+    """
+    closed_trades, _ = get_closed_trades_and_open_lots()
+    closed_trades = _filter_pre_pyramiding_fix_crypto(closed_trades)
+
+    groups = defaultdict(list)
+    for t in closed_trades:
+        strategy = _normalize_exit_reason(t.get("exit_reason"))
+        groups[strategy].append(t)
+
+    result = []
+    for strategy, trades in groups.items():
+        wins = [t for t in trades if t["pnl"] > 0]
+        losses = [t for t in trades if t["pnl"] <= 0]
+        total_pnl = sum(t["pnl"] for t in trades)
+
+        result.append({
+            "strategy": strategy,
+            "trades_closed": len(trades),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": (len(wins) / len(trades) * 100) if trades else 0.0,
+            "total_pnl": total_pnl,
+            "average_pnl": total_pnl / len(trades) if trades else 0.0,
+        })
+
+    result.sort(key=lambda r: r["total_pnl"], reverse=True)
     return result
 
 

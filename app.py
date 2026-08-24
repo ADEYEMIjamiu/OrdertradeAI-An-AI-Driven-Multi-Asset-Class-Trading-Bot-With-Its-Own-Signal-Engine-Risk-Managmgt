@@ -2758,14 +2758,31 @@ def _journal_alpaca_risk_exit(ticker, qty, current_price, exit_reason):
     2026-08-10: discovered apply_risk_management()'s three exit branches
     called sell_stock() directly with no order-journal write at all, so
     every automatic stock exit that has EVER fired -- not just the one
-    that triggered this fix -- is missing from trade_journal.db. That's
-    the table the Performance Digest and Readiness Scorecard calculate
-    win rate/profit factor from, so any position that closed via
-    stop-loss/take-profit/trailing-stop rather than a normal signal SELL
-    has been silently leaving only its BUY half in the data. This closes
-    that gap going forward; it does not (and can't, since the real fill
-    price was never captured) backfill exits that already happened
-    before this fix deployed.
+    that triggered this fix -- is missing from trade_journal.db's orders
+    table. This closes that gap going forward; it does not (and can't,
+    since the real fill price was never captured) backfill exits that
+    already happened before this fix deployed.
+
+    FIX 2026-08-24: the note above claimed this made stock exits visible
+    to "the table the Performance Digest and Readiness Scorecard
+    calculate win rate/profit factor from" -- that's wrong. This writes
+    to order_manager's `orders` table (create_order/save_order), which
+    is a DIFFERENT table from trade_journal.py's `trades` table that
+    engines/performance_engine.py (and everything built on it -- the
+    Performance Digest, Readiness Scorecard, Sharpe/Sortino, monthly
+    returns, and the new per-strategy breakdown) actually reads via
+    load_trade_journal(). Crypto's equivalent
+    (apply_crypto_risk_management) calls BOTH create_order/save_order
+    AND log_trade() for every exit; this function only ever did the
+    former. So every stock position that closed via stop-loss,
+    take-profit, break-even, partial-profit, trailing-lock, or the
+    time-limit exit -- as opposed to a normal AI SELL signal -- has been
+    silently invisible to every one of those metrics this whole time,
+    not just before 2026-08-10. Added the missing log_trade() call below,
+    matching crypto's pattern exactly (reason=exit_reason, confidence/
+    trend_score=0 since risk exits aren't signal-driven, mode=
+    "ALPACA_LIVE" since this function only ever runs inside
+    apply_risk_management()'s `if LIVE_TRADING:` block).
     """
     alpaca_response = sell_stock(ticker, qty)
 
@@ -2798,6 +2815,19 @@ def _journal_alpaca_risk_exit(ticker, qty, current_price, exit_reason):
         )
 
     save_order(order)
+
+    log_trade(
+        ticker=ticker,
+        action="SELL",
+        price=current_price,
+        shares=qty,
+        amount=qty * current_price,
+        confidence=0,
+        trend_score=0,
+        reason=exit_reason,
+        mode="ALPACA_LIVE",
+    )
+
     return alpaca_response
 
 
@@ -4796,6 +4826,36 @@ if monthly_returns:
     monthly_returns_df["Win Rate %"] = monthly_returns_df["Win Rate %"].round(1)
     monthly_returns_df["Total P&L ($)"] = monthly_returns_df["Total P&L ($)"].round(2)
     st.dataframe(monthly_returns_df, width="stretch", hide_index=True)
+
+# 2026-08-24: same journal, grouped by what actually closed each trade
+# (stop-loss, take-profit, break-even, partial-profit, trailing-lock,
+# time-limit exit, or a plain AI SELL signal) instead of one blended
+# total -- lets us see which exit mechanism is actually earning money.
+# See performance_engine.calculate_strategy_breakdown()'s docstring for
+# why eToro (forex/commodities) exits don't appear here: those close
+# broker-side once a stop-loss/take-profit level is hit, so this bot
+# never logs a reason for them the way it does for stocks/crypto.
+strategy_breakdown = performance_engine.calculate_strategy_breakdown()
+if strategy_breakdown:
+    st.markdown("**Per-Strategy Performance Breakdown**")
+    st.caption(
+        "Realized P&L grouped by exit type, across stocks and crypto. "
+        "eToro (forex/commodities) exits aren't included -- they close "
+        "broker-side, not via a bot-initiated sell."
+    )
+    strategy_df = pd.DataFrame(strategy_breakdown).rename(columns={
+        "strategy": "Strategy",
+        "trades_closed": "Trades Closed",
+        "wins": "Wins",
+        "losses": "Losses",
+        "win_rate": "Win Rate %",
+        "total_pnl": "Total P&L ($)",
+        "average_pnl": "Avg P&L/Trade ($)",
+    })
+    strategy_df["Win Rate %"] = strategy_df["Win Rate %"].round(1)
+    strategy_df["Total P&L ($)"] = strategy_df["Total P&L ($)"].round(2)
+    strategy_df["Avg P&L/Trade ($)"] = strategy_df["Avg P&L/Trade ($)"].round(2)
+    st.dataframe(strategy_df, width="stretch", hide_index=True)
 
 with c2:
     st.metric(

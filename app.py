@@ -3055,6 +3055,47 @@ def apply_risk_management(market_df):
             del st.session_state.positions[ticker]
 
 
+# 2026-08-24: crypto's own peak-tracking trailing-profit-lock, mirroring
+# stocks' st.session_state.highest_profit above. Crypto already had
+# break-even-stop + partial-profit-taking (see the lifecycle comment
+# inside apply_crypto_risk_management() below), which stops a position
+# from going net-negative and banks a slice of profit at a fixed +2.5%
+# trigger -- but neither one continues to protect the REMAINDER of a
+# position once it keeps running past that trigger. A position that ran
+# to +20% and reversed could give back most of that before hitting the
+# fixed take-profit band or the 5/7-day time exit. This closes that gap
+# on the remaining size, without replacing the fixed take-profit ceiling
+# or the time exit -- both stay in place as hard backstops, so this can
+# only ever improve the outcome, never hold capital longer than those
+# caps already allow.
+#
+# Reuses the same TRAILING_PROFIT_START/TRAILING_PROFIT_DROP values
+# already defined for stocks (no crypto-specific data yet to justify
+# separate, wider thresholds for crypto's extra volatility -- revisit if
+# this turns out to trigger prematurely on ordinary crypto noise).
+#
+# Persisted to disk for the same reason as stocks' state file: this
+# service restarts on every deploy, and session_state alone would forget
+# an already-earned peak on restart.
+_CRYPTO_HIGHEST_PROFIT_STATE_FILE = "crypto_highest_profit_state.json"
+
+
+def _load_crypto_highest_profit_state():
+    try:
+        with open(_CRYPTO_HIGHEST_PROFIT_STATE_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_crypto_highest_profit_state(state):
+    try:
+        with open(_CRYPTO_HIGHEST_PROFIT_STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        print(f"[apply_crypto_risk_management] could not persist highest_profit state: {e}")
+
+
 def apply_crypto_risk_management():
     """
     Automatic stop-loss/take-profit for Binance testnet crypto positions,
@@ -3091,6 +3132,19 @@ def apply_crypto_risk_management():
 
     if not positions:
         return
+
+    if "crypto_highest_profit" not in st.session_state:
+        # Restore from disk instead of starting empty, so a position
+        # already being trailed before a restart keeps its earned peak.
+        st.session_state.crypto_highest_profit = _load_crypto_highest_profit_state()
+
+    # Drop any ticker no longer actually held -- otherwise a stale peak
+    # could sit in the file forever and wrongly seed the trailing
+    # calculation if that coin is ever bought again later.
+    held_tickers = {str(p["symbol"]).upper().strip() for p in positions}
+    for stale_ticker in list(st.session_state.crypto_highest_profit.keys()):
+        if stale_ticker not in held_tickers:
+            del st.session_state.crypto_highest_profit[stale_ticker]
 
     for position in positions:
         ticker = str(position["symbol"]).upper().strip()
@@ -3166,13 +3220,21 @@ def apply_crypto_risk_management():
 
         change_percent = ((current_price / entry_price) - 1) * 100
 
+        previous_high = st.session_state.crypto_highest_profit.get(ticker, change_percent)
+        st.session_state.crypto_highest_profit[ticker] = max(previous_high, change_percent)
+        highest_profit = st.session_state.crypto_highest_profit[ticker]
+        trailing_exit_level = highest_profit - TRAILING_PROFIT_DROP
+
         # --- Position lifecycle management (break-even stop, partial
         # profit-taking, time-based exit) -- see
         # engines/position_lifecycle_engine.py's module docstring for
         # why this exists. Crypto previously had no trailing-lock or any
         # profit-protection at all beyond the binary stop-loss/
         # take-profit below, so a position could ride all the way from
-        # near +5% back down to -3% and give back everything it earned. ---
+        # near +5% back down to -3% and give back everything it earned.
+        # 2026-08-24: the trailing-lock check below (see the elif chain
+        # further down) now closes that gap on whatever's left after
+        # break-even/partial-profit have already fired. ---
         lifecycle_key = f"CRYPTO:{ticker}"
         lifecycle_state = get_position_state(lifecycle_key)
 
@@ -3263,6 +3325,10 @@ def apply_crypto_risk_management():
             )
         elif change_percent >= (TAKE_PROFIT_PERCENT * 100):
             exit_reason = "TAKE PROFIT"
+        elif highest_profit >= TRAILING_PROFIT_START and change_percent <= trailing_exit_level:
+            exit_reason = (
+                f"TRAILING PROFIT LOCK (peak {round(highest_profit, 2)}%)"
+            )
         elif should_time_exit(lifecycle_state["opened_at"], change_percent):
             # Distinguish which tier fired -- see
             # position_lifecycle_engine.should_time_exit() for the two-tier
@@ -3333,6 +3399,12 @@ def apply_crypto_risk_management():
             f"(entry ${round(entry_price, 2)})."
         )
         clear_position_state(lifecycle_key)
+        if ticker in st.session_state.crypto_highest_profit:
+            del st.session_state.crypto_highest_profit[ticker]
+
+    # One write per call covers every update/deletion above, mirroring
+    # stocks' _save_highest_profit_state() call.
+    _save_crypto_highest_profit_state(st.session_state.crypto_highest_profit)
 
 
 _ETORO_HIGHEST_PRICE_STATE_FILE = "etoro_highest_price_state.json"

@@ -3215,6 +3215,129 @@ def apply_crypto_risk_management():
         clear_position_state(lifecycle_key)
 
 
+_ETORO_HIGHEST_PRICE_STATE_FILE = "etoro_highest_price_state.json"
+
+
+def _load_etoro_highest_price_state():
+    try:
+        with open(_ETORO_HIGHEST_PRICE_STATE_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_etoro_highest_price_state(state):
+    try:
+        with open(_ETORO_HIGHEST_PRICE_STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        print(f"[apply_etoro_trailing_lock] could not persist highest_price state: {e}")
+
+
+def apply_etoro_trailing_lock():
+    """
+    Bot-side replacement for eToro's own broker "trailing" stop, which
+    was confirmed live 2026-08-24 to NOT actually work: the OIL position
+    opened 2026-08-18 had isTslEnabled=True the entire time (both the
+    live eToro API and this process's own logs confirmed
+    set_trailing_stop() succeeded), yet its stopLossRate never moved
+    even once during a sustained two-day rally to +4.17% above entry
+    (2026-08-20 to 08-21) -- a working trailing stop should have
+    ratcheted the stop from 81.67 up to roughly 85.08 by that peak. It
+    stayed at 81.67, meaning the position was never actually protected
+    beyond its original static stop despite eToro reporting trailing as
+    "enabled." See etoro_broker.set_fixed_stop_loss()'s docstring for
+    the full investigation.
+
+    This function now does the ratcheting itself: for every open eToro
+    LONG position, track the highest underlying price seen so far
+    (persisted to disk, same reasoning as _HIGHEST_PROFIT_STATE_FILE --
+    survives a service restart instead of forgetting an earned peak),
+    and whenever that peak rises by at least ETORO_TRAILING_STEP_PCT
+    since the last pushed update, PATCH an updated FIXED stop-loss to
+    eToro at (peak * (1 - ETORO_STOP_LOSS_PCT)) -- the same
+    distance-from-peak eToro's own "trailing" docs describe, just
+    enforced by this bot instead of trusted to their black box. Never
+    moves the stop down, and never touches take-profit.
+
+    SHORT positions are deliberately skipped (not currently held by
+    this project, and the ratchet direction inverts for shorts --
+    would need its own dedicated logic, not a blind sign-flip).
+
+    Runs on every script pass (autorefresh + manual button clicks),
+    same rhythm as apply_risk_management()/apply_crypto_risk_management()
+    above. Each position gets its own try/except so a problem on one
+    ticker can't silently skip protection for every other open eToro
+    position in the same pass.
+    """
+    try:
+        positions = etoro_broker.get_positions()
+    except Exception as e:
+        st.session_state.trade_messages.append(f"eToro trailing-lock check failed to fetch positions: {e}")
+        return
+
+    highest_price_state = _load_etoro_highest_price_state()
+    held_position_ids = {str(p["position_id"]) for p in positions}
+
+    # Drop stale entries for positions no longer open -- otherwise a
+    # closed position's old peak could sit in the file forever and,
+    # worse, wrongly seed the ratchet if that same position_id number
+    # were ever reused.
+    for stale_id in list(highest_price_state.keys()):
+        if stale_id not in held_position_ids:
+            del highest_price_state[stale_id]
+
+    for position in positions:
+        if position["direction"] != "LONG":
+            continue  # see docstring -- shorts not supported here yet
+
+        position_id = position["position_id"]
+        ticker = position["symbol"]
+        if position_id is None or ticker is None:
+            continue
+
+        try:
+            current_price = etoro_broker.get_current_price(ticker)
+            open_price = float(position["open_price"])
+            current_stop = position.get("stop_loss_rate")
+            take_profit = position.get("take_profit_rate")
+
+            state_key = str(position_id)
+            previous_peak = highest_price_state.get(state_key, open_price)
+            peak_price = max(previous_peak, current_price)
+            highest_price_state[state_key] = peak_price
+
+            if peak_price <= open_price:
+                continue  # never below water yet -- nothing to ratchet
+
+            candidate_stop = round(peak_price * (1 - etoro_broker.ETORO_STOP_LOSS_PCT), 5)
+
+            # Only push an update if it's a real, meaningful improvement
+            # over what's already set -- both a minimum step size (avoid
+            # spamming PATCH on every cent of noise) and a hard guarantee
+            # this never moves the stop down.
+            if current_stop is not None:
+                min_step = current_stop * etoro_broker.ETORO_TRAILING_STEP_PCT
+                if candidate_stop < current_stop + min_step:
+                    continue
+
+            etoro_broker.set_fixed_stop_loss(position_id, candidate_stop, take_profit_rate=take_profit)
+            st.session_state.trade_messages.append(
+                f"{ticker}: trailing lock moved stop-loss to {candidate_stop} "
+                f"(peak price {round(peak_price, 5)})."
+            )
+            print(
+                f"[apply_etoro_trailing_lock] {ticker} (position {position_id}): "
+                f"stop-loss pushed to {candidate_stop} (peak={peak_price})"
+            )
+        except Exception as e:
+            st.session_state.trade_messages.append(
+                f"eToro trailing-lock update failed for {ticker or position_id}: {e}"
+            )
+
+    _save_etoro_highest_price_state(highest_price_state)
+
+
 # NOTE: get_exposure_percent used to be redefined here, shadowing the
 # import from engines.risk_engine (above). That local copy always queried
 # the real Alpaca account directly, regardless of LIVE_TRADING, so it fed
@@ -3431,6 +3554,7 @@ market_df["Priority"] = market_df.apply(calculate_priority, axis=1)
 # Apply risk-management values first
 apply_risk_management(market_df)
 apply_crypto_risk_management()
+apply_etoro_trailing_lock()
 
 # eToro forex/commodities exits (stop-loss, take-profit, trailing stop)
 # happen entirely on eToro's own servers -- unlike the two calls just
@@ -3513,6 +3637,7 @@ else:
 
 apply_risk_management(market_df)
 apply_crypto_risk_management()
+apply_etoro_trailing_lock()
 
 portfolio_value = calculate_portfolio_value(market_df)
 invested_value = get_open_positions_value(market_df)

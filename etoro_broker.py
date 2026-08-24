@@ -235,7 +235,34 @@ ETORO_TAKE_PROFIT_PCT = 0.05
 # and buy() below for how this gets applied. Toggle this off (without
 # touching buy()'s core order logic) if the trailing conversion below ever
 # needs to be disabled for debugging.
+#
+# 2026-08-24 UPDATE: confirmed live this did NOT actually work as
+# documented. The OIL position opened 2026-08-18 (entry 84.18, stop
+# 81.67) had isTslEnabled=True the whole time (both the raw eToro API
+# and this process's own logs confirm set_trailing_stop() succeeded),
+# yet price rallied to a real, sustained peak of 87.69 over 2026-08-20
+# and 08-21 (two full days, not a brief tick) -- a working trailing
+# stop with this position's 2.98% distance should have ratcheted the
+# stop up to roughly 85.08. It never moved from 81.67. Rather than keep
+# trusting eToro's own black-box "trailing" enforcement, this project
+# now takes over the ratcheting itself (see apply_etoro_trailing_lock()
+# in app.py) and pushes updated FIXED stop-loss levels via
+# set_fixed_stop_loss() below as price makes new highs -- the exact
+# same broker-side PATCH mechanism already proven reliable for the
+# initial fixed stop-loss set at trade-open, just re-issued on each
+# new peak instead of left static. ETORO_USE_TRAILING_STOP is left in
+# place (still attempted at trade-open, harmless either way) but is no
+# longer the thing actually protecting profit going forward.
 ETORO_USE_TRAILING_STOP = True
+
+# How much the underlying price must move beyond the last pushed
+# trailing-stop level before apply_etoro_trailing_lock() bothers issuing
+# another PATCH call. Without this, a position sitting near its peak
+# would get re-patched on every single autorefresh cycle for
+# fractions-of-a-cent noise -- this throttles it to only real,
+# meaningful moves while still catching genuine multi-day rallies like
+# the one that exposed this gap.
+ETORO_TRAILING_STEP_PCT = 0.005
 
 
 def _is_forex_or_commodity_ticker(project_ticker: str) -> bool:
@@ -407,6 +434,12 @@ def get_positions():
     -- leaving them None rather than guessing a field name that doesn't
     exist; compute current_price via get_current_price() separately if
     needed.
+
+    stop_loss_rate/take_profit_rate added 2026-08-24 for
+    apply_etoro_trailing_lock() in app.py -- it needs the position's
+    CURRENT stop-loss level (not just the entry price) to know whether
+    a new peak actually warrants pushing the stop up further, and by
+    how much.
     """
     try:
         portfolio = _fetch_client_portfolio()
@@ -425,6 +458,8 @@ def get_positions():
                 "open_price": p.get("openRate"),
                 "current_price": None,
                 "net_profit": None,
+                "stop_loss_rate": p.get("stopLossRate"),
+                "take_profit_rate": p.get("takeProfitRate"),
             })
 
         return positions
@@ -714,6 +749,50 @@ def set_trailing_stop(position_id: int, stop_loss_rate: float, take_profit_rate:
     silently failed instead.
     """
     payload = {"stopLossType": "trailing", "stopLossRate": stop_loss_rate}
+    if take_profit_rate is not None:
+        payload["takeProfitRate"] = take_profit_rate
+
+    response = requests.patch(
+        f"{EXECUTION_BASE_V2}/{POSITIONS_PREFIX}/positions/{position_id}",
+        headers=_headers(),
+        json=payload,
+        timeout=25,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def set_fixed_stop_loss(position_id: int, stop_loss_rate: float, take_profit_rate: float = None):
+    """
+    Push an updated FIXED stop-loss level to an already-open position,
+    via the same PATCH .../positions/{positionId} endpoint set_trailing_stop()
+    uses above -- just with stopLossType="fixed" instead of "trailing".
+
+    Added 2026-08-24 because eToro's own "trailing" enforcement was
+    confirmed NOT to actually work: the OIL position opened 2026-08-18
+    had isTslEnabled=True the entire time (confirmed via both the live
+    API and this process's own logs), yet its stopLossRate never moved
+    even once during a sustained two-day rally to +4.17% (2026-08-20 to
+    08-21) -- a working trailing stop should have ratcheted it up
+    substantially. Rather than keep trusting eToro's black-box
+    "trailing" flag, apply_etoro_trailing_lock() in app.py now computes
+    the new stop level itself (peak price * (1 - ETORO_STOP_LOSS_PCT),
+    the same distance-from-peak logic eToro's own docs describe) and
+    pushes it here explicitly on every meaningful new high. This reuses
+    the exact same PATCH mechanism already proven reliable for opening
+    a position's initial fixed stop-loss -- only the *type* differs
+    from set_trailing_stop() above, not the delivery method.
+
+    take_profit_rate is passed through unchanged, same reasoning as
+    set_trailing_stop(): the take-profit stays in place as a hard
+    ceiling regardless of how far the stop-loss has been ratcheted.
+
+    Callers must wrap this in try/except (see apply_etoro_trailing_lock()) --
+    a failed PATCH here must never be allowed to look like a successful
+    stop-loss update, and must never touch the BUY/SELL logic that
+    already succeeded independently of this call.
+    """
+    payload = {"stopLossType": "fixed", "stopLossRate": stop_loss_rate}
     if take_profit_rate is not None:
         payload["takeProfitRate"] = take_profit_rate
 

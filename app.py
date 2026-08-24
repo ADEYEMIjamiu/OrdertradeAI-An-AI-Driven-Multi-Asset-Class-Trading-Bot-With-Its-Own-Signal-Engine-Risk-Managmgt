@@ -195,6 +195,16 @@ from config import (
     MAX_COMMODITIES_POSITIONS,
 )
 
+# Second, independent gate on eToro auto-trading -- see the
+# "2026-08-24 (Moderate Finding #5...)" comment near where this is
+# checked (search _ETORO_AUTO_TRADING_HARD_BLOCK) for the full
+# reasoning. Deliberately defined here in app.py, not config.py --
+# turning eToro auto-trading on now requires editing this file
+# directly (a deliberate, visible code change), not just flipping a
+# config flag, matching the strength the surrounding comments already
+# claimed but the code didn't actually enforce.
+_ETORO_AUTO_TRADING_HARD_BLOCK = True
+
 st.set_page_config(page_title="OrderTrade AI", layout="wide")
 
 # Visual polish only -- no behavioral changes. Card-style metrics and
@@ -1864,9 +1874,10 @@ def execute_etoro_trades(buy_signals, sell_signals):
     reuses that local snapshot for every check below.
 
     Only ever called from a manual "Execute Trades" click -- see
-    AUTO_ETORO_TRADING_LOCKED in the Auto-Trading section further down,
-    which deliberately never calls this, per explicit user request
-    (2026-08-03) that eToro trades require a human click, unlike
+    AUTO_ETORO_TRADING_LOCKED and _ETORO_AUTO_TRADING_HARD_BLOCK in the
+    Auto-Trading section further down (two independent gates as of
+    2026-08-24), which deliberately never call this, per explicit user
+    request (2026-08-03) that eToro trades require a human click, unlike
     stocks/crypto's optional auto-trading loop.
     """
     if emergency_stop.is_stopped():
@@ -3744,9 +3755,24 @@ else:
         allowed_asset_classes=["US_STOCKS", "CRYPTO"] + PAPER_ONLY_ASSET_CLASSES
     )
 
-apply_risk_management(market_df)
-apply_crypto_risk_management()
-apply_etoro_trailing_lock()
+# REMOVED 2026-08-24 (Moderate Finding #4 from the full codebase audit):
+# apply_risk_management()/apply_crypto_risk_management()/
+# apply_etoro_trailing_lock() used to be called a SECOND time right here,
+# identically to the call at the top of this section. Everything between
+# the two call sites (the eToro closed-position check, portfolio value/
+# exposure/regime calcs, position sizing, trade queue, and the portfolio-
+# limits/executable-trades filters) is read-only -- none of it submits a
+# broker order -- so the second call re-fetched the exact same live
+# broker positions and re-evaluated the exact same exit conditions with
+# no new information to act on. Its only actual effect was risk: if a
+# SELL submitted by the FIRST call hadn't fully propagated on the
+# broker's own side by the time this second call re-queried moments
+# later in the same script pass, it could attempt to exit the same
+# position again. Removed entirely rather than guarded, since nothing
+# below this point needs risk-management's exit *decisions* re-run --
+# only fresh portfolio_value/asset_allocation numbers, which the calls
+# below already recompute from whatever state the first call above left
+# broker positions in.
 
 portfolio_value = calculate_portfolio_value(market_df)
 invested_value = get_open_positions_value(market_df)
@@ -4447,11 +4473,23 @@ else:
         # separate flag -- auto-trading must never submit an eToro order
         # on its own, per explicit user request (2026-08-03). Use the
         # Execute Trades button for these instead.
+        #
+        # 2026-08-24 (Moderate Finding #5, full codebase audit): this
+        # paragraph's "must never" was only actually backed by
+        # AUTO_ETORO_TRADING_LOCKED alone -- a single config.py flag, no
+        # different in strength from any other soft setting, despite the
+        # comment implying a hard guarantee. Now gated on BOTH that flag
+        # AND _ETORO_AUTO_TRADING_HARD_BLOCK below, a second, independent
+        # gate that lives in this file rather than config.py -- so a
+        # changed/misconfigured/reset config.py alone can no longer
+        # enable eToro auto-trading. Both would have to change before
+        # this could ever fire, which is what "must never" should
+        # actually mean.
         auto_paper_only_buy = collect_paper_only_signals(auto_buy)
         auto_paper_only_sell = collect_paper_only_signals(auto_sell)
 
         if not auto_paper_only_buy.empty or not auto_paper_only_sell.empty:
-            if ETORO_LIVE_TRADING and AUTO_ETORO_TRADING_LOCKED:
+            if ETORO_LIVE_TRADING and (AUTO_ETORO_TRADING_LOCKED or _ETORO_AUTO_TRADING_HARD_BLOCK):
                 st.session_state.trade_messages.append(
                     f"Auto-Trading: {'/'.join(PAPER_ONLY_ASSET_CLASSES)} "
                     "signals skipped -- eToro execution is locked to manual "

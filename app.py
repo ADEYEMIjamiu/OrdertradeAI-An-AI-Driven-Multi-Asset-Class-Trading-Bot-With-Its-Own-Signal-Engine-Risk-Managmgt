@@ -117,6 +117,7 @@ from engines.broker_sync_engine import (
     reconcile_etoro_orders,
     reconcile_binance_orders,
 )
+import engines.rotation_history as rotation_history
 from broker import (
     get_account,
     buy_stock,
@@ -4178,6 +4179,15 @@ st.caption(
 
 rotation_candidates = find_rotation_candidates(market_df, buy_signals)
 
+# 2026-08-24: candidates used to be purely live -- recomputed fresh every
+# render with nothing written anywhere, so a suggestion that scrolled by
+# unconfirmed left zero trace of ever having existed. Recording each one
+# here (deduped against the last logged pair per asset class, so an
+# unconfirmed suggestion sitting on screen across autorefresh cycles logs
+# once, not every 5 minutes) feeds the history table rendered below.
+for candidate in rotation_candidates:
+    rotation_history.record_candidate_seen(candidate)
+
 if not rotation_candidates:
     st.info("No rotation suggestions right now.")
 else:
@@ -4214,6 +4224,13 @@ else:
                 # elsewhere.
                 st.session_state.trade_execution_in_progress = True
 
+                # Record the confirmation regardless of how execute_rotation()
+                # below turns out -- an approved-and-attempted swap is the
+                # useful signal for the history table, separate from whether
+                # it fully completed (that detail lives in trade_messages/
+                # last_execution_result like every other execution path).
+                rotation_history.mark_candidate_confirmed(candidate)
+
                 st.session_state.trade_messages = []
                 execute_rotation(candidate, market_df)
 
@@ -4229,6 +4246,38 @@ else:
                 }
                 st.session_state.trade_execution_in_progress = False
                 st.rerun()
+
+with st.expander("Rotation Candidate History"):
+    st.caption(
+        "Every distinct rotation suggestion that's appeared, oldest "
+        "action first not shown here -- newest at the top. 'Confirmed' "
+        "means you clicked Confirm Rotation for it; a suggestion that "
+        "was never confirmed just means the picture changed (the weak "
+        "position, or the best open candidate, was different) before "
+        "you acted on it -- not necessarily a missed opportunity."
+    )
+    history_rows = rotation_history.get_recent_history(limit=30)
+    if not history_rows:
+        st.caption("No rotation candidates recorded yet.")
+    else:
+        history_df = pd.DataFrame(history_rows).rename(columns={
+            "recorded_at": "First Seen",
+            "asset_class": "Asset Class",
+            "weak_ticker": "Weak Ticker",
+            "weak_score": "Weak Score",
+            "hours_held": "Hours Held",
+            "candidate_ticker": "Candidate",
+            "candidate_score": "Candidate Score",
+            "gap": "Gap",
+            "confirmed": "Confirmed",
+            "confirmed_at": "Confirmed At",
+        })
+        history_df["Confirmed"] = history_df["Confirmed"].map({1: "Yes", 0: "No"})
+        history_df["Weak Score"] = history_df["Weak Score"].round(1)
+        history_df["Candidate Score"] = history_df["Candidate Score"].round(1)
+        history_df["Gap"] = history_df["Gap"].round(1)
+        history_df["Hours Held"] = history_df["Hours Held"].round(1)
+        st.dataframe(history_df, use_container_width=True, hide_index=True)
 
 st.divider()
 

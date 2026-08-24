@@ -115,6 +115,7 @@ from engines.broker_sync_engine import (
     get_ai_trading_readiness,
     reconcile_alpaca_orders,
     reconcile_etoro_orders,
+    reconcile_binance_orders,
 )
 from broker import (
     get_account,
@@ -265,6 +266,34 @@ if ETORO_LIVE_TRADING:
     except Exception:
         pass
 
+# Added 2026-08-24 (Critical Finding #3 from the full codebase audit):
+# Binance had no equivalent of the two reconciliations above -- a BUY
+# that failed client-side but actually filled on Binance's own side
+# would sit invisible to risk management forever, with nothing
+# surfacing it. Not gated behind a LIVE_TRADING-style flag since crypto
+# always runs through Binance testnet regardless. This only DETECTS the
+# mismatch (see reconcile_binance_orders()'s docstring for why it
+# deliberately doesn't auto-create a synthetic order) -- surface it
+# loudly here so a human can decide how to backfill it, same as the
+# 2026-08-23 orphaned-positions cleanup.
+try:
+    _binance_reconcile_result = reconcile_binance_orders()
+    for _suspicious in _binance_reconcile_result.get("suspicious", []):
+        _alert_key = f"binance_reconcile_{_suspicious['ticker']}"
+        if _alert_key not in st.session_state.setdefault("uncovered_crypto_alerted", set()):
+            st.session_state.uncovered_crypto_alerted.add(_alert_key)
+            _msg = (
+                f"POSSIBLE UNRECORDED FILL for {_suspicious['ticker']}: wallet holds "
+                f"{_suspicious['wallet_qty']} units, but the journal has no FILLED BUY "
+                f"and there's a FAILED buy order around {_suspicious['failed_order_time']}. "
+                f"This coin likely filled on Binance despite the client-side error and has "
+                f"zero risk-management coverage -- investigate and consider a manual backfill."
+            )
+            st.session_state.trade_messages.append(_msg)
+            print(f"[reconcile_binance_orders] {_msg}")
+except Exception:
+    pass
+
 # Auto-refresh -- required for genuinely unattended 24/7 operation
 # (otherwise trades only ever happen when a human clicks something).
 #
@@ -292,6 +321,46 @@ if not st.session_state.get("trade_execution_in_progress", False):
         interval=300000,
         key="market_refresh",
     )
+
+# 2026-08-24: EXECUTION_KILL_SWITCH (config.py) is documented as "Master
+# emergency switch... True = block all new AI trade entries immediately,"
+# but was previously only ever checked inside get_ai_trading_readiness()
+# (engines/broker_sync_engine.py), which is itself only called from the
+# manual Alpaca-stocks Execute Trades path. It had ZERO effect on Alpaca
+# auto-trading, crypto (manual or auto), or eToro (manual or auto) -- an
+# operator setting it to True believing it would halt all AI trading, per
+# its own docstring, would have every crypto and eToro trade keep firing
+# unaffected. Found during a full codebase audit, 2026-08-24.
+#
+# Fix: make it drive the SAME emergency_stop.flag file the dashboard's
+# "EMERGENCY STOP" button already uses -- that mechanism is proven correct,
+# already gates all four execution paths (execute_paper_trades,
+# execute_alpaca_trades, execute_binance_trades, execute_etoro_trades), and
+# deliberately does NOT touch apply_risk_management()/
+# apply_crypto_risk_management()/apply_etoro_trailing_lock() -- so
+# protective exits (stop-loss/take-profit/trailing) correctly keep running
+# even while this is active, exactly matching EXECUTION_KILL_SWITCH's own
+# documented "block new entries" (not exits) intent.
+#
+# The reason string lets this tell apart a stop IT activated from one a
+# person activated manually via the dashboard button, so toggling the
+# config flag back to False can't silently undo a manual stop, and clicking
+# "Resume" on the dashboard can't silently leave the kill switch
+# unenforced while it's still set True in config.
+_KILL_SWITCH_REASON = "EXECUTION_KILL_SWITCH=True in config.py"
+
+
+def sync_kill_switch_with_emergency_stop():
+    currently_stopped = emergency_stop.is_stopped()
+    current_reason = emergency_stop.get_reason() if currently_stopped else ""
+
+    if EXECUTION_KILL_SWITCH and not currently_stopped:
+        emergency_stop.activate(_KILL_SWITCH_REASON)
+    elif not EXECUTION_KILL_SWITCH and currently_stopped and current_reason == _KILL_SWITCH_REASON:
+        emergency_stop.deactivate()
+
+
+sync_kill_switch_with_emergency_stop()
 
 MODEL_PATH = "models/trading_model.pkl"
 FEATURES_PATH = "models/features.pkl"
@@ -3033,10 +3102,50 @@ def apply_crypto_risk_management():
             continue
 
         if entry_order is None:
+            # FIX 2026-08-24: this used to be a bare `continue` -- a
+            # position landing here has ZERO stop-loss/take-profit/
+            # lifecycle protection, silently, forever, with nothing on
+            # the dashboard or in the logs to say so. This is exactly
+            # how 12 positions went unprotected until
+            # adopt_entry_for_orphaned_positions.py caught it manually
+            # on 2026-08-23 -- that fixed the positions that existed
+            # THEN, but did nothing to alert on a new one forming today.
+            # Found during a full codebase audit, 2026-08-24. Throttled
+            # to once per ticker per process lifetime (not every 5-min
+            # cycle) via a session_state set, so this can't flood
+            # trade_messages/Telegram on every autorefresh while still
+            # guaranteeing it's surfaced at least once.
+            msg = (
+                f"NO RISK MANAGEMENT for {ticker}: no FILLED BUY order "
+                f"found in the journal, so stop-loss/take-profit/"
+                f"lifecycle protection cannot be applied. Investigate "
+                f"and consider adopt_entry_for_orphaned_positions.py-"
+                f"style backfill if this is a real held position."
+            )
+            # print() fires every cycle (5 min) so journalctl always shows
+            # this is still an open, unresolved problem -- session_state
+            # is wiped on a service restart, so relying on it alone could
+            # go quiet again exactly when a restart happens. The
+            # dashboard message is throttled to once per ticker per
+            # process lifetime so it doesn't flood trade_messages/
+            # Telegram every single autorefresh.
+            print(f"[apply_crypto_risk_management] {msg}")
+            if ticker not in st.session_state.setdefault("uncovered_crypto_alerted", set()):
+                st.session_state.uncovered_crypto_alerted.add(ticker)
+                st.session_state.trade_messages.append(msg)
             continue
 
         entry_price = float(entry_order["filled_price"])
         if entry_price <= 0:
+            msg = (
+                f"NO RISK MANAGEMENT for {ticker}: found a BUY order "
+                f"but its filled_price is {entry_price} (invalid). "
+                f"Investigate the order journal for this ticker."
+            )
+            print(f"[apply_crypto_risk_management] {msg}")
+            if ticker not in st.session_state.setdefault("uncovered_crypto_alerted", set()):
+                st.session_state.uncovered_crypto_alerted.add(ticker)
+                st.session_state.trade_messages.append(msg)
             continue
 
         try:

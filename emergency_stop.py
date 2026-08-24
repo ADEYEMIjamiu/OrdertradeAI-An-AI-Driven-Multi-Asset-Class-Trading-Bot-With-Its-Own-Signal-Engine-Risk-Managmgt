@@ -40,3 +40,26 @@ def stopped_since() -> str:
             return f.readline().strip()
     except OSError:
         return ""
+
+
+def get_reason() -> str:
+    """
+    Returns the reason string passed to activate() (the second line of
+    the flag file), or "" if not stopped or no reason was given.
+
+    Added 2026-08-24 so app.py's kill-switch sync logic (see
+    sync_kill_switch_with_emergency_stop() there) can tell apart an
+    emergency stop that IT activated (config.py's EXECUTION_KILL_SWITCH)
+    from one a person activated manually via the dashboard button --
+    without this, turning EXECUTION_KILL_SWITCH back to False could
+    silently undo a manual stop, or a manual deactivate click could
+    silently leave the kill switch's own intent unenforced.
+    """
+    if not is_stopped():
+        return ""
+    try:
+        with open(_FLAG_PATH) as f:
+            f.readline()  # skip the "Stopped at ..." line
+            return f.readline().strip()
+    except OSError:
+        return ""

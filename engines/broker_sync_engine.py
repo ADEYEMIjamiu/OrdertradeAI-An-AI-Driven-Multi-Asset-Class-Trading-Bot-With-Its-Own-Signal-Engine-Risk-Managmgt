@@ -881,6 +881,101 @@ def reconcile_etoro_orders() -> dict[str, Any]:
     return result
 
 
+def reconcile_binance_orders() -> dict[str, Any]:
+    """
+    Detect (but deliberately never auto-resolve) a Binance BUY that
+    failed client-side yet may have actually filled on Binance's own
+    side -- the same category of gap reconcile_alpaca_orders() and
+    reconcile_etoro_orders() above already close for their brokers.
+
+    Found missing during a full codebase audit, 2026-08-24 (Critical
+    Finding #3). Binance testnet market orders are synchronous (unlike
+    Alpaca's market-hours queue or eToro's async position confirmation),
+    so a client-received-error-but-broker-actually-filled mismatch is
+    rarer here -- but a network/HTTP failure between "Binance processed
+    the order" and "this process received and parsed the response" is
+    never impossible. When it happens, the coin sits in the wallet
+    completely invisible to apply_crypto_risk_management() (which only
+    trusts the order journal for entry price) -- exactly Critical
+    Finding #2 from the same audit, just a different root cause than
+    the one already fixed there.
+
+    Detection heuristic: for every ticker with a recent FAILED Binance
+    BUY order, check whether the live wallet actually holds a nonzero
+    balance of it AND the order journal has ZERO record of ever
+    successfully buying it (get_most_recent_filled_buy returns None).
+    That combination is a strong signal the "failed" order actually
+    filled.
+
+    Deliberately does NOT create a synthetic FILLED order the way
+    adopt_entry_for_orphaned_positions.py did on 2026-08-23 for the
+    pre-existing orphaned positions -- that was a one-off, human-
+    reviewed decision (the user explicitly chose "adopt today's price
+    as entry" via a direct question, see that script's docstring), not
+    something this function should silently repeat unattended every 5
+    minutes with a guessed price. This only detects and surfaces the
+    mismatch in its return value; app.py turns that into a dashboard
+    alert, and a human decides whether/how to backfill it, same as
+    before.
+    """
+    from engines.order_manager import load_orders, get_most_recent_filled_buy
+    import binance_broker
+
+    result = {"checked": 0, "suspicious": [], "error": None}
+
+    try:
+        local_orders = load_orders(limit=200)
+    except Exception as exc:
+        result["error"] = f"Could not read local order journal: {exc}"
+        return result
+
+    recent_failed_buys = [
+        order
+        for order in local_orders
+        if order.get("broker") == "binance"
+        and order.get("side") == "BUY"
+        and order.get("status") == "FAILED"
+    ]
+    result["checked"] = len(recent_failed_buys)
+
+    if not recent_failed_buys:
+        return result
+
+    try:
+        wallet_positions = {
+            str(p["symbol"]).upper().strip(): float(p.get("qty") or 0)
+            for p in binance_broker.get_positions()
+        }
+    except Exception as exc:
+        result["error"] = f"Could not reach Binance testnet to reconcile: {exc}"
+        return result
+
+    already_checked_tickers = set()
+    for order in recent_failed_buys:
+        ticker = str(order.get("ticker", "")).upper().strip()
+        if not ticker or ticker in already_checked_tickers:
+            continue
+        already_checked_tickers.add(ticker)
+
+        wallet_qty = wallet_positions.get(ticker, 0.0)
+        if wallet_qty <= 0:
+            continue  # nothing in the wallet -- the failure was real
+
+        try:
+            has_filled_buy = get_most_recent_filled_buy(ticker, "binance") is not None
+        except Exception:
+            has_filled_buy = True  # fail safe -- don't flag on our own lookup error
+
+        if not has_filled_buy:
+            result["suspicious"].append({
+                "ticker": ticker,
+                "wallet_qty": wallet_qty,
+                "failed_order_time": order.get("updated_at") or order.get("created_at"),
+            })
+
+    return result
+
+
 def execute_order_with_alpaca(order: dict) -> dict:
 
     from broker import place_order

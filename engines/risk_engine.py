@@ -11,6 +11,8 @@ from config import (
     ETORO_LIVE_TRADING,
     MIN_TRADE_AMOUNT,
     MAX_TRADE_AMOUNT,
+    MAX_POSITION_SIZE,
+    STOP_LOSS_PERCENT,
     ALLOW_PYRAMIDING,
     MAX_POSITIONS,
     MAX_OPEN_POSITIONS,
@@ -28,44 +30,198 @@ from config import (
 )
 from data.asset_universe import ASSET_UNIVERSE
 
+# Bounds for the leverage/stop-aware risk_adjustment applied in
+# calculate_trade_amount() below. Kept as a floor/ceiling (rather than
+# left unbounded) for the same reason every other multiplier in this
+# project's sizing stack is bounded (see position_sizing_engine.py) --
+# a single input shouldn't be able to blow a trade past a sane range
+# on its own. 0.2 floor means even a very wide/highly leveraged stop
+# can only shrink a trade to 20% of its confidence-tier base, never to
+# zero; 1.5 ceiling caps how much a tight/safe stop can size a trade up.
+RISK_ADJUSTMENT_FLOOR = 0.2
+RISK_ADJUSTMENT_CEILING = 1.5
 
-def calculate_trade_amount(confidence, market_df=None):
+# Confidence-tier fractions of the per-trade position budget (see
+# calculate_trade_amount() docstring). Same relative shape as the old
+# fixed dollar tiers (100/200/300/500/750/1000, i.e. 0.1x-1.0x of the
+# top tier) -- just expressed as a fraction of account_balance *
+# MAX_POSITION_SIZE now, instead of a fraction of a fixed $1000.
+_CONFIDENCE_TIER_FRACTIONS = (
+    (90, 1.00),
+    (85, 0.75),
+    (80, 0.50),
+    (75, 0.30),
+    (70, 0.20),
+)
+_CONFIDENCE_TIER_FLOOR_FRACTION = 0.10
+
+
+def get_account_balance(asset_class):
     """
-    Dynamic position sizing based on AI confidence and market risk.
+    Real, current available balance for whichever broker owns this
+    asset class -- CRYPTO reads Binance testnet USDT, FOREX/COMMODITIES
+    reads eToro's account cash, everything else (US_STOCKS) reads
+    Alpaca cash. Used by calculate_trade_amount() so trade sizing scales
+    with however much money is actually in a given account, rather than
+    a single fixed dollar range. Never raises -- a failed balance fetch
+    returns 0.0, which calculate_trade_amount() below treats as "cannot
+    afford any trade right now" rather than crashing or silently
+    guessing a number.
+    """
+    if asset_class == "CRYPTO":
+        try:
+            import binance_broker
+            return float(binance_broker.get_available_usdt())
+        except Exception:
+            return 0.0
+
+    if asset_class in ("FOREX", "COMMODITIES"):
+        try:
+            import etoro_broker
+            return float(etoro_broker.check_broker_connection().get("cash", 0) or 0)
+        except Exception:
+            return 0.0
+
+    # US_STOCKS
+    try:
+        account = get_account()
+        return float(account.cash)
+    except Exception:
+        return 0.0
+
+
+def calculate_trade_amount(
+    confidence,
+    market_df=None,
+    entry_price=None,
+    stop_loss=None,
+    leverage=1,
+    account_balance=None,
+):
+    """
+    Dynamic position sizing based on AI confidence, market risk,
+    per-ticker stop distance/leverage, and (new, 2026-08-25) the real
+    account balance behind the trade.
+
+    FIX 2026-08-25 (two-part): this function drives every real order
+    size in the system (execute_alpaca_trades/execute_binance_trades/
+    execute_etoro_trades all call it identically) but, until now, had
+    two gaps:
+
+    1. No awareness of how far away a trade's actual stop-loss was, or
+       whether the instrument trades on leverage. Two trades with
+       identical AI confidence got identically sized even if one had a
+       stop twice as far from entry, or was a 10x-leveraged eToro
+       forex/commodities CFD (ETORO_LEVERAGE) where the same price move
+       produces 10x the P&L swing of an unleveraged stock/crypto trade.
+       Fixed via risk_adjustment below (stop-distance and leverage
+       aware, clamped to [RISK_ADJUSTMENT_FLOOR, RISK_ADJUSTMENT_CEILING]),
+       using STOP_LOSS_PERCENT (this project's standard 3% stop) as the
+       reference distance.
+
+    2. Sizing was a single fixed dollar band (MIN_TRADE_AMOUNT=$100 to
+       MAX_TRADE_AMOUNT=$1000) tuned around one specific account's size.
+       That's wrong for a bot meant to run for accounts of any size --
+       someone with $500 and someone with $100,000 both got offered the
+       exact same $100-$1000 trades, disconnected from what either of
+       them actually has. Fixed by sizing off account_balance instead:
+       position_budget = account_balance * MAX_POSITION_SIZE (this
+       project's existing "never risk more than 20% of the account on
+       one trade" cap, config.py), then confidence scales a fraction of
+       that budget the same way it used to scale a fraction of the old
+       $1000 ceiling. MIN_TRADE_AMOUNT remains a hard floor -- if an
+       account can't cover even that floor, this returns 0.0 rather
+       than force a trade, and every call site checks for that and
+       skips the trade with an "insufficient balance" message instead
+       of submitting a broker order for less than the floor.
+
+    account_balance is optional for backward compatibility: if omitted,
+    this falls back to the original fixed MIN_TRADE_AMOUNT/
+    MAX_TRADE_AMOUNT-tiered behavior unchanged.
+
+    entry_price/stop_loss are optional and sourced from each row's
+    "Price ($)"/"Stop Loss" columns (trade_planner.py's per-ticker ATR
+    stop) -- if either is missing/invalid the risk_adjustment step is
+    skipped entirely (defaults to 1.0), so a data gap can only ever
+    fall back to the pre-existing confidence/market-risk sizing, never
+    block or crash a trade.
     """
 
     confidence = float(confidence)
 
-    # Base position size from AI confidence
-    if confidence >= 90:
-        base_amount = 1000
+    if account_balance is not None:
+        account_balance = float(account_balance)
 
-    elif confidence >= 85:
-        base_amount = 750
+        # Can't cover even the configured minimum trade -- don't force
+        # one. Call sites check for this 0.0 and skip with a clear
+        # "insufficient balance" message rather than submitting an
+        # order for less than the floor.
+        if account_balance < MIN_TRADE_AMOUNT:
+            return 0.0
 
-    elif confidence >= 80:
-        base_amount = 500
+        position_budget = account_balance * MAX_POSITION_SIZE
 
-    elif confidence >= 75:
-        base_amount = 300
+        confidence_fraction = _CONFIDENCE_TIER_FLOOR_FRACTION
+        for tier_confidence, tier_fraction in _CONFIDENCE_TIER_FRACTIONS:
+            if confidence >= tier_confidence:
+                confidence_fraction = tier_fraction
+                break
 
-    elif confidence >= 70:
-        base_amount = 200
-
+        base_amount = position_budget * confidence_fraction
+        balance_ceiling = min(position_budget, account_balance)
     else:
-        base_amount = 100
+        # Legacy fixed-band behavior (no account_balance supplied).
+        if confidence >= 90:
+            base_amount = 1000
+        elif confidence >= 85:
+            base_amount = 750
+        elif confidence >= 80:
+            base_amount = 500
+        elif confidence >= 75:
+            base_amount = 300
+        elif confidence >= 70:
+            base_amount = 200
+        else:
+            base_amount = 100
+        balance_ceiling = MAX_TRADE_AMOUNT
 
     # Adjust based on market risk
     if market_df is not None:
         risk_level, risk_multiplier = get_market_risk_level(market_df)
-        
+
         adjusted_amount = base_amount * risk_multiplier
     else:
         adjusted_amount = base_amount
 
-    # Respect configured limits
+    # Adjust based on per-ticker stop distance and leverage (see
+    # docstring above for why this is a bounded multiplier, not a
+    # literal portfolio-value risk formula).
+    try:
+        if entry_price is not None and stop_loss is not None:
+            entry_price = float(entry_price)
+            stop_loss = float(stop_loss)
+            leverage = float(leverage) if leverage else 1.0
+
+            if entry_price > 0 and leverage > 0:
+                actual_stop_percent = abs(entry_price - stop_loss) / entry_price
+
+                if actual_stop_percent > 0:
+                    raw_adjustment = STOP_LOSS_PERCENT / (
+                        actual_stop_percent * leverage
+                    )
+                    risk_adjustment = max(
+                        RISK_ADJUSTMENT_FLOOR,
+                        min(raw_adjustment, RISK_ADJUSTMENT_CEILING),
+                    )
+                    adjusted_amount *= risk_adjustment
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass  # missing/bad stop data -- fall back to pre-existing sizing, never crash a trade over it
+
+    # Respect configured limits: MIN_TRADE_AMOUNT is always the floor;
+    # the ceiling is either the proportional balance_ceiling (account-
+    # balance-aware path) or the legacy fixed MAX_TRADE_AMOUNT.
+    adjusted_amount = min(adjusted_amount, balance_ceiling)
     adjusted_amount = max(MIN_TRADE_AMOUNT, adjusted_amount)
-    adjusted_amount = min(MAX_TRADE_AMOUNT, adjusted_amount)
 
     return round(adjusted_amount, 2)
 

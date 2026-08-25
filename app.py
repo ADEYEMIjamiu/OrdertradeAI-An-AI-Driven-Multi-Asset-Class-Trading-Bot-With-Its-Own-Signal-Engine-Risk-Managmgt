@@ -96,6 +96,7 @@ from engines.risk_engine import (
     get_open_positions_value,
     get_exposure_percent,
     calculate_trade_amount,
+    get_account_balance,
     can_open_position,
     risk_check_before_trade,
     get_dynamic_buy_confidence,
@@ -1245,6 +1246,12 @@ def execute_alpaca_trades(buy_signals, sell_signals):
         )
         return
 
+    # Fetched once per pass (not per ticker) -- feeds calculate_trade_amount()
+    # so trade sizing scales with this account's real balance instead of a
+    # fixed dollar band. See risk_engine.get_account_balance()/
+    # calculate_trade_amount() docstrings (2026-08-25).
+    account_balance = get_account_balance("US_STOCKS")
+
     # =========================================================
     # BUY EXECUTION
     # =========================================================
@@ -1286,10 +1293,28 @@ def execute_alpaca_trades(buy_signals, sell_signals):
             continue
 
         try:
+            # Stocks trade unleveraged -- leverage=1. entry_price/stop_loss
+            # come from trade_planner's per-ticker ATR stop (row["Stop Loss"],
+            # already populated by the time this runs, see market_df
+            # concat with trade_plans_df earlier in the script) so wider
+            # or tighter stops size the trade accordingly.
             trade_amount = calculate_trade_amount(
                 row["AI Confidence %"],
-                market_df
+                market_df,
+                entry_price=row.get("Price ($)"),
+                stop_loss=row.get("Stop Loss"),
+                leverage=1,
+                account_balance=account_balance,
             )
+
+            # trade_amount == 0 means the account can't cover even
+            # MIN_TRADE_AMOUNT -- skip rather than submit a sub-floor order.
+            if trade_amount <= 0:
+                st.session_state.trade_messages.append(
+                    f"BUY skipped for {ticker}: insufficient account "
+                    f"balance to open a minimum-size position."
+                )
+                continue
 
             allowed, reason = risk_check_before_trade(
                 ticker,
@@ -1579,6 +1604,10 @@ def execute_binance_trades(buy_signals, sell_signals):
         )
         return
 
+    # Fetched once per pass -- see execute_alpaca_trades()'s matching
+    # comment for why (2026-08-25).
+    account_balance = get_account_balance("CRYPTO")
+
     # NOTE: toggled-off only skips the BUY loop below -- SELL EXECUTION
     # further down in this same function must always still run, so this
     # must never be a `return`.
@@ -1602,10 +1631,23 @@ def execute_binance_trades(buy_signals, sell_signals):
             continue
 
         try:
+            # Crypto trades unleveraged on Binance -- leverage=1. Same
+            # stop-aware sizing as stocks above.
             trade_amount = calculate_trade_amount(
                 row["AI Confidence %"],
-                market_df
+                market_df,
+                entry_price=row.get("Price ($)"),
+                stop_loss=row.get("Stop Loss"),
+                leverage=1,
+                account_balance=account_balance,
             )
+
+            if trade_amount <= 0:
+                st.session_state.trade_messages.append(
+                    f"BUY skipped for {ticker}: insufficient account "
+                    f"balance to open a minimum-size position."
+                )
+                continue
 
             allowed, reason = risk_check_before_trade(
                 ticker, trade_amount, market_df
@@ -1981,6 +2023,11 @@ def execute_etoro_trades(buy_signals, sell_signals):
         )
         return
 
+    # Fetched once per pass -- see execute_alpaca_trades()'s matching
+    # comment for why (2026-08-25). Covers both FOREX and COMMODITIES
+    # (both trade against the same eToro account cash).
+    account_balance = get_account_balance("FOREX")
+
     # =========================================================
     # BUY EXECUTION
     # =========================================================
@@ -2021,10 +2068,25 @@ def execute_etoro_trades(buy_signals, sell_signals):
             continue
 
         try:
+            # eToro forex/commodities trade on ETORO_LEVERAGE (10x, see
+            # etoro_broker.buy()) -- the same price-distance stop carries
+            # 10x the dollar risk it would unleveraged, so leverage is
+            # passed through here to shrink sizing accordingly.
             trade_amount = calculate_trade_amount(
                 row["AI Confidence %"],
-                market_df
+                market_df,
+                entry_price=row.get("Price ($)"),
+                stop_loss=row.get("Stop Loss"),
+                leverage=etoro_broker.ETORO_LEVERAGE,
+                account_balance=account_balance,
             )
+
+            if trade_amount <= 0:
+                st.session_state.trade_messages.append(
+                    f"BUY skipped for {ticker}: insufficient account "
+                    f"balance to open a minimum-size position."
+                )
+                continue
 
             allowed, reason = risk_check_before_trade(
                 ticker, trade_amount, market_df

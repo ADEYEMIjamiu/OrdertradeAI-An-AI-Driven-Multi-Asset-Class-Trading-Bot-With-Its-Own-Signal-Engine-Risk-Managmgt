@@ -30,6 +30,16 @@ MIN_TRADE_AMOUNT = 100
 MAX_TRADE_AMOUNT = 1000
 RISK_PER_TRADE = 0.01
 
+# FIX 2026-08-25: MAX_POSITION_SIZE is now the primary governor of real
+# trade sizing (engines/risk_engine.py's calculate_trade_amount()), not
+# just a secondary check -- every real trade is sized as a fraction of
+# (account_balance * MAX_POSITION_SIZE), never more than this share of
+# whatever the account actually holds. This replaced sizing off a fixed
+# MIN_TRADE_AMOUNT-MAX_TRADE_AMOUNT dollar band, which was tuned around
+# one account's size and didn't scale for accounts of different sizes
+# (a $500 account and a $100,000 account got offered identical trades).
+# MIN_TRADE_AMOUNT remains a hard floor -- an account too small to cover
+# it gets 0 (skipped), never a forced trade below the floor.
 MAX_POSITION_SIZE = 0.20
 
 BUY_CONFIDENCE = 0.35

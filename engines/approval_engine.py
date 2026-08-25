@@ -93,11 +93,22 @@ def approve_trade(row, open_positions_count=0):
     # 📉 TREND FILTER (SMART, NOT TOO STRICT)
     # =====================================================
 
-    if signal == "BUY" and trend_score < -3:
+    # FIX 2026-08-25: this was set to reject a BUY only below -3 and a
+    # SELL only above +3, but trend_score's real range never goes past
+    # +/-2 in practice (see strategy_engine.py's own bucketing, which
+    # treats >=2 / <=-2 as its most extreme buckets) -- so these
+    # thresholds were unreachable and this filter never actually
+    # rejected anything. Confirmed via a real OIL trade (2026-08-25)
+    # that was approved and bought at trend_score=-2, the worst reading
+    # ever logged for that ticker, and lost within 7 hours. Tightened
+    # to -2/2 to match the real scale, paired with the score_strategy()
+    # fix in strategy_engine.py that stopped rewarding a mismatched
+    # trend direction in the first place.
+    if signal == "BUY" and trend_score <= -2:
         print(f"❌ {ticker} → Strong bearish trend")
         return False, "Strong bearish trend"
 
-    if signal == "SELL" and trend_score > 3:
+    if signal == "SELL" and trend_score >= 2:
         print(f"❌ {ticker} → Strong bullish trend")
         return False, "Strong bullish trend"
 

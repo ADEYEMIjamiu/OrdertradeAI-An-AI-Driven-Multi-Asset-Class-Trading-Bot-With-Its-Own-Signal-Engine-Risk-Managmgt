@@ -61,6 +61,7 @@ def score_strategy(row):
     """
 
     strategy = row.get("Strategy", "No Strategy")
+    signal = str(row.get("Signal", "HOLD")).upper()
     confidence = float(row.get("AI Confidence %", 0))
     trend_score = float(row.get("Trend Score", 0))
     risk_reward = row.get("Risk Reward", 0)
@@ -87,14 +88,36 @@ def score_strategy(row):
 
     score += min(confidence / 100 * 25, 25)
 
-    if trend_score >= 2:
-        score += 20
-    elif trend_score >= 1:
-        score += 15
+    # FIX 2026-08-25: this block used to award the +20 "strong trend
+    # conviction" bonus purely off trend_score's magnitude, with no
+    # check on which way the trade itself was going -- so a BUY signal
+    # riding the single worst (most bearish) trend reading the system
+    # produces got the exact same +20 bonus as a BUY riding the
+    # strongest bullish trend. That's backwards: a trend fighting the
+    # trade's direction should never be rewarded. Found via a real OIL
+    # trade (2026-08-25) entered at trend_score=-2 -- the worst reading
+    # ever logged for that ticker -- that lost within 7 hours; combined
+    # with approval_engine.py's trend filter being set to reject BUYs
+    # only below -3 (a threshold trend_score never actually reaches,
+    # see that file's matching fix), nothing was catching this.
+    # Now only rewards trend AGREEMENT: bullish trend for a BUY,
+    # bearish trend for a SELL, never the mismatched direction. A
+    # trend_score of exactly 0 (neutral) still gets the same modest
+    # +8 either way, since neutral doesn't favor either direction.
+    if signal == "BUY":
+        if trend_score >= 2:
+            score += 20
+        elif trend_score >= 1:
+            score += 15
+        elif trend_score == 0:
+            score += 8
+    elif signal == "SELL":
+        if trend_score <= -2:
+            score += 20
+        elif trend_score == 0:
+            score += 8
     elif trend_score == 0:
         score += 8
-    elif trend_score <= -2:
-        score += 20
 
     if risk_reward >= 3:
         score += 20

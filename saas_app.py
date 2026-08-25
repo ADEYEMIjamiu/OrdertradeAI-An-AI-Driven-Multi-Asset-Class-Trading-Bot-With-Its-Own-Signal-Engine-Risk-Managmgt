@@ -28,6 +28,7 @@ the next major piece of work after this.
 import streamlit as st
 
 from engines import tenant_engine as tenant
+from engines import saas_broker_factory
 
 st.set_page_config(
     page_title="OrderTrade AI -- Sign In",
@@ -172,6 +173,17 @@ def render_broker_connections(user_id):
                     )
                     st.success(f"{meta['label']} credentials saved.")
                     st.rerun()
+
+            if status:
+                if st.button("Test Connection", key=f"test_{broker_code}"):
+                    result = saas_broker_factory.check_user_broker_connection(user_id, broker_code)
+                    if result.get("connected"):
+                        st.success(
+                            f"Connected -- cash: ${result.get('cash', 0):,.2f}, "
+                            f"equity: ${result.get('equity', result.get('cash', 0)):,.2f}"
+                        )
+                    else:
+                        st.error(f"Connection failed: {result.get('error')}")
 
 
 def render_settings(user_id):

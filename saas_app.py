@@ -1,0 +1,243 @@
+"""
+Multi-user SaaS entry point -- login/signup, broker-credential connection,
+and per-user settings, built on engines/tenant_engine.py.
+
+Deliberately a SEPARATE Streamlit entry point from app.py, not a change
+bolted onto it. app.py is your own single-owner live trading dashboard
+(already running in production on the droplet) -- this file is the new
+multi-user product being built out. Keeping them separate means nothing
+here can break your own bot, and this can be deployed/iterated on
+independently (its own systemd service + port, whenever that's ready)
+without touching the service currently running.
+
+Run locally to try it: streamlit run saas_app.py
+
+Scope locked 2026-08-25 (see conversation): bring-your-own-broker
+custody (users connect their OWN broker API keys below -- this platform
+never holds or pools anyone's funds), paper/demo-only at launch
+(enforced -- there is no UI control anywhere in this file to turn on
+live trading; that is intentional, not an oversight).
+
+NOT built yet, by design (this is the auth/connection layer only): the
+actual per-user trading engine loop. Today, saving broker credentials
+here stores them encrypted -- it does not yet start trading for that
+user. Wiring "connected users" into a real per-user execution loop is
+the next major piece of work after this.
+"""
+
+import streamlit as st
+
+from engines import tenant_engine as tenant
+
+st.set_page_config(
+    page_title="OrderTrade AI -- Sign In",
+    page_icon="📈",
+    layout="centered",
+)
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+if "saas_user_id" not in st.session_state:
+    st.session_state.saas_user_id = None
+if "saas_user_email" not in st.session_state:
+    st.session_state.saas_user_email = None
+
+
+def _log_in(user_id, email):
+    st.session_state.saas_user_id = user_id
+    st.session_state.saas_user_email = email
+
+
+def _log_out():
+    st.session_state.saas_user_id = None
+    st.session_state.saas_user_email = None
+
+
+# ============================================================
+# LOGGED-OUT VIEW: LOGIN / SIGN UP
+# ============================================================
+def render_auth_screen():
+    st.title("📈 OrderTrade AI")
+    st.caption(
+        "Early access -- paper/demo trading only. Connect your own "
+        "broker accounts; we never hold or trade your funds directly."
+    )
+
+    login_tab, signup_tab = st.tabs(["Log In", "Sign Up"])
+
+    with login_tab:
+        with st.form("login_form"):
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_password")
+            submitted = st.form_submit_button("Log In", use_container_width=True)
+
+        if submitted:
+            if not email or not password:
+                st.error("Enter both email and password.")
+            else:
+                user_id = tenant.authenticate_user(email, password)
+                if user_id is None:
+                    st.error("Invalid email or password.")
+                else:
+                    _log_in(user_id, email.strip().lower())
+                    st.rerun()
+
+    with signup_tab:
+        with st.form("signup_form"):
+            new_email = st.text_input("Email", key="signup_email")
+            new_password = st.text_input("Password", type="password", key="signup_password")
+            confirm_password = st.text_input(
+                "Confirm password", type="password", key="signup_confirm"
+            )
+            signup_submitted = st.form_submit_button("Create Account", use_container_width=True)
+
+        if signup_submitted:
+            if not new_email or not new_password:
+                st.error("Enter both email and password.")
+            elif len(new_password) < 8:
+                st.error("Password must be at least 8 characters.")
+            elif new_password != confirm_password:
+                st.error("Passwords don't match.")
+            else:
+                user_id = tenant.create_user(new_email, new_password)
+                if user_id is None:
+                    st.error("An account with this email already exists. Try logging in instead.")
+                else:
+                    st.success("Account created.")
+                    _log_in(user_id, new_email.strip().lower())
+                    st.rerun()
+
+
+# ============================================================
+# LOGGED-IN VIEW: DASHBOARD (broker connections + settings)
+# ============================================================
+_BROKER_FIELDS = {
+    "ALPACA": {
+        "label": "Alpaca (US Stocks -- Paper)",
+        "environment": "paper",
+        "key_label": "API Key ID",
+        "secret_label": "Secret Key",
+        "has_extra": False,
+    },
+    "BINANCE": {
+        "label": "Binance (Crypto -- Testnet)",
+        "environment": "testnet",
+        "key_label": "API Key",
+        "secret_label": "Secret Key",
+        "has_extra": False,
+    },
+    "ETORO": {
+        "label": "eToro (Forex/Commodities -- Demo)",
+        "environment": "demo",
+        "key_label": "API Key",
+        "secret_label": "User Key",
+        "has_extra": False,
+    },
+}
+
+
+def render_broker_connections(user_id):
+    st.subheader("Broker Connections")
+    st.caption(
+        "Your API keys are encrypted before they're stored and are only "
+        "ever decrypted to place trades on your own connected account."
+    )
+
+    connected = {c["broker"]: c for c in tenant.list_connected_brokers(user_id)}
+
+    for broker_code, meta in _BROKER_FIELDS.items():
+        status = connected.get(broker_code)
+        status_text = (
+            f"✅ Connected ({status['environment']}, updated {status['updated_at'][:10]})"
+            if status else "Not connected"
+        )
+
+        with st.expander(f"{meta['label']} -- {status_text}"):
+            with st.form(f"broker_form_{broker_code}"):
+                api_key = st.text_input(meta["key_label"], type="password", key=f"{broker_code}_key")
+                api_secret = st.text_input(meta["secret_label"], type="password", key=f"{broker_code}_secret")
+                save_clicked = st.form_submit_button("Save credentials")
+
+            if save_clicked:
+                if not api_key or not api_secret:
+                    st.error("Both fields are required.")
+                else:
+                    tenant.save_broker_credentials(
+                        user_id,
+                        broker=broker_code,
+                        environment=meta["environment"],
+                        api_key=api_key,
+                        api_secret=api_secret,
+                    )
+                    st.success(f"{meta['label']} credentials saved.")
+                    st.rerun()
+
+
+def render_settings(user_id):
+    st.subheader("Trading Settings")
+
+    settings = tenant.get_user_settings(user_id)
+    if settings is None:
+        st.error("Could not load settings for this account.")
+        return
+
+    st.info(
+        "🔒 Paper/demo trading only during early access -- this cannot "
+        "be changed from this page."
+    )
+
+    with st.form("settings_form"):
+        max_position_size = st.slider(
+            "Max position size (% of account per trade)",
+            min_value=5, max_value=50,
+            value=int(settings["max_position_size"] * 100),
+            step=5,
+        )
+        enabled_classes = st.multiselect(
+            "Asset classes to trade",
+            options=["US_STOCKS", "CRYPTO", "FOREX", "COMMODITIES"],
+            default=settings["enabled_asset_classes"],
+        )
+        save_settings_clicked = st.form_submit_button("Save settings")
+
+    if save_settings_clicked:
+        tenant.save_user_settings(
+            user_id,
+            max_position_size=max_position_size / 100,
+            enabled_asset_classes=enabled_classes,
+        )
+        st.success("Settings saved.")
+        st.rerun()
+
+
+def render_dashboard():
+    user = tenant.get_user(st.session_state.saas_user_id)
+    if user is None:
+        # Account no longer exists / DB reset -- fail safe back to login.
+        _log_out()
+        st.rerun()
+        return
+
+    header_col, logout_col = st.columns([4, 1])
+    with header_col:
+        st.title("📈 OrderTrade AI")
+        st.caption(f"Signed in as {user['email']}")
+    with logout_col:
+        st.write("")
+        if st.button("Log Out", use_container_width=True):
+            _log_out()
+            st.rerun()
+
+    render_broker_connections(user["user_id"])
+    st.divider()
+    render_settings(user["user_id"])
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+if st.session_state.saas_user_id is None:
+    render_auth_screen()
+else:
+    render_dashboard()

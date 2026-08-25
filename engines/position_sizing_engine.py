@@ -39,15 +39,36 @@ def strategy_multiplier(strategy_score):
 def regime_multiplier(regime):
     """
     Market regime adjustment.
+
+    FIX 2026-08-25: this only ever recognized "BULL"/"SIDEWAYS"/"BEAR",
+    but engines/regime_engine.py's get_market_regime() actually emits
+    "STRONG BULL", "BULL", "NEUTRAL", "DEFENSIVE", or "BEAR" (never
+    "SIDEWAYS" -- kept below for harmless backward compatibility).
+    Every unrecognized label silently fell through to the same default
+    1.00x as a coin-flip NEUTRAL regime -- which meant "STRONG BULL",
+    the system's highest-conviction bullish regime, sized SMALLER than
+    plain "BULL" (1.00x vs 1.20x). Both real call sites in app.py
+    (search "regime=market_regime") confirmed this fires on every
+    position-size calculation, not just a hypothetical gap. Found via
+    the same audit that caught the trend-direction scoring bug.
     """
 
     regime = str(regime).upper()
 
-    if regime == "BULL":
+    if regime == "STRONG BULL":
+        return 1.30
+
+    elif regime == "BULL":
         return 1.20
+
+    elif regime == "NEUTRAL":
+        return 1.00
 
     elif regime == "SIDEWAYS":
         return 0.90
+
+    elif regime == "DEFENSIVE":
+        return 0.80
 
     elif regime == "BEAR":
         return 0.70

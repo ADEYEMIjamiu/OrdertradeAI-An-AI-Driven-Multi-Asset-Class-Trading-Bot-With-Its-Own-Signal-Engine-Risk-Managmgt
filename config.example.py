@@ -142,10 +142,17 @@ GRADE_B_RISK_REWARD = 0.8      # placeholder
 GRADE_C_CONFIDENCE = 25        # placeholder -- below this, WAIT / grade D
 
 # Market Regime Engine
+# FIX 2026-08-25: get_market_regime() (engines/regime_engine.py) can only
+# ever produce a score of 0/25/50/75/100 (four independent +25 checks) --
+# the old REGIME_DEFENSIVE_SCORE=35 required a score in [35,49], a value
+# that can never occur, so "DEFENSIVE" was never actually reachable.
+# Changed to 25 so it lines up with the real score domain: 100=STRONG
+# BULL, 75=BULL, 50=NEUTRAL, 25=DEFENSIVE, 0=BEAR. Found via the same
+# audit that caught the trend-direction scoring bug.
 REGIME_STRONG_BULL_SCORE = 80
 REGIME_BULL_SCORE = 65
 REGIME_NEUTRAL_SCORE = 50
-REGIME_DEFENSIVE_SCORE = 35
+REGIME_DEFENSIVE_SCORE = 25
 
 # Trade Approval Engine -- confidence is gated twice deliberately,
 # at two different bars: GRADE_C_CONFIDENCE above (loose, first

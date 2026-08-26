@@ -24,3 +24,8 @@ models/
 
 # Stray SQLite journal files from local testing.
 *.db-journal
+
+# Backtest engine's local historical-data cache and run outputs -- large,
+# derived, and machine-specific; never meant to be committed.
+backtest_cache/
+backtest_results/

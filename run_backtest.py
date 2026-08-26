@@ -7,12 +7,21 @@ Usage examples:
     python3 run_backtest.py --tickers AAPL,MSFT,GOOGL --start 2023-01-01 --end 2025-01-01
     python3 run_backtest.py --tickers BTC-USD,ETH-USD --start 2022-01-01 --end 2024-01-01 --balance 5000
     python3 run_backtest.py --tickers EURUSD=X,GC=F --start 2023-06-01 --end 2025-06-01 --leverage 10 --verbose
+    python3 run_backtest.py --universe all --start 2020-01-01 --end 2025-01-01
+    python3 run_backtest.py --universe US_STOCKS,CRYPTO --start 2020-01-01 --end 2025-01-01
+
+--universe pulls the ticker list straight from data/asset_universe.py
+(the same universe live trading scans) instead of typing every symbol by
+hand -- pass "all" or a comma-separated subset of US_STOCKS/CRYPTO/
+FOREX/COMMODITIES. --tickers and --universe are mutually exclusive.
 
 Requires models/trading_model.pkl + models/features.pkl to already exist
 (same as live trading -- run train_model.py first if they're missing).
 Downloads historical OHLCV via yfinance once per ticker on first run and
 caches it under backtest_cache/ (gitignored) -- reruns over the same
-ticker/date range are instant and make no network calls.
+ticker/date range are instant and make no network calls. A full-universe
+multi-year run can take a while the first time (one AI model inference
+per ticker per trading day) -- this is expected, not a hang.
 
 See engines/backtest_engine.py's module docstring for the full list of
 known divergences from live trading (most importantly: Trend Score is
@@ -26,11 +35,30 @@ import os
 from datetime import datetime
 
 from engines.backtest_engine import run_backtest
+from data.asset_universe import get_enabled_symbols
+
+
+def _resolve_universe(spec):
+    """spec is "all" or a comma-separated subset of asset-class names
+    (US_STOCKS/CRYPTO/FOREX/COMMODITIES), matching data/asset_universe.py's
+    keys exactly -- same universe live trading scans, so a full-universe
+    backtest tests the actual production ticker list, not a hand-picked
+    sample."""
+    wanted = None if spec.strip().lower() == "all" else {
+        s.strip().upper() for s in spec.split(",") if s.strip()
+    }
+    tickers = []
+    for asset in get_enabled_symbols():
+        if wanted is None or asset["asset_class"] in wanted:
+            tickers.append(asset["symbol"])
+    return tickers
 
 
 def _parse_args():
     parser = argparse.ArgumentParser(description="Backtest the AI decision pipeline against historical data.")
-    parser.add_argument("--tickers", required=True, help="Comma-separated tickers, e.g. AAPL,MSFT,BTC-USD")
+    ticker_group = parser.add_mutually_exclusive_group(required=True)
+    ticker_group.add_argument("--tickers", help="Comma-separated tickers, e.g. AAPL,MSFT,BTC-USD")
+    ticker_group.add_argument("--universe", help='"all", or comma-separated asset classes: US_STOCKS,CRYPTO,FOREX,COMMODITIES')
     parser.add_argument("--start", required=True, help="Start date, YYYY-MM-DD")
     parser.add_argument("--end", required=True, help="End date, YYYY-MM-DD")
     parser.add_argument("--balance", type=float, default=10000.0, help="Starting account balance (default: 10000)")
@@ -53,12 +81,21 @@ def _fmt(value, pct=False, money=False):
 
 def main():
     args = _parse_args()
-    tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
+    if args.universe:
+        tickers = _resolve_universe(args.universe)
+        if not tickers:
+            print(f"No enabled symbols matched --universe '{args.universe}'. "
+                  f"Valid asset classes: US_STOCKS, CRYPTO, FOREX, COMMODITIES, or 'all'.")
+            return
+    else:
+        tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
 
-    print(f"Running backtest: {', '.join(tickers)} | {args.start} -> {args.end} | "
+    print(f"Running backtest: {len(tickers)} ticker(s) | {args.start} -> {args.end} | "
           f"balance=${args.balance:,.2f} | leverage={args.leverage}x")
+    if len(tickers) <= 12:
+        print(f"Tickers: {', '.join(tickers)}")
     print("(First run per ticker/date-range downloads and caches historical data -- "
-          "may take a moment.)\n")
+          "a full-universe multi-year run can take a while the first time. Reruns are fast.)\n")
 
     result = run_backtest(
         tickers=tickers,
@@ -72,13 +109,15 @@ def main():
 
     m = result["metrics"]
     regime, regime_score = result["final_regime"]
+    bench = result["benchmark"]
+
+    total_return_pct = ((result["final_equity"] / args.balance) - 1) * 100
 
     print("\n" + "=" * 60)
     print("BACKTEST RESULTS")
     print("=" * 60)
     print(f"Starting balance:   ${args.balance:,.2f}")
     print(f"Final equity:       ${result['final_equity']:,.2f}")
-    total_return_pct = ((result["final_equity"] / args.balance) - 1) * 100
     print(f"Total return:       {total_return_pct:+.2f}%")
     print(f"Final SPY regime:   {regime} (score={regime_score})")
     print("-" * 60)
@@ -92,6 +131,15 @@ def main():
     print(f"Max drawdown:       {_fmt(m['max_drawdown'], money=True)}")
     print(f"Sharpe (per-trade): {_fmt(m['sharpe_ratio'])}")
     print(f"Sortino (per-trade):{_fmt(m['sortino_ratio'])}")
+    print("-" * 60)
+    print("BENCHMARK -- equal-weight buy-and-hold, same tickers/window, no AI:")
+    if bench["return_pct"] is not None:
+        print(f"  Benchmark return:  {bench['return_pct']:+.2f}%  (${bench['final_equity']:,.2f})")
+        edge = total_return_pct - bench["return_pct"]
+        verdict = "BEAT" if edge > 0 else ("MATCHED" if edge == 0 else "UNDERPERFORMED")
+        print(f"  AI vs benchmark:   {edge:+.2f} percentage points -- AI {verdict} buy-and-hold")
+    else:
+        print("  Benchmark unavailable (no ticker had enough data in this window).")
     print("=" * 60)
 
     if result["trades"]:

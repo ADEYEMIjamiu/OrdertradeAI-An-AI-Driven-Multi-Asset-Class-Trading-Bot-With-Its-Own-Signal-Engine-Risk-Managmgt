@@ -372,6 +372,50 @@ def offline_get_market_regime(spy_hist_df, as_of_idx):
         return "UNKNOWN", 0
 
 
+def compute_buy_and_hold_benchmark(hist, tickers, start, end, initial_balance):
+    """
+    Equal-weight buy-and-hold return across the same tickers/window the
+    strategy was tested on -- the honest baseline question every backtest
+    result needs an answer to: did the AI actually add value, or did it
+    just ride the market up (or cushion a fall) while under-performing
+    simply holding the same instruments? A strategy with a positive
+    profit factor and Sharpe ratio can still be worse than doing nothing.
+
+    Splits initial_balance evenly across every ticker with usable data in
+    [start, end], buys at the first available close on/after start, holds
+    to the last available close on/before end, no rebalancing -- the
+    simplest possible baseline, deliberately not risk-adjusted or
+    leveraged, so it's an apples-to-apples dollar comparison against
+    final_equity.
+    """
+    start_ts, end_ts = pd.Timestamp(start), pd.Timestamp(end)
+    per_ticker_return_pct = {}
+
+    for ticker in tickers:
+        df = hist.get(ticker)
+        if df is None:
+            continue
+        window = df[(df.index >= start_ts) & (df.index <= end_ts)]
+        if len(window) < 2:
+            continue
+        entry_price = float(window["Close"].iloc[0])
+        exit_price = float(window["Close"].iloc[-1])
+        if entry_price > 0:
+            per_ticker_return_pct[ticker] = (exit_price / entry_price - 1) * 100
+
+    if not per_ticker_return_pct:
+        return {"return_pct": None, "final_equity": None, "per_ticker_return_pct": {}}
+
+    avg_return_pct = sum(per_ticker_return_pct.values()) / len(per_ticker_return_pct)
+    final_equity = initial_balance * (1 + avg_return_pct / 100)
+
+    return {
+        "return_pct": avg_return_pct,
+        "final_equity": final_equity,
+        "per_ticker_return_pct": per_ticker_return_pct,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Simulation loop
 # ---------------------------------------------------------------------------
@@ -384,7 +428,11 @@ def run_backtest(tickers, start, end, initial_balance=10000.0, leverage=1, max_o
 
     Returns a dict: {"trades": [...closed round-trips...],
     "equity_curve": [(date, equity), ...], "metrics": {...},
-    "final_equity": float, "final_regime": (regime, score)}.
+    "final_equity": float, "final_regime": (regime, score),
+    "benchmark": {"return_pct", "final_equity", "per_ticker_return_pct"}}.
+    The "benchmark" key is the equal-weight buy-and-hold baseline over the
+    same tickers/window (see compute_buy_and_hold_benchmark()) -- always
+    compare final_equity/metrics against it before calling a result good.
     """
     model = joblib.load(MODEL_PATH)
     features = joblib.load(FEATURES_PATH)
@@ -579,6 +627,7 @@ def run_backtest(tickers, start, end, initial_balance=10000.0, leverage=1, max_o
         })
 
     final_regime = offline_get_market_regime(spy_hist, len(spy_hist) - 1)
+    benchmark = compute_buy_and_hold_benchmark(hist, tickers, start, end, initial_balance)
 
     return {
         "trades": trades,
@@ -586,6 +635,7 @@ def run_backtest(tickers, start, end, initial_balance=10000.0, leverage=1, max_o
         "metrics": compute_metrics(trades),
         "final_equity": cash,
         "final_regime": final_regime,
+        "benchmark": benchmark,
     }
 
 

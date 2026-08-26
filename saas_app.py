@@ -22,11 +22,16 @@ UPDATED 2026-08-26: the per-user AI decision loop is now wired in below
 (render_trading_run(), backed by engines/saas_decision_engine.py) --
 Preview generates signals and shows what would be bought without
 placing anything, Execute actually places the orders after an explicit
-confirmation checkbox. Still BUY-side only, still US_STOCKS/CRYPTO only
-(no eToro execution yet), still fully manual -- no scheduler, nothing
-runs unless a signed-in user clicks the buttons themselves. See
-saas_decision_engine.py's module docstring for the full scope and
-the gaps that are still open (no automated selling, no portfolio-level
+confirmation checkbox. Covers all four asset classes now (eToro
+follow-up landed same day, see saas_broker_factory.py's docstring for
+what's still rougher about eToro specifically -- no trailing-lock
+ratchet, no exit-engine coverage). Still BUY-side only -- no automated
+selling beyond the stop-loss/take-profit/hard-time-exit protection
+already wired in. A background scheduler (saas_scheduler.py, a systemd
+timer) now also exists separately from this manual dashboard flow --
+see that file's own docstring for its scope and safety-model
+implications. See saas_decision_engine.py's module docstring for the
+full scope and the gaps that are still open (no portfolio-level
 exposure cap) before this should be trusted beyond supervised testing.
 """
 
@@ -250,16 +255,17 @@ def render_trading_run(user_id):
     st.caption(
         "Checks your existing positions for stop-loss/take-profit/max-"
         "hold-time exits, then runs the AI signal engine across your "
-        "enabled asset classes (US Stocks via Alpaca, Crypto via Binance "
-        "-- Forex/Commodities execution isn't built yet even if enabled "
-        "above), sizes any approved BUY against your real connected-"
-        "broker balance, and shows you exactly what it would do. Nothing "
-        "is ever bought or sold without you clicking Execute separately "
-        "below. Exit protection covers stop-loss/take-profit/a hard "
-        "max-hold-time only -- no partial profit-taking yet -- and, like "
-        "everything here, only runs when you click these buttons; there "
-        "is no background scheduler yet, so positions get no protection "
-        "between visits."
+        "enabled asset classes (US Stocks via Alpaca, Crypto via Binance, "
+        "Forex/Commodities via eToro), sizes any approved BUY against "
+        "your real connected-broker balance, and shows you exactly what "
+        "it would do. Nothing is ever bought or sold without you "
+        "clicking Execute separately below. Exit protection (stop-loss/"
+        "take-profit/a hard max-hold-time, no partial profit-taking) "
+        "currently covers US Stocks and Crypto only -- an eToro position "
+        "relies on the fixed stop-loss/take-profit set on the broker "
+        "side at trade-open, same as everywhere else in this project, "
+        "just without this dashboard's own exit-protection pass checking "
+        "on it in between visits."
     )
 
     preview_clicked = st.button("Preview AI Signals", key="preview_signals")

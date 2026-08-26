@@ -16,11 +16,17 @@ for why: every new integration in this codebase has shipped BUY-first/
 manual-trigger/narrow-asset-class-first, then been widened once proven
 live):
 
-- US_STOCKS (via Alpaca) and CRYPTO (via Binance) only. FOREX/
-  COMMODITIES are skipped even if a user enables them, because
-  saas_broker_factory.py deliberately has no eToro execution yet (see
-  that file's docstring -- it needs the instrument-catalog + leverage/
-  stop-rate porting first).
+- All four asset classes now have real per-user execution: US_STOCKS
+  (Alpaca), CRYPTO (Binance), and -- as of the 2026-08-26 follow-up --
+  FOREX/COMMODITIES (eToro). See saas_broker_factory.py's module
+  docstring for the eToro-specific gaps this brought along: no per-user
+  equivalent of the single-owner bot's trailing-stop ratchet (eToro's
+  own "trailing" flag is broker-side and unreliable -- see
+  etoro_broker.py's 2026-08-24 comment), and no eToro reconciliation
+  pass (a SUBMITTED-but-not-yet-confirmed eToro order stays that way
+  until a future run's buy() poll happens to catch it on a DIFFERENT
+  ticker's ticker -- there's no per-order retry for eToro the way
+  saas_reconcile_engine.py provides for Alpaca).
 - New entries are BUY-side only -- AI-generated SELL signals are still
   shown in results for visibility but never acted on. UPDATED 2026-08-26:
   existing positions DO now get automated exit protection -- see
@@ -91,8 +97,9 @@ read. Any order still sitting at SUBMITTED from a previous run gets
 checked against Alpaca first, so a since-filled order is correctly
 counted as open (and its real fill price/quantity backfilled) before
 this run decides whether there's room for a new one. CRYPTO doesn't
-need this (see that file's docstring); eToro still has no per-user
-execution at all yet.
+need this (see that file's docstring); eToro now has per-user execution
+(FOLLOW-UP 2026-08-26, see saas_broker_factory.py) but still no
+reconciliation pass of its own -- see that file's docstring for why.
 
 NOT included: portfolio-level exposure cap (MAX_PORTFOLIO_EXPOSURE) --
 the single-owner bot's version of this reads live equity across all
@@ -126,6 +133,8 @@ from data.asset_universe import ASSET_UNIVERSE
 from config import (
     MAX_POSITIONS,
     MAX_CRYPTO_POSITIONS,
+    MAX_FOREX_POSITIONS,
+    MAX_COMMODITIES_POSITIONS,
     MAX_TRADES_PER_DAY,
     TRADE_COOLDOWN_MINUTES,
     CRYPTO_MAX_TRADES_PER_DAY,
@@ -135,12 +144,21 @@ from config import (
 MODEL_PATH = "models/trading_model.pkl"
 FEATURES_PATH = "models/features.pkl"
 
-# Only asset classes with real per-user execution built. See module
-# docstring -- FOREX/COMMODITIES intentionally excluded until eToro
-# per-user execution exists.
+# All four asset classes now have real per-user execution (eToro
+# follow-up landed 2026-08-26 -- see saas_broker_factory.py's module
+# docstring for the known gaps: no trailing-lock ratchet, no exit-engine
+# coverage for FOREX/COMMODITIES yet).
 _ASSET_CLASS_BROKER = {
     "US_STOCKS": "ALPACA",
     "CRYPTO": "BINANCE",
+    "FOREX": "ETORO",
+    "COMMODITIES": "ETORO",
+}
+
+_POSITION_CAPS = {
+    "CRYPTO": MAX_CRYPTO_POSITIONS,
+    "FOREX": MAX_FOREX_POSITIONS,
+    "COMMODITIES": MAX_COMMODITIES_POSITIONS,
 }
 
 _model = None
@@ -341,7 +359,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
             continue
 
         open_count = journal.count_open_positions_for_user(user_id, broker)
-        position_cap = MAX_CRYPTO_POSITIONS if asset_class == "CRYPTO" else MAX_POSITIONS
+        position_cap = _POSITION_CAPS.get(asset_class, MAX_POSITIONS)
 
         tickers = ASSET_UNIVERSE.get(asset_class, {}).get("symbols", [])
 
@@ -486,7 +504,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                             filled_price = float(response_filled_price)
                         if response_filled_qty:
                             filled_quantity = float(response_filled_qty)
-                else:
+                elif asset_class == "CRYPTO":
                     # Binance testnet market orders fill effectively
                     # synchronously -- same assumption the single-owner
                     # bot's own binance_broker.buy_crypto() already makes
@@ -497,6 +515,32 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     _order, filled_price, filled_quantity = factory.buy_crypto_for_user(
                         user_id, ticker, trade_amount
                     )
+                else:
+                    # FOREX/COMMODITIES via eToro. buy_etoro_for_user()
+                    # already polls for a confirmed fill internally (15s
+                    # window for leveraged CFDs -- see that function's
+                    # docstring); position_id is None if that window
+                    # elapses without a confirmed match, same "stays
+                    # SUBMITTED, not falsely marked bought" discipline as
+                    # the US_STOCKS branch above, just with the polling
+                    # already done rather than deferred to a reconcile
+                    # pass (none exists yet for eToro -- see
+                    # saas_broker_factory.py's module docstring).
+                    #
+                    # broker_order_id stores the eToro POSITION id here,
+                    # not the order id -- deliberate: eToro's own
+                    # close-position endpoint needs position_id, not
+                    # order_id, so that's the identifier worth keeping
+                    # for any future SELL/reconciliation support. The
+                    # order_id itself has no further use once a position
+                    # is confirmed open.
+                    etoro_result = factory.buy_etoro_for_user(user_id, ticker, trade_amount)
+                    if etoro_result["position_id"] is not None:
+                        is_confirmed_filled = True
+                        broker_order_id = str(etoro_result["position_id"])
+                        if etoro_result["executed_price"]:
+                            filled_price = float(etoro_result["executed_price"])
+                            filled_quantity = trade_amount / filled_price if filled_price > 0 else estimated_quantity
             except Exception as e:
                 results.append({
                     "ticker": ticker,

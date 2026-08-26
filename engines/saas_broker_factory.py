@@ -26,14 +26,42 @@ FIX 2026-08-26: this originally did ONLY connection verification
 execution for Alpaca (stocks) and Binance (crypto) -- buy_stock_for_user()/
 sell_stock_for_user()/buy_crypto_for_user()/sell_crypto_for_user() below.
 
-eToro (forex/commodities) execution is DELIBERATELY NOT included yet --
-etoro_broker.py's buy() depends on a full instrument-catalog lookup
-(ticker -> instrumentId, see that file's _load_instrument_catalog()) and
-leverage/stop-loss-rate computation that would need to be ported here
-too, which is real additional work, not a small addition. Only Alpaca
-and Binance credentials can actually place trades through this module
-right now; a user's connected eToro credentials are still read-only
-(Test Connection only) until that follow-up is built.
+FOLLOW-UP 2026-08-26: eToro (forex/commodities) execution is now also
+included -- buy_etoro_for_user() below, plus the per-user instrument-
+catalog lookup and leverage/stop-loss-rate computation it needs. This
+imports (does not duplicate) the pure, credential-independent helpers
+from etoro_broker.py -- resolve_project_ticker(), _is_forex_or_commodity_
+ticker(), and the ETORO_LEVERAGE/ETORO_STOP_LOSS_PCT/ETORO_TAKE_PROFIT_PCT/
+ETORO_USE_TRAILING_STOP constants -- since those don't touch that file's
+module-level client (API_KEY/USER_KEY/_headers()) at all, so importing
+them doesn't create the cross-user coupling risk described above for why
+this file exists in the first place. The instrument catalog itself IS
+duplicated (not imported) as a per-user cache keyed by user_id, rather
+than reusing etoro_broker.py's single global _instrument_catalog -- that
+cache is populated via an authenticated API call using whichever
+credentials first triggered it, and reusing one global copy across users
+would mean one user's connected eToro key silently becomes a dependency
+for every other user's ticker lookups. Slightly wasteful (the catalog
+is ~16k identical instruments regardless of whose key fetches it) in
+exchange for the same no-shared-state-across-users guarantee every other
+per-user function in this file already has.
+
+KNOWN GAP: buy_etoro_for_user() places the initial order (with a real
+broker-side fixed stop-loss/take-profit, same as etoro_broker.py's own
+buy()) and best-effort upgrades it to a broker-side TRAILING stop, but
+there is no per-user equivalent of app.py's apply_etoro_trailing_lock()
+(the single-owner bot's own workaround for eToro's trailing stop not
+actually working as documented -- see etoro_broker.py's 2026-08-24
+comment). SaaS eToro positions get the initial fixed 3%/5% band and
+whatever eToro's own (unreliable) trailing flag does, not the
+single-owner bot's proven local ratcheting. Also NOT included: eToro
+positions in engines/saas_exit_engine.py -- that module only checks
+US_STOCKS/CRYPTO for exits (relies on saas_order_manager's simple
+most-recent-FILLED tracking); an eToro SELL signal from the AI is still
+shown in results but never acted on, same "BUY-side new entries first"
+scoping this whole decision loop already has, just extended to this
+broker too. Both are real gaps worth closing before this is trusted
+beyond supervised testing, same caveat as everything else in this file.
 
 SAFETY -- read this before changing paper=True / set_sandbox_mode(True)
 below: both are hardcoded, not derived from user_settings or the stored
@@ -54,6 +82,9 @@ person's personal kill switch to every SaaS user's trading. A SaaS-wide
 before this is used for anything beyond manual/local testing.
 """
 
+import time
+import uuid
+
 import ccxt
 import requests
 from alpaca.trading.client import TradingClient
@@ -61,6 +92,14 @@ from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
 from engines import tenant_engine as tenant
+from etoro_broker import (
+    resolve_project_ticker,
+    _is_forex_or_commodity_ticker,
+    ETORO_LEVERAGE,
+    ETORO_STOP_LOSS_PCT,
+    ETORO_TAKE_PROFIT_PCT,
+    ETORO_USE_TRAILING_STOP,
+)
 
 
 def check_user_alpaca_connection(user_id):
@@ -217,10 +256,8 @@ def get_user_account_balance(user_id, asset_class):
     binance_broker.py. Used by the per-user decision loop
     (saas_decision_engine.py) to size trades with calculate_trade_amount().
 
-    Only US_STOCKS (Alpaca) and CRYPTO (Binance) are wired here --
-    eToro execution isn't built yet (see module docstring), so FOREX/
-    COMMODITIES always return 0.0, which the decision loop correctly
-    reads as "can't trade this asset class for this user yet."
+    US_STOCKS (Alpaca), CRYPTO (Binance), and -- as of the 2026-08-26
+    eToro follow-up -- FOREX/COMMODITIES (eToro) are all wired here.
     """
     if asset_class == "CRYPTO":
         result = check_user_binance_connection(user_id)
@@ -236,6 +273,16 @@ def get_user_account_balance(user_id, asset_class):
         # rules Alpaca's own paper account already applies -- same field
         # buy_stock_for_user() above checks before submitting an order.
         return float(result.get("buying_power", 0) or 0)
+
+    if asset_class in ("FOREX", "COMMODITIES"):
+        result = check_user_etoro_connection(user_id)
+        if not result.get("connected"):
+            return 0.0
+        # "cash" here is eToro's "credit" field (see check_user_etoro_
+        # connection()'s docstring) -- the same balance both FOREX and
+        # COMMODITIES draw from, since they share one eToro account per
+        # user rather than separate sub-balances.
+        return float(result.get("cash", 0) or 0)
 
     return 0.0
 
@@ -360,3 +407,234 @@ def sell_crypto_for_user(user_id, ticker, quantity):
     exchange = _require_binance_exchange(user_id)
     symbol = _to_binance_symbol(ticker)
     return exchange.create_market_sell_order(symbol, quantity)
+
+
+# ============================================================
+# ORDER EXECUTION -- eToro (forex/commodities). See module docstring
+# ("FOLLOW-UP 2026-08-26") for the per-user-catalog-cache design
+# decision and the known gaps (no trailing-lock ratchet, no exit-engine
+# coverage) versus etoro_broker.py's single-owner version.
+# ============================================================
+
+ETORO_API_BASE = "https://public-api.etoro.com/api/v1"
+ETORO_EXECUTION_BASE_V2 = "https://public-api.etoro.com/api/v2"
+
+# ticker -> instrumentId, one catalog per user_id (see module docstring
+# for why this isn't a single shared cache like etoro_broker.py's).
+_etoro_instrument_catalog_cache = {}
+
+
+def _require_etoro_creds(user_id):
+    creds = tenant.get_broker_credentials(user_id, "ETORO")
+    if creds is None:
+        raise ValueError("No eToro credentials saved for this user.")
+    return creds
+
+
+def _etoro_headers_for_user(creds):
+    return {
+        "x-api-key": creds["api_key"],
+        "x-user-key": creds["api_secret"],  # stored as "api_secret" slot; eToro calls this the user key
+        "x-request-id": str(uuid.uuid4()),
+        "Content-Type": "application/json",
+    }
+
+
+def _etoro_execution_prefix(creds):
+    is_demo = creds["environment"] != "real"
+    return "trading/execution/demo" if is_demo else "trading/execution"
+
+
+def _etoro_positions_prefix(creds):
+    is_demo = creds["environment"] != "real"
+    return "trading/demo" if is_demo else "trading/real"
+
+
+def _etoro_portfolio_path(creds):
+    is_demo = creds["environment"] != "real"
+    return "trading/info/demo/portfolio" if is_demo else "trading/info/portfolio"
+
+
+def _load_etoro_catalog_for_user(user_id, creds):
+    """Per-user cached ticker -> instrumentId map. See module docstring
+    for why this is per-user rather than reusing etoro_broker.py's
+    single global catalog. Same client-side exact-match approach as
+    that file's _load_instrument_catalog() -- eToro's own filter params
+    were confirmed live not to actually filter anything (see that
+    function's docstring)."""
+    if user_id in _etoro_instrument_catalog_cache:
+        return _etoro_instrument_catalog_cache[user_id]
+
+    response = requests.get(
+        f"{ETORO_API_BASE}/market-data/instruments",
+        headers=_etoro_headers_for_user(creds),
+        timeout=30,
+    )
+    response.raise_for_status()
+    items = response.json().get("instrumentDisplayDatas", [])
+
+    catalog = {}
+    for item in items:
+        symbol = str(item.get("symbolFull", "")).upper().strip()
+        instrument_id = item.get("instrumentID")
+        if symbol and instrument_id is not None and symbol not in catalog:
+            catalog[symbol] = instrument_id
+
+    _etoro_instrument_catalog_cache[user_id] = catalog
+    return catalog
+
+
+def _get_etoro_instrument_id_for_user(user_id, creds, ticker):
+    resolved = resolve_project_ticker(ticker)
+    catalog = _load_etoro_catalog_for_user(user_id, creds)
+    instrument_id = catalog.get(resolved)
+    if instrument_id is None:
+        raise ValueError(
+            f"eToro instrument catalog has no exact symbolFull match for "
+            f"'{resolved}' (from project ticker '{ticker}')."
+        )
+    return instrument_id
+
+
+def get_etoro_current_price_for_user(user_id, ticker):
+    """Current ask price for a ticker, via this user's own eToro
+    credentials. Mirrors etoro_broker.get_current_price() -- used below
+    to compute stopLossRate/takeProfitRate for leveraged orders."""
+    creds = _require_etoro_creds(user_id)
+    instrument_id = _get_etoro_instrument_id_for_user(user_id, creds, ticker)
+
+    response = requests.get(
+        f"{ETORO_API_BASE}/market-data/instruments/rates",
+        params={"instrumentIds": instrument_id},
+        headers=_etoro_headers_for_user(creds),
+        timeout=10,
+    )
+    response.raise_for_status()
+    rates = response.json().get("rates", [])
+    if not rates:
+        raise ValueError(f"No rates in eToro response for {ticker}.")
+
+    price = rates[0].get("ask")
+    if price is None:
+        raise ValueError(f"No ask price in eToro rates response for {ticker}.")
+    return float(price)
+
+
+def _set_etoro_trailing_stop_for_user(user_id, creds, position_id, stop_loss_rate, take_profit_rate=None):
+    """Best-effort broker-side trailing-stop upgrade, called by
+    buy_etoro_for_user() right after a leveraged CFD position confirms
+    open. Mirrors etoro_broker.set_trailing_stop() -- see that
+    function's docstring for the full reasoning and its NOT-yet-proven-
+    reliable caveat (etoro_broker.py's 2026-08-24 comment: eToro's own
+    "trailing" flag was confirmed live NOT to actually ratchet the stop
+    up despite reporting isTslEnabled=True). Callers must wrap this in
+    try/except -- a failure here must never undo the buy that already
+    succeeded; worst case the position keeps its original fixed
+    stopLossRate, already set by the order itself."""
+    payload = {"stopLossType": "trailing", "stopLossRate": stop_loss_rate}
+    if take_profit_rate is not None:
+        payload["takeProfitRate"] = take_profit_rate
+
+    response = requests.patch(
+        f"{ETORO_EXECUTION_BASE_V2}/{_etoro_positions_prefix(creds)}/positions/{position_id}",
+        headers=_etoro_headers_for_user(creds),
+        json=payload,
+        timeout=25,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def buy_etoro_for_user(user_id, ticker, usd_amount):
+    """
+    Per-user eToro market BUY, sized by dollar amount. Mirrors
+    etoro_broker.py's buy() -- same leverage/stopLossRate handling for
+    FOREX/COMMODITIES tickers (ETORO_LEVERAGE, ETORO_STOP_LOSS_PCT/
+    ETORO_TAKE_PROFIT_PCT, imported from that file -- see module
+    docstring for why importing these specific constants is safe), same
+    fill-confirmation poll (longer window for leveraged CFDs, which take
+    longer to confirm than crypto/stocks -- see etoro_broker.buy()'s
+    docstring for the full live-testing history behind that 15s number).
+
+    Returns {"position_id", "executed_price", "trailing_stop_set", "raw"}
+    -- position_id is None if the poll window elapsed before eToro
+    confirmed the fill (NOT necessarily a failure -- see etoro_broker.
+    buy()'s docstring on stocks queuing outside market hours; for FOREX/
+    COMMODITIES specifically this would mean a genuinely slow fill, not
+    a market-closed queue, since these trade nearly continuously).
+    Callers (saas_decision_engine.py) must treat position_id is None the
+    same as any other "not yet confirmed filled" case -- do not journal
+    as bought/filled unless a position_id came back.
+    """
+    creds = _require_etoro_creds(user_id)
+    instrument_id = _get_etoro_instrument_id_for_user(user_id, creds, ticker)
+    is_leveraged_cfd = _is_forex_or_commodity_ticker(ticker)
+
+    order_payload = {
+        "action": "open",
+        "transaction": "buy",
+        "instrumentId": instrument_id,
+        "orderType": "mkt",
+        "amount": usd_amount,
+        "orderCurrency": "usd",
+        "leverage": ETORO_LEVERAGE if is_leveraged_cfd else 1,
+    }
+
+    if is_leveraged_cfd:
+        current_price = get_etoro_current_price_for_user(user_id, ticker)
+        order_payload["stopLossRate"] = round(current_price * (1 - ETORO_STOP_LOSS_PCT), 5)
+        order_payload["takeProfitRate"] = round(current_price * (1 + ETORO_TAKE_PROFIT_PCT), 5)
+
+    response = requests.post(
+        f"{ETORO_EXECUTION_BASE_V2}/{_etoro_execution_prefix(creds)}/orders",
+        headers=_etoro_headers_for_user(creds),
+        json=order_payload,
+        timeout=25,
+    )
+    response.raise_for_status()
+    order = response.json()
+    order_id = order.get("orderId")
+
+    position_id = None
+    executed_price = None
+
+    poll_attempts = 15 if is_leveraged_cfd else 5
+    for _ in range(poll_attempts):
+        portfolio_response = requests.get(
+            f"{ETORO_API_BASE}/{_etoro_portfolio_path(creds)}",
+            headers=_etoro_headers_for_user(creds),
+            timeout=25,
+        )
+        portfolio_response.raise_for_status()
+        portfolio = portfolio_response.json().get("clientPortfolio", {})
+        match = next(
+            (p for p in portfolio.get("positions", []) if p.get("orderID") == order_id),
+            None,
+        )
+        if match is not None:
+            position_id = match.get("positionID")
+            executed_price = match.get("openRate")
+            break
+        time.sleep(1)
+
+    trailing_stop_set = False
+    if is_leveraged_cfd and position_id is not None and ETORO_USE_TRAILING_STOP:
+        try:
+            _set_etoro_trailing_stop_for_user(
+                user_id, creds, position_id,
+                stop_loss_rate=order_payload["stopLossRate"],
+                take_profit_rate=order_payload.get("takeProfitRate"),
+            )
+            trailing_stop_set = True
+        except Exception as trailing_error:
+            print(
+                f"Could not set trailing stop for user {user_id} position "
+                f"{position_id} ({ticker}): {trailing_error}"
+            )
+
+    return {
+        "position_id": position_id,
+        "executed_price": executed_price,
+        "trailing_stop_set": trailing_stop_set,
+        "raw": order,
+    }

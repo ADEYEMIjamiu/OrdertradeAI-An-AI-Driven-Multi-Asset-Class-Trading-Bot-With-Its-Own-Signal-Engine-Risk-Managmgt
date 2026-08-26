@@ -446,9 +446,28 @@ def run_backtest(tickers, start, end, initial_balance=10000.0, leverage=1, max_o
     model = joblib.load(MODEL_PATH)
     features = joblib.load(FEATURES_PATH)
 
+    # Some tickers -- especially newer crypto listings (KAITO-USD launched
+    # 2025, etc.) -- simply don't have price history reaching back to the
+    # warmup start, even though they're perfectly valid live-trading
+    # symbols today. That's not a data-fetch bug like BRK.B's dot/hyphen
+    # mismatch, so it shouldn't crash a 70-ticker run over one young asset
+    # -- skip it, warn loudly, and keep going with everything that does
+    # have coverage for this window.
     hist = {}
+    skipped_tickers = []
     for ticker in tickers:
-        hist[ticker] = load_history(ticker, start, end)
+        try:
+            hist[ticker] = load_history(ticker, start, end)
+        except RuntimeError as e:
+            skipped_tickers.append(ticker)
+            print(f"  [skipped] {ticker}: no historical data for this window ({e})")
+
+    if skipped_tickers:
+        print(f"\nSkipped {len(skipped_tickers)} ticker(s) with no data in this window: "
+              f"{', '.join(skipped_tickers)}\n")
+
+    if not hist:
+        raise RuntimeError("No ticker in this universe had usable historical data for the requested window.")
 
     spy_hist = load_history("SPY", start, end)
 
@@ -517,8 +536,11 @@ def run_backtest(tickers, start, end, initial_balance=10000.0, leverage=1, max_o
                 del open_positions[ticker]
 
         # --- 2. Generate today's signals across the whole universe ---
+        # Iterates hist (tickers that actually loaded), not the raw
+        # tickers list -- skipped/no-data tickers were never added to
+        # hist, and indexing hist[ticker] for one of those would KeyError.
         rows = []
-        for ticker in tickers:
+        for ticker in hist:
             df = hist[ticker]
             if date not in df.index:
                 continue

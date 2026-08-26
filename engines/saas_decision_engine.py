@@ -275,7 +275,12 @@ def run_decision_loop_for_user(user_id, dry_run=True):
     # cover (full-exit only, no partial profit-taking yet). Same
     # dry_run gating as the BUY side -- Preview never touches the
     # broker, Execute does.
-    if "ALPACA" in connected_brokers or "BINANCE" in connected_brokers:
+    if "ALPACA" in connected_brokers or "BINANCE" in connected_brokers or "ETORO" in connected_brokers:
+        # FOLLOW-UP 2026-08-26: ETORO added to this guard now that
+        # saas_exit_engine.py can close eToro positions (FOREX/
+        # COMMODITIES) -- without it here, a user with only eToro
+        # connected would never reach exit protection at all, no matter
+        # what saas_exit_engine.py itself supports.
         exit_results = exit_engine.check_and_apply_exits_for_user(user_id, dry_run=dry_run)
         results.extend(exit_results)
 

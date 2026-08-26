@@ -642,6 +642,54 @@ def buy_etoro_for_user(user_id, ticker, usd_amount):
     }
 
 
+def sell_etoro_for_user(user_id, position_id):
+    """
+    FOLLOW-UP 2026-08-26: closes an existing eToro position by its
+    position_id. Mirrors etoro_broker.close_position() exactly -- same
+    v1 API base + EXECUTION_PREFIX endpoint, same "look the position up
+    first to get its instrumentId, since the close endpoint requires it
+    in the body even though position_id is already in the URL" workaround
+    (see that function's docstring for the live-tested history behind
+    this). Used by saas_exit_engine.py once eToro is added to its
+    _ASSET_CLASS_BROKER map -- unlike sell_stock_for_user()/
+    sell_crypto_for_user(), this takes a position_id, not a ticker +
+    quantity, since that's what eToro's close endpoint actually needs;
+    the exit engine passes entry_order["broker_order_id"] (the eToro
+    positionID stored once the BUY confirmed filled, either at buy time
+    or via reconcile_user_etoro_orders()).
+
+    Confirmed synchronous by etoro_broker.close_position()'s own
+    live-testing notes (position gone from portfolio, credit updated,
+    immediately after this call returns) -- callers can treat a
+    successful return as a confirmed fill, same as Binance testnet
+    sells, no polling needed.
+    """
+    creds = _require_etoro_creds(user_id)
+
+    portfolio_response = requests.get(
+        f"{ETORO_API_BASE}/{_etoro_portfolio_path(creds)}",
+        headers=_etoro_headers_for_user(creds),
+        timeout=25,
+    )
+    portfolio_response.raise_for_status()
+    portfolio = portfolio_response.json().get("clientPortfolio", {})
+    position = next(
+        (p for p in portfolio.get("positions", []) if str(p.get("positionID")) == str(position_id)),
+        None,
+    )
+    if position is None:
+        raise ValueError(f"No open eToro position found with position_id {position_id}.")
+
+    response = requests.post(
+        f"{ETORO_API_BASE}/{_etoro_execution_prefix(creds)}/market-close-orders/positions/{position_id}",
+        headers=_etoro_headers_for_user(creds),
+        json={"instrumentId": position["instrumentID"]},
+        timeout=25,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def find_etoro_position_by_ticker_for_user(user_id, ticker):
     """
     FOLLOW-UP 2026-08-26: find this user's open eToro position for a

@@ -25,8 +25,6 @@ in app.py / engines/position_lifecycle_engine.py):
   ticker to closed even though most of the position is still open. Full-
   exit-only sidesteps that entirely. Building partial-exit support would
   need real lot/quantity tracking first, not a small addition.
-- US_STOCKS (Alpaca) and CRYPTO (Binance) only, same as the rest of the
-  SaaS execution stack -- no eToro execution exists yet.
 - Same manual-confirm-first pattern as the BUY side: dry_run=True
   previews what would be sold and why without touching the broker;
   dry_run=False actually sells. Deliberately does NOT run automatically
@@ -35,6 +33,23 @@ in app.py / engines/position_lifecycle_engine.py):
   meantime. This is a real gap, not an oversight: treat this as
   supervised-testing-only until a scheduler exists to run it
   unattended.
+
+FOLLOW-UP 2026-08-26: FOREX/COMMODITIES (eToro) added below now that
+sell_etoro_for_user() exists in saas_broker_factory.py. Both asset
+classes map to the same ETORO broker, so the outer loop dedupes by
+broker (processed_brokers) to avoid processing the same open eToro
+tickers twice under two different labels -- each ticker's real
+asset_class is read back off its own entry_order instead of trusted
+from the outer loop variable. An eToro position can only be closed by
+its position_id (stored as broker_order_id on the BUY once eToro
+confirmed the fill, either at buy time or via
+reconcile_user_etoro_orders()) -- a position with no broker_order_id on
+record yet is skipped with an error rather than guessed at, same
+"never fabricate an unconfirmed state" discipline as the rest of this
+file. eToro's close-position endpoint is synchronous (confirmed by
+etoro_broker.close_position()'s own live-testing history), so an eToro
+exit is always treated as immediately filled, same as the Binance
+branch.
 """
 
 from datetime import datetime
@@ -48,6 +63,8 @@ from config import MAX_HOLD_DAYS_HARD
 _ASSET_CLASS_BROKER = {
     "US_STOCKS": "ALPACA",
     "CRYPTO": "BINANCE",
+    "FOREX": "ETORO",
+    "COMMODITIES": "ETORO",
 }
 
 
@@ -108,9 +125,10 @@ def _decide_exit_reason(entry_order, current_price):
 
 def check_and_apply_exits_for_user(user_id, dry_run=True):
     """
-    Checks every currently-open US_STOCKS/CRYPTO position for this user
-    against its stored stop-loss/take-profit/max-hold-time, and closes
-    (or previews closing) any that have triggered.
+    Checks every currently-open position for this user (US_STOCKS,
+    CRYPTO, FOREX, COMMODITIES) against its stored stop-loss/take-profit/
+    max-hold-time, and closes (or previews closing) any that have
+    triggered.
 
     dry_run=True (default): reports what WOULD be sold and why, touches
     nothing. dry_run=False: actually sells via saas_broker_factory and
@@ -125,14 +143,28 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
     individual ticker's failure.
     """
     results = []
+    processed_brokers = set()
 
     for asset_class, broker in _ASSET_CLASS_BROKER.items():
+        if broker in processed_brokers:
+            # FOREX and COMMODITIES both map to ETORO -- without this
+            # guard the same open eToro tickers would be fetched and
+            # potentially closed twice per pass, once under each label.
+            continue
+        processed_brokers.add(broker)
+
         open_tickers = journal.list_open_tickers_for_user(user_id, broker)
 
         for ticker in open_tickers:
             entry_order = journal.get_most_recent_filled_buy_for_user(user_id, ticker, broker)
             if entry_order is None:
                 continue  # shouldn't happen if list_open_tickers_for_user is consistent, but never crash over it
+
+            # eToro tickers span two asset classes under one broker --
+            # trust the order's own recorded asset_class for reporting,
+            # not the outer loop variable (which is only correct for the
+            # first of the two labels once deduped above).
+            asset_class = entry_order.get("asset_class", asset_class)
 
             current_price = _get_current_price(ticker)
             if current_price is None:
@@ -173,7 +205,7 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
             broker_order_id = None
 
             try:
-                if asset_class == "US_STOCKS":
+                if broker == "ALPACA":
                     alpaca_response = factory.sell_stock_for_user(user_id, ticker, quantity)
                     broker_order_id = str(getattr(alpaca_response, "id", "") or "") or None
                     response_status = str(getattr(alpaca_response, "status", "") or "").lower()
@@ -183,6 +215,27 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
                         response_filled_price = getattr(alpaca_response, "filled_avg_price", None)
                         if response_filled_price:
                             filled_price = float(response_filled_price)
+                elif broker == "ETORO":
+                    position_id = entry_order.get("broker_order_id")
+                    if not position_id:
+                        results.append({
+                            "ticker": ticker,
+                            "asset_class": asset_class,
+                            "action": "error",
+                            "message": f"Exit triggered ({exit_reason}) but no confirmed eToro "
+                                       f"position_id on record yet -- will retry once "
+                                       f"reconciliation catches the BUY up.",
+                        })
+                        continue
+                    # eToro's close-position endpoint is synchronous --
+                    # see module docstring / sell_etoro_for_user()'s own
+                    # docstring for the live-tested history behind that.
+                    is_confirmed_filled = True
+                    broker_order_id = str(position_id)
+                    factory.sell_etoro_for_user(user_id, position_id)
+                    # No separate close price returned -- use the price
+                    # already fetched above for the exit decision, same
+                    # as the Binance branch.
                 else:
                     # Binance testnet market sells fill effectively
                     # synchronously -- same established assumption as

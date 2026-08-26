@@ -203,6 +203,8 @@ def check_user_etoro_connection(user_id):
     headers = {
         "x-api-key": creds["api_key"],
         "x-user-key": creds["api_secret"],  # stored as "api_secret" slot; eToro calls this the user key
+        "x-request-id": str(uuid.uuid4()),
+        "Content-Type": "application/json",
     }
 
     try:
@@ -638,3 +640,46 @@ def buy_etoro_for_user(user_id, ticker, usd_amount):
         "trailing_stop_set": trailing_stop_set,
         "raw": order,
     }
+
+
+def find_etoro_position_by_ticker_for_user(user_id, ticker):
+    """
+    FOLLOW-UP 2026-08-26: find this user's open eToro position for a
+    project ticker, if any -- used by saas_reconcile_engine.py's
+    reconcile_user_etoro_orders() to catch up a SUBMITTED order whose
+    buy_etoro_for_user() poll window elapsed before eToro confirmed the
+    fill (see that function's docstring; this is the eToro equivalent of
+    get_alpaca_order_status_for_user(), just matched by ticker rather
+    than a broker order id -- eToro's initial order-POST response does
+    include an orderId, but that id isn't persisted anywhere in the SaaS
+    order journal today, same "match by symbol, not order id" approach
+    etoro_broker.find_position_by_symbol() already established for the
+    single-owner bot).
+
+    Returns {"position_id", "open_price", "quantity"} for the first
+    matching open position, or None if this user holds no open position
+    for this ticker on eToro right now.
+    """
+    creds = _require_etoro_creds(user_id)
+    try:
+        instrument_id = _get_etoro_instrument_id_for_user(user_id, creds, ticker)
+    except ValueError:
+        return None
+
+    response = requests.get(
+        f"{ETORO_API_BASE}/{_etoro_portfolio_path(creds)}",
+        headers=_etoro_headers_for_user(creds),
+        timeout=25,
+    )
+    response.raise_for_status()
+    portfolio = response.json().get("clientPortfolio", {})
+
+    for p in portfolio.get("positions", []):
+        if p.get("instrumentID") == instrument_id:
+            return {
+                "position_id": p.get("positionID"),
+                "open_price": p.get("openRate"),
+                "quantity": p.get("amount"),
+            }
+
+    return None

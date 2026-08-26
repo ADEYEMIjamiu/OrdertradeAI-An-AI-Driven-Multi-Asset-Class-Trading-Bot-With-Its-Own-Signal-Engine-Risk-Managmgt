@@ -283,3 +283,27 @@ def load_pending_orders_for_user(user_id, broker):
     """, (user_id, broker)).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def load_pending_orders_for_user_by_ticker(user_id, broker):
+    """
+    Same idea as load_pending_orders_for_user(), but WITHOUT the
+    broker_order_id requirement -- eToro's buy_etoro_for_user() leaves
+    broker_order_id as None for a SUBMITTED-not-yet-confirmed order
+    (there's no confirmed position_id yet by definition), so the
+    broker_order_id-based loader above would never see these rows at
+    all. saas_reconcile_engine.py's reconcile_user_etoro_orders() uses
+    this instead, matching against the live eToro portfolio by ticker
+    (find_etoro_position_by_ticker_for_user()) rather than an order id --
+    mirrors the single-owner bot's reconcile_etoro_orders() (app.py),
+    which does the same ticker-based matching for the same reason.
+    """
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT * FROM saas_orders
+        WHERE user_id = ? AND broker = ? AND status = 'SUBMITTED'
+        ORDER BY created_at ASC
+    """, (user_id, broker)).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]

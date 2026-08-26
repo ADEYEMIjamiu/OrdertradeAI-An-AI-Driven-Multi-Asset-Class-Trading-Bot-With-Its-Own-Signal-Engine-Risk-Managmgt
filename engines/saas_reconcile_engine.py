@@ -21,8 +21,16 @@ CRYPTO is not included here on purpose: buy_crypto_for_user() already
 treats Binance testnet market orders as filled synchronously (matching
 binance_broker.py's own established behavior), so there's nothing for
 crypto orders to reconcile -- they're never left at SUBMITTED in the
-first place. eToro isn't included because there's no per-user eToro
-execution yet at all (see saas_broker_factory.py).
+first place.
+
+FOLLOW-UP 2026-08-26: reconcile_user_etoro_orders() added below now that
+per-user eToro execution exists (saas_broker_factory.py's
+buy_etoro_for_user()). Unlike Alpaca, an unconfirmed eToro order has no
+broker_order_id to look up (position_id is only known once eToro
+confirms the fill) -- so this matches by TICKER against the user's live
+eToro portfolio instead, same approach the single-owner bot's own
+reconcile_etoro_orders() (engines/broker_sync_engine.py) already
+established for exactly this reason.
 """
 
 import json
@@ -132,5 +140,61 @@ def reconcile_user_alpaca_orders(user_id):
 
         # Anything else (still "new"/"accepted"/"pending_new") -- leave
         # as SUBMITTED, nothing to update yet, no result entry needed.
+
+    return results
+
+
+def reconcile_user_etoro_orders(user_id):
+    """
+    Checks every SUBMITTED (not-yet-confirmed-filled) eToro order for
+    this user and updates the journal if a matching open position has
+    since appeared on eToro. See module docstring for why this matches
+    by ticker rather than a broker order id.
+
+    Never raises for an individual order's lookup failure -- same
+    per-order isolation as reconcile_user_alpaca_orders() above.
+    """
+    results = []
+
+    pending_orders = journal.load_pending_orders_for_user_by_ticker(user_id, "ETORO")
+    if not pending_orders:
+        return results
+
+    for order in pending_orders:
+        ticker = order.get("ticker")
+
+        try:
+            position = factory.find_etoro_position_by_ticker_for_user(user_id, ticker)
+        except Exception as e:
+            results.append({
+                "ticker": ticker,
+                "broker_order_id": order.get("broker_order_id"),
+                "old_status": "SUBMITTED",
+                "new_status": "SUBMITTED",
+                "message": f"Could not check status: {e}",
+            })
+            continue
+
+        if position is None:
+            # Still genuinely unconfirmed -- leave it for the next pass.
+            continue
+
+        order = _decode_priority(order)
+        order["broker_order_id"] = str(position["position_id"])
+        order = journal.mark_order_filled(
+            order,
+            filled_price=position.get("open_price") or order.get("price"),
+            filled_quantity=position.get("quantity") or order.get("quantity"),
+        )
+        journal.save_order(order)
+
+        results.append({
+            "ticker": ticker,
+            "broker_order_id": order.get("broker_order_id"),
+            "old_status": "SUBMITTED",
+            "new_status": "FILLED",
+            "message": f"{ticker} confirmed filled @ {order.get('filled_price')} "
+                       f"(late eToro confirmation, position {order['broker_order_id']}).",
+        })
 
     return results

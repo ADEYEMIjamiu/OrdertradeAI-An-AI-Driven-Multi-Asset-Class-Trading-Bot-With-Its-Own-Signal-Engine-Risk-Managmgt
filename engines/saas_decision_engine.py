@@ -318,6 +318,12 @@ def run_decision_loop_for_user(user_id, dry_run=True):
             "message": f"Could not load AI model: {e}",
         }]
 
+    # FOREX and COMMODITIES both map to broker="ETORO" (see
+    # _ASSET_CLASS_BROKER) -- without this guard, reconcile_user_etoro_
+    # orders() would run twice in the same tick if both are enabled.
+    # Harmless either way (idempotent), just wasted API calls.
+    reconciled_brokers = set()
+
     for asset_class, broker in _ASSET_CLASS_BROKER.items():
         if asset_class not in enabled_classes:
             continue
@@ -334,11 +340,20 @@ def run_decision_loop_for_user(user_id, dry_run=True):
         # Catch up any orders from a previous run that submitted but
         # hadn't confirmed filled yet -- must happen before open_count/
         # has_open_position_for_user checks below, otherwise a since-
-        # filled order would still read as "not open" this run. Alpaca
-        # only (see saas_reconcile_engine.py's docstring for why CRYPTO
-        # doesn't need this and eToro isn't included yet).
+        # filled order would still read as "not open" this run. CRYPTO
+        # doesn't need this (see saas_reconcile_engine.py's docstring).
         if broker == "ALPACA":
             reconcile_results = reconcile.reconcile_user_alpaca_orders(user_id)
+            for r in reconcile_results:
+                results.append({
+                    "ticker": r["ticker"],
+                    "asset_class": asset_class,
+                    "action": "reconciled",
+                    "message": r["message"],
+                })
+        elif broker == "ETORO" and broker not in reconciled_brokers:
+            reconciled_brokers.add(broker)
+            reconcile_results = reconcile.reconcile_user_etoro_orders(user_id)
             for r in reconcile_results:
                 results.append({
                     "ticker": r["ticker"],

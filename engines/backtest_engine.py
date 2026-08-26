@@ -105,6 +105,7 @@ from config import (
     REGIME_DEFENSIVE_SCORE,
 )
 
+from engines.market_data_engine import _normalise_symbol
 from engines.strategy_engine import identify_strategy, score_strategy
 from engines.scoring_engine import calculate_trade_score
 from engines.approval_engine import approve_trade
@@ -144,10 +145,18 @@ def load_history(ticker, start, end, max_retries=3):
     if os.path.exists(path):
         return pd.read_pickle(path)
 
+    # Share-class tickers (BRK.B, BF.B, ...) use dot notation in
+    # asset_universe.py (matching Alpaca's own API), but yfinance needs a
+    # hyphen (BRK-B) -- passing the dot form silently returns nothing.
+    # Reuses market_data_engine.py's own normalization (same fix, same
+    # reasoning as its 2026-07-30 history) rather than duplicating it, so
+    # this can never drift out of sync with what live trading does.
+    yf_ticker = _normalise_symbol(ticker)
+
     last_error = None
     for attempt in range(max_retries):
         try:
-            df = yf.download(ticker, start=warmup_start, end=end, interval="1d", auto_adjust=True, progress=False)
+            df = yf.download(yf_ticker, start=warmup_start, end=end, interval="1d", auto_adjust=True, progress=False)
             if df is not None and not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)

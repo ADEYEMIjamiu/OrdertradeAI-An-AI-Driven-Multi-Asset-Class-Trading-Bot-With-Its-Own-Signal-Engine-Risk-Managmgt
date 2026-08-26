@@ -592,6 +592,22 @@ def run_backtest(tickers, start, end, initial_balance=10000.0, leverage=1, max_o
             entry_price = row["Price ($)"]
             stop_loss = row["Stop Loss"]
 
+            # entry_price comes from signal_engine.py's round(price, 2) --
+            # correct fidelity to live for display/trade-plan purposes, but
+            # for sub-$0.01 assets (e.g. DOGE-USD was ~$0.002 in Jan 2020)
+            # it rounds straight to 0.00, which makes the whole trade plan
+            # (stop-loss/take-profit built off that price in trade_planner)
+            # meaningless and would divide-by-zero below. Live execution
+            # never hits this because it re-fetches a fresh full-precision
+            # price at order time (see binance_broker.buy_crypto) -- only
+            # the backtest reuses the rounded signal price for sizing, so
+            # this guard is backtest-only, not a live behavior to preserve.
+            if entry_price is None or entry_price <= 0:
+                if verbose:
+                    print(f"[{date.date()}] {ticker}: skipped -- price too small to size "
+                          f"(rounds to $0.00 at 2dp)")
+                continue
+
             trade_amount = calculate_trade_amount(
                 confidence=confidence,
                 market_df=market_df,

@@ -207,3 +207,79 @@ def load_orders_for_user(user_id, limit=200):
     """, (user_id, limit)).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def _latest_filled_status_by_ticker(user_id, broker):
+    """
+    For every ticker this user has ever had a FILLED order for on this
+    broker, return {ticker: side_of_most_recent_FILLED_order}. A ticker
+    whose most recent FILLED order is a BUY is treated as currently
+    open; SELL means it's been closed. Deliberately simple FIFO-free
+    open/closed tracking -- this SaaS journal has no lifecycle engine
+    yet (unlike the single-owner bot's position_lifecycle_engine.py),
+    so "most recent fill's side" is the only signal available. Good
+    enough to prevent double-buying/pyramiding a ticker the loop
+    already opened; NOT a substitute for real position tracking once
+    SELL-side automation is built.
+    """
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT ticker, side, updated_at FROM saas_orders
+        WHERE user_id = ? AND broker = ? AND status = 'FILLED'
+        ORDER BY updated_at ASC
+    """, (user_id, broker)).fetchall()
+    conn.close()
+
+    latest_side_by_ticker = {}
+    for row in rows:
+        # ORDER BY updated_at ASC means the last write per ticker wins,
+        # so this naturally ends up holding each ticker's most recent side.
+        latest_side_by_ticker[row["ticker"]] = row["side"]
+    return latest_side_by_ticker
+
+
+def has_open_position_for_user(user_id, ticker, broker):
+    """True if this user's most recent FILLED order for this ticker/broker
+    was a BUY with no FILLED SELL after it. See _latest_filled_status_by_ticker
+    docstring for the tracking method and its limits."""
+    latest = _latest_filled_status_by_ticker(user_id, broker)
+    return latest.get(ticker) == "BUY"
+
+
+def count_open_positions_for_user(user_id, broker):
+    """Count of tickers currently considered open for this user/broker
+    (see has_open_position_for_user)."""
+    latest = _latest_filled_status_by_ticker(user_id, broker)
+    return sum(1 for side in latest.values() if side == "BUY")
+
+
+def list_open_tickers_for_user(user_id, broker):
+    """Tickers currently considered open for this user/broker (see
+    has_open_position_for_user). Used by saas_exit_engine.py to know
+    which positions to check for stop-loss/take-profit/time-based exit."""
+    latest = _latest_filled_status_by_ticker(user_id, broker)
+    return [ticker for ticker, side in latest.items() if side == "BUY"]
+
+
+def load_pending_orders_for_user(user_id, broker):
+    """
+    Orders still sitting at SUBMITTED for this user/broker -- i.e. sent
+    to the broker but never confirmed FILLED at submit time (see the
+    2026-08-26 fix in saas_decision_engine.py: an Alpaca order that
+    responds "new"/"accepted" instead of "filled" is journaled this way
+    on purpose, rather than being guessed at). Used by
+    saas_reconcile_engine.py to find orders that need a follow-up status
+    check. Only rows with a broker_order_id are returned -- without one
+    there's nothing to look up.
+    """
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT * FROM saas_orders
+        WHERE user_id = ? AND broker = ? AND status = 'SUBMITTED'
+          AND broker_order_id IS NOT NULL AND broker_order_id != ''
+        ORDER BY created_at ASC
+    """, (user_id, broker)).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]

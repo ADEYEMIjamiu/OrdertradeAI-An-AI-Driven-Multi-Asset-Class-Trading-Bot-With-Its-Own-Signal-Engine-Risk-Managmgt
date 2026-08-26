@@ -207,6 +207,39 @@ def check_user_broker_connection(user_id, broker):
     return checker(user_id)
 
 
+def get_user_account_balance(user_id, asset_class):
+    """
+    Real, current spendable balance for this user's own broker account,
+    for whichever broker owns this asset class. Mirrors risk_engine.
+    get_account_balance()'s per-asset-class dispatch and never-raise
+    contract, but reads from THIS user's own credentials via the
+    checkers above instead of the single owner's global broker.py/
+    binance_broker.py. Used by the per-user decision loop
+    (saas_decision_engine.py) to size trades with calculate_trade_amount().
+
+    Only US_STOCKS (Alpaca) and CRYPTO (Binance) are wired here --
+    eToro execution isn't built yet (see module docstring), so FOREX/
+    COMMODITIES always return 0.0, which the decision loop correctly
+    reads as "can't trade this asset class for this user yet."
+    """
+    if asset_class == "CRYPTO":
+        result = check_user_binance_connection(user_id)
+        if not result.get("connected"):
+            return 0.0
+        return float(result.get("cash", 0) or 0)
+
+    if asset_class == "US_STOCKS":
+        result = check_user_alpaca_connection(user_id)
+        if not result.get("connected"):
+            return 0.0
+        # buying_power (not cash) so it reflects whatever margin/settlement
+        # rules Alpaca's own paper account already applies -- same field
+        # buy_stock_for_user() above checks before submitting an order.
+        return float(result.get("buying_power", 0) or 0)
+
+    return 0.0
+
+
 # ============================================================
 # ORDER EXECUTION -- Alpaca (stocks) and Binance (crypto) only.
 # See module docstring for why eToro isn't here yet and why
@@ -247,10 +280,19 @@ def buy_stock_for_user(user_id, symbol, dollars):
     broker.py's buy_stock(), but against THIS user's own paper account
     instead of the single owner's.
 
+    Returns Alpaca's raw order response object -- callers MUST check its
+    .status before treating this as filled (see app.py's
+    execute_alpaca_trades() comment on the 2026-08-08 rotation incident:
+    Alpaca's response right after submit_order() usually still reads
+    "accepted"/"pending_new" even when the real fill happens moments
+    later, so only an explicit "filled" status should ever be trusted).
+    engines/saas_decision_engine.py's execution branch does this check;
+    do not add a second stock-buying call site that skips it.
+
     Raises on insufficient buying power or any Alpaca API error --
-    callers (the future per-user execution loop) are expected to catch
-    and log/journal failures per user, the same way app.py's
-    execute_alpaca_trades() already does for the single-owner bot.
+    callers are expected to catch and log/journal failures per user, the
+    same way app.py's execute_alpaca_trades() already does for the
+    single-owner bot.
     """
     client = _require_alpaca_client(user_id)
     account = client.get_account()
@@ -266,6 +308,21 @@ def buy_stock_for_user(user_id, symbol, dollars):
         time_in_force=TimeInForce.DAY,
     )
     return client.submit_order(order_data=order)
+
+
+def get_alpaca_order_status_for_user(user_id, broker_order_id):
+    """
+    Look up the CURRENT status of a previously-submitted Alpaca order by
+    its broker_order_id, using this user's own credentials. Used by
+    saas_reconcile_engine.py to follow up on orders that were submitted
+    but not confirmed filled at the time (status "new"/"accepted" --
+    see saas_decision_engine.py's 2026-08-26 fix). Raises on API error
+    or missing credentials; callers should catch and skip that order
+    for this reconciliation pass rather than let one bad lookup stop the
+    rest.
+    """
+    client = _require_alpaca_client(user_id)
+    return client.get_order_by_id(broker_order_id)
 
 
 def sell_stock_for_user(user_id, symbol, qty):

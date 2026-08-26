@@ -18,17 +18,24 @@ never holds or pools anyone's funds), paper/demo-only at launch
 (enforced -- there is no UI control anywhere in this file to turn on
 live trading; that is intentional, not an oversight).
 
-NOT built yet, by design (this is the auth/connection layer only): the
-actual per-user trading engine loop. Today, saving broker credentials
-here stores them encrypted -- it does not yet start trading for that
-user. Wiring "connected users" into a real per-user execution loop is
-the next major piece of work after this.
+UPDATED 2026-08-26: the per-user AI decision loop is now wired in below
+(render_trading_run(), backed by engines/saas_decision_engine.py) --
+Preview generates signals and shows what would be bought without
+placing anything, Execute actually places the orders after an explicit
+confirmation checkbox. Still BUY-side only, still US_STOCKS/CRYPTO only
+(no eToro execution yet), still fully manual -- no scheduler, nothing
+runs unless a signed-in user clicks the buttons themselves. See
+saas_decision_engine.py's module docstring for the full scope and
+the gaps that are still open (no automated selling, no portfolio-level
+exposure cap) before this should be trusted beyond supervised testing.
 """
 
+import pandas as pd
 import streamlit as st
 
 from engines import tenant_engine as tenant
 from engines import saas_broker_factory
+from engines import saas_decision_engine
 
 st.set_page_config(
     page_title="OrderTrade AI -- Sign In",
@@ -199,6 +206,21 @@ def render_settings(user_id):
         "be changed from this page."
     )
 
+    # Deliberately its own immediate-effect toggle, outside the settings
+    # form below -- a kill switch shouldn't require also touching (or
+    # accidentally changing) position size / asset class settings to
+    # take effect, and shouldn't wait on a form submit either. Blocks
+    # new BUY evaluation only; stop-loss/take-profit/time-based exits on
+    # positions you already hold keep running even while paused -- see
+    # engines/saas_decision_engine.py.
+    is_paused = settings.get("trading_paused", False)
+    if is_paused:
+        st.error("⏸ Your AI trading is PAUSED -- no new positions will be opened. Existing positions still get exit protection.")
+    pause_label = "Resume my AI trading" if is_paused else "Pause my AI trading"
+    if st.button(pause_label, key="toggle_trading_paused"):
+        tenant.save_user_settings(user_id, trading_paused=not is_paused)
+        st.rerun()
+
     with st.form("settings_form"):
         max_position_size = st.slider(
             "Max position size (% of account per trade)",
@@ -223,6 +245,89 @@ def render_settings(user_id):
         st.rerun()
 
 
+def render_trading_run(user_id):
+    st.subheader("AI Trading")
+    st.caption(
+        "Checks your existing positions for stop-loss/take-profit/max-"
+        "hold-time exits, then runs the AI signal engine across your "
+        "enabled asset classes (US Stocks via Alpaca, Crypto via Binance "
+        "-- Forex/Commodities execution isn't built yet even if enabled "
+        "above), sizes any approved BUY against your real connected-"
+        "broker balance, and shows you exactly what it would do. Nothing "
+        "is ever bought or sold without you clicking Execute separately "
+        "below. Exit protection covers stop-loss/take-profit/a hard "
+        "max-hold-time only -- no partial profit-taking yet -- and, like "
+        "everything here, only runs when you click these buttons; there "
+        "is no background scheduler yet, so positions get no protection "
+        "between visits."
+    )
+
+    preview_clicked = st.button("Preview AI Signals", key="preview_signals")
+    if preview_clicked:
+        with st.spinner("Generating signals and checking your account..."):
+            st.session_state.saas_preview_results = (
+                saas_decision_engine.run_decision_loop_for_user(user_id, dry_run=True)
+            )
+        st.session_state.saas_preview_ran_for = user_id
+
+    results = st.session_state.get("saas_preview_results")
+    if results is not None and st.session_state.get("saas_preview_ran_for") == user_id:
+        df = pd.DataFrame(results)
+        st.dataframe(df, use_container_width=True)
+
+        buy_candidates = [r for r in results if r["action"] == "would_buy"]
+        sell_candidates = [r for r in results if r["action"] == "would_sell"]
+        if buy_candidates or sell_candidates:
+            parts = []
+            if buy_candidates:
+                parts.append(f"{len(buy_candidates)} BUY(s)")
+            if sell_candidates:
+                parts.append(f"{len(sell_candidates)} SELL(s) (exit protection)")
+            st.warning(
+                f"{' and '.join(parts)} would be placed with real "
+                f"(paper/testnet) orders on your connected broker account."
+            )
+            confirm = st.checkbox(
+                "I understand this will place real paper/testnet orders "
+                "on my connected broker account.",
+                key="saas_execute_confirm",
+            )
+            if st.button("Execute These Trades", disabled=not confirm, key="execute_trades"):
+                with st.spinner("Placing orders..."):
+                    # Re-runs the full loop live rather than replaying the
+                    # preview -- prices/approval can genuinely change in the
+                    # seconds between Preview and this click, and re-running
+                    # for real is the only way to size/execute off current
+                    # data instead of a possibly-stale preview.
+                    live_results = saas_decision_engine.run_decision_loop_for_user(
+                        user_id, dry_run=False
+                    )
+                st.session_state.saas_preview_results = None
+                st.session_state.pop("saas_execute_confirm", None)
+                st.dataframe(pd.DataFrame(live_results), use_container_width=True)
+                bought = [r for r in live_results if r["action"] == "bought"]
+                sold = [r for r in live_results if r["action"] == "sold"]
+                pending = [r for r in live_results if r["action"] == "submitted"]
+                reconciled = [r for r in live_results if r["action"] == "reconciled"]
+                failed = [r for r in live_results if r["action"] == "error"]
+                if bought:
+                    st.success(f"Bought {len(bought)} position(s).")
+                if sold:
+                    st.success(f"Sold {len(sold)} position(s) (exit protection).")
+                if reconciled:
+                    st.info(f"{len(reconciled)} previously-pending order(s) confirmed -- see table above.")
+                if pending:
+                    st.warning(
+                        f"{len(pending)} order(s) submitted to your broker but not yet "
+                        f"confirmed filled -- this will be caught up automatically the "
+                        f"next time you click Preview or Execute."
+                    )
+                if failed:
+                    st.error(f"{len(failed)} order(s) failed -- see table above.")
+        else:
+            st.info("No approved BUY candidates or exit triggers right now.")
+
+
 def render_dashboard():
     user = tenant.get_user(st.session_state.saas_user_id)
     if user is None:
@@ -244,6 +349,8 @@ def render_dashboard():
     render_broker_connections(user["user_id"])
     st.divider()
     render_settings(user["user_id"])
+    st.divider()
+    render_trading_run(user["user_id"])
 
 
 # ============================================================

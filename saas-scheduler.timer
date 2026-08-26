@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the OrderTrade AI SaaS decision loop every 5 minutes
+
+[Timer]
+# Matches the single-owner bot's own st_autorefresh(interval=300000)
+# cadence exactly -- see saas_scheduler.py's module docstring for why.
+OnUnitActiveSec=5min
+# Also fire shortly after boot so a droplet restart doesn't leave a
+# 5-minute gap with zero exit protection on anyone's positions.
+OnBootSec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

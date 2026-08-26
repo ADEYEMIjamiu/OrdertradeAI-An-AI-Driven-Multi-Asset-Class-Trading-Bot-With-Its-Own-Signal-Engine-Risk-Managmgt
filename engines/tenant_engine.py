@@ -83,6 +83,19 @@ def _get_connection():
             FOREIGN KEY(user_id) REFERENCES users(user_id)
         )
     """)
+    # Migration for databases created before 2026-08-26 (trading_paused
+    # didn't exist yet) -- CREATE TABLE IF NOT EXISTS above is a no-op on
+    # an existing table, so this ADD COLUMN is the only way an already-
+    # running install picks up the new column. Wrapped in try/except:
+    # SQLite has no "ADD COLUMN IF NOT EXISTS", and re-running this on a
+    # database that already has the column would otherwise raise
+    # OperationalError on every single connection.
+    try:
+        conn.execute(
+            "ALTER TABLE user_settings ADD COLUMN trading_paused INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass  # column already exists
     return conn
 
 
@@ -280,6 +293,25 @@ def get_broker_credentials(user_id, broker):
         conn.close()
 
 
+def list_active_users():
+    """
+    All active user_ids (is_active=1), for the background scheduler
+    (saas_scheduler.py) to iterate over -- one decision-loop run per
+    user, per tick. Deliberately doesn't filter by trading_paused here;
+    saas_decision_engine.run_decision_loop_for_user() already checks
+    that per user (and still needs to run for a paused user anyway, so
+    exit protection on their existing positions keeps working).
+    """
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT user_id FROM users WHERE is_active = 1"
+        ).fetchall()
+        return [r[0] for r in rows]
+    finally:
+        conn.close()
+
+
 def list_connected_brokers(user_id):
     """Broker names this user has saved credentials for, no secrets included."""
     conn = _get_connection()
@@ -304,7 +336,7 @@ def get_user_settings(user_id):
     conn = _get_connection()
     try:
         row = conn.execute(
-            "SELECT max_position_size, enabled_asset_classes, allow_live_trading "
+            "SELECT max_position_size, enabled_asset_classes, allow_live_trading, trading_paused "
             "FROM user_settings WHERE user_id = ?",
             (user_id,),
         ).fetchone()
@@ -315,12 +347,15 @@ def get_user_settings(user_id):
             "max_position_size": row[0],
             "enabled_asset_classes": json.loads(row[1]),
             "allow_live_trading": bool(row[2]),
+            "trading_paused": bool(row[3]),
         }
     finally:
         conn.close()
 
 
-def save_user_settings(user_id, max_position_size=None, enabled_asset_classes=None):
+def save_user_settings(
+    user_id, max_position_size=None, enabled_asset_classes=None, trading_paused=None
+):
     """
     Updates a user's own settings. allow_live_trading is deliberately
     NOT a parameter here -- flipping paper/demo to real money is not
@@ -328,6 +363,15 @@ def save_user_settings(user_id, max_position_size=None, enabled_asset_classes=No
     module docstring: paper/demo-only at launch). If/when that changes,
     it should be its own explicit, audited action, not folded into a
     general settings update.
+
+    trading_paused (added 2026-08-26) is this user's own kill switch --
+    when True, engines/saas_decision_engine.py skips evaluating any new
+    BUY signals for this user entirely, while still running exit
+    protection (stop-loss/take-profit/time-exit) on positions they
+    already hold. Mirrors the single-owner bot's EXECUTION_KILL_SWITCH
+    semantics (blocks new entries, never blocks protective exits) --
+    see that constant's usage in app.py for why exits are deliberately
+    exempt.
     """
     import json
     conn = _get_connection()
@@ -344,12 +388,16 @@ def save_user_settings(user_id, max_position_size=None, enabled_asset_classes=No
             json.dumps(enabled_asset_classes) if enabled_asset_classes is not None
             else json.dumps(existing["enabled_asset_classes"])
         )
+        new_trading_paused = (
+            int(bool(trading_paused)) if trading_paused is not None
+            else int(existing["trading_paused"])
+        )
         now = datetime.now(timezone.utc).isoformat()
 
         conn.execute(
             "UPDATE user_settings SET max_position_size = ?, enabled_asset_classes = ?, "
-            "updated_at = ? WHERE user_id = ?",
-            (new_max_position_size, new_enabled_classes, now, user_id),
+            "trading_paused = ?, updated_at = ? WHERE user_id = ?",
+            (new_max_position_size, new_enabled_classes, new_trading_paused, now, user_id),
         )
         conn.commit()
         return True

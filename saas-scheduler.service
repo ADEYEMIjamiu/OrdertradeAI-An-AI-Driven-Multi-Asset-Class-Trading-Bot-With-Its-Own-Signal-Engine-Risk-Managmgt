@@ -1,0 +1,15 @@
+[Unit]
+Description=OrderTrade AI SaaS decision-loop tick (one-shot, triggered by saas-scheduler.timer)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Matches ordertrade-ai.service's own layout convention -- update these
+# two paths if the SaaS code ever lives somewhere other than the same
+# project root as the single-owner bot.
+WorkingDirectory=/root/AI-Trading-Bot
+ExecStart=/root/AI-Trading-Bot/venv/bin/python3 /root/AI-Trading-Bot/saas_scheduler.py
+# Not a long-running process -- one tick, then exit. The .timer unit is
+# what makes this recur; this .service unit alone does nothing on its
+# own schedule.

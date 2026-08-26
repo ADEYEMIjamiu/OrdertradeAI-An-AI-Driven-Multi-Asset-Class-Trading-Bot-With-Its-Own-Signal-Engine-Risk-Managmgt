@@ -7,6 +7,7 @@ __pycache__/
 logs/
 .streamlit/secrets.toml
 emergency_stop.flag
+saas_emergency_stop.flag
 
 # Runtime state files -- only ever exist on the droplet, never meant to
 # be part of source control.

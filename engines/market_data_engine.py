@@ -1,8 +1,58 @@
 from datetime import datetime, timezone
+import threading
 import time
 
 import pandas as pd
 import yfinance as yf
+
+
+def _download_with_hard_deadline(download_kwargs: dict, hard_deadline_seconds: float = 20.0):
+    """
+    Runs yf.download() in a background thread and stops waiting on it
+    after hard_deadline_seconds, regardless of what yfinance is doing
+    internally.
+
+    Discovered 2026-08-26: yf.download()'s own `timeout` kwarg only
+    bounds a single HTTP call -- it does NOT bound Yahoo's rate-limit
+    retry/backoff behaviour inside yfinance itself, which can run well
+    past that. Confirmed live: one saas_scheduler.py tick took 6m45s
+    wall-clock time against only 23.7s of actual CPU time (i.e. almost
+    all of it spent waiting), while every other tick that run took under
+    10 seconds total. The `timeout` kwarg passed in download_kwargs
+    below is kept as a first line of defense, but this thread-based
+    external deadline is what actually guarantees the caller never
+    blocks longer than hard_deadline_seconds, independent of yfinance's
+    internal behaviour.
+
+    The worker thread is daemon=True and deliberately never joined
+    without a timeout -- if yfinance really is stuck, this function
+    returns control to the caller anyway and the orphaned thread is
+    killed automatically when the process exits (this matters for
+    saas_scheduler.py, a one-shot script that must be able to exit
+    cleanly every tick even if a download never returns).
+    """
+    result: dict = {}
+
+    def _worker():
+        try:
+            result["df"] = yf.download(**download_kwargs)
+        except Exception as exc:
+            result["error"] = exc
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    thread.join(timeout=hard_deadline_seconds)
+
+    if thread.is_alive():
+        raise TimeoutError(
+            f"yf.download did not return within {hard_deadline_seconds}s "
+            "(hard deadline hit -- Yahoo likely rate-limiting or stalled)."
+        )
+
+    if "error" in result:
+        raise result["error"]
+
+    return result.get("df")
 
 
 # ============================================================
@@ -157,6 +207,17 @@ def get_market_data(
                 "auto_adjust": auto_adjust,
                 "progress": False,
                 "threads": False,
+                # yfinance already defaults this to 10s, but passed
+                # explicitly as a first line of defense. NOTE: this alone
+                # does NOT reliably bound a stalled call -- Yahoo's
+                # rate-limit retry/backoff behaviour inside yfinance can
+                # run well past this. The real bound is the external
+                # thread-join hard deadline in _download_with_hard_deadline()
+                # above -- see its docstring for the live incident this
+                # was built to fix (2026-08-26, one saas_scheduler tick
+                # took 6m45s wall-clock vs 23.7s CPU time despite this
+                # default already being in place).
+                "timeout": 15,
             }
 
             if start is not None:
@@ -168,7 +229,7 @@ def get_market_data(
             if start is None and end is None and period is not None:
                 download_kwargs["period"] = period
 
-            df = yf.download(**download_kwargs)
+            df = _download_with_hard_deadline(download_kwargs, hard_deadline_seconds=20.0)
 
             valid, validation_message = _validate_market_data(
                 df,

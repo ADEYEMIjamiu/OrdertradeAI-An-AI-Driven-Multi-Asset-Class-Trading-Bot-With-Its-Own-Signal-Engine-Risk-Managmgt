@@ -137,7 +137,10 @@ DANGER_RISK_MULTIPLIER = 0.25
 # Trade Planning Engine
 ATR_STOP_MULTIPLIER = 1.5           # placeholder
 ATR_TAKE_PROFIT_MULTIPLIER = 2.5    # placeholder, kept as a fallback only, see trade_planner.py
-TRADE_PLAN_LOOKBACK_DAYS = 20       # swing high/low window for take-profit targets
+# Validated 2026-08-27 via tune_stop_targets.py's out-of-sample sweep --
+# see the dated comment on this same constant in config.py for the full
+# before/after numbers. 20 was the old default before that sweep.
+TRADE_PLAN_LOOKBACK_DAYS = 40       # swing high/low window for take-profit targets
 MIN_RISK_REWARD_RATIO = 1.0
 
 # Trade Grade tiers (engines/trade_planner.py). Both confidence AND

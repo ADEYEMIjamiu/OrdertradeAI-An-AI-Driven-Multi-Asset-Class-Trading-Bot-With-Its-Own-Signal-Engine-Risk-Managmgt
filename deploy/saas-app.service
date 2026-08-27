@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/root/AI-Trading-Bot
-ExecStart=/root/AI-Trading-Bot/venv/bin/streamlit run saas_app.py --server.port=8502 --server.address=127.0.0.1
+ExecStart=/root/AI-Trading-Bot/venv/bin/streamlit run saas_app.py --server.port=8502 --server.address=127.0.0.1 --server.baseUrlPath=saas
 Restart=always
 RestartSec=5
 

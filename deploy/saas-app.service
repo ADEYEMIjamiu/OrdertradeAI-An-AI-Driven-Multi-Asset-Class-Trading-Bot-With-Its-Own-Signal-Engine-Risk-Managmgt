@@ -1,0 +1,14 @@
+[Unit]
+Description=OrderTrade AI SaaS dashboard (multi-user, bring-your-own-broker)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/AI-Trading-Bot
+ExecStart=/root/AI-Trading-Bot/venv/bin/streamlit run saas_app.py --server.port=8502 --server.address=127.0.0.1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -29,3 +29,7 @@ models/
 # derived, and machine-specific; never meant to be committed.
 backtest_cache/
 backtest_results/
+
+# tune_backtest.py's parameter-sweep output -- same reasoning as
+# backtest_results/ above.
+tuning_results/

@@ -187,6 +187,8 @@ def main():
     print("BASELINE (current config.py defaults) out-of-sample:")
     print("  " + _fmt_row(baseline_oos))
 
+    oos_records = [dict(baseline_oos, label="BASELINE", holds_up=None)]
+
     for i, candidate in enumerate(top_candidates, 1):
         confidence = candidate["min_trade_confidence"]
         risk_reward = candidate["min_risk_reward_ratio"]
@@ -201,8 +203,23 @@ def main():
         verdict = "HOLDS UP vs baseline out-of-sample -- worth adopting" if holds_up else \
                   "does NOT clearly beat baseline out-of-sample -- likely overfit to in-sample window, do not adopt"
         print(f"  verdict: {verdict}")
+        oos_records.append(dict(oos_row, label=f"candidate_{i}", holds_up=holds_up))
 
     print("=" * 90)
+
+    # Same reasoning as the in-sample CSV above -- printed terminal output
+    # for a multi-hour run scrolls off into thousands of interleaved
+    # per-signal log lines (approval_engine.py/signal_engine.py print
+    # unconditionally, not gated by any verbose flag here), making it
+    # painful to recover results after the fact. Persist this too.
+    oos_out_path = out_path.replace(".csv", "_out_of_sample.csv") if out_path.endswith(".csv") \
+        else out_path + "_out_of_sample.csv"
+    with open(oos_out_path, "w", newline="") as f:
+        fieldnames = list(oos_records[0].keys())
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(oos_records)
+    print(f"Out-of-sample validation (baseline + top {len(top_candidates)} candidates) written to: {oos_out_path}")
 
 
 if __name__ == "__main__":

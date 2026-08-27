@@ -101,15 +101,19 @@ need this (see that file's docstring); eToro now has per-user execution
 (FOLLOW-UP 2026-08-26, see saas_broker_factory.py) but still no
 reconciliation pass of its own -- see that file's docstring for why.
 
-NOT included: portfolio-level exposure cap (MAX_PORTFOLIO_EXPOSURE) --
-the single-owner bot's version of this reads live equity across all
-positions, which would need a per-user equivalent of
-calculate_portfolio_value()/get_exposure_percent() that doesn't exist
-yet. The single-trade budget cap already inside calculate_trade_amount()
-(account_balance * MAX_POSITION_SIZE per trade) plus the per-asset-class
-position-count cap are the real safety rails for this version. Flagged
-here so this isn't mistaken for full parity with the single-owner bot's
-risk_engine.py.
+FIX 2026-08-27: portfolio-level exposure cap (MAX_PORTFOLIO_EXPOSURE) is
+now enforced too -- see saas_broker_factory.get_user_exposure_percent()
+and its call site below (right after the balance check, once per asset
+class). This was flagged here as a real gap after a full-universe
+backtest run exposed how thin this strategy's overall edge actually is
+(see backtest_engine.py's tuning history) -- with a modest edge, keeping
+any single user from over-concentrating into one asset class matters
+more, not less. Computed per-broker (Alpaca/Binance/eToro are separate
+account pools per user, not one blended portfolio), same reasoning as
+the single-owner bot's own get_exposure_percent(). The single-trade
+budget cap already inside calculate_trade_amount() (account_balance *
+MAX_POSITION_SIZE per trade) and the per-asset-class position-count cap
+remain the other real safety rails for this version.
 """
 
 from datetime import datetime, timedelta
@@ -139,6 +143,7 @@ from config import (
     TRADE_COOLDOWN_MINUTES,
     CRYPTO_MAX_TRADES_PER_DAY,
     CRYPTO_TRADE_COOLDOWN_MINUTES,
+    MAX_PORTFOLIO_EXPOSURE,
 )
 
 MODEL_PATH = "models/trading_model.pkl"
@@ -375,6 +380,28 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                 "action": "skipped",
                 "message": f"No usable {broker.title()} balance detected -- "
                            f"cannot size any trade.",
+            })
+            continue
+
+        # Portfolio-level exposure cap -- added 2026-08-27, closing the
+        # gap this module's own docstring flagged ("NOT included:
+        # portfolio-level exposure cap"). Computed once per asset class
+        # here (not per-ticker below) since it doesn't change within a
+        # single run and an extra broker API call per candidate ticker
+        # would be wasteful. See saas_broker_factory.get_user_exposure_
+        # percent() for why this is scoped per-broker, not blended across
+        # a user's Alpaca/Binance/eToro accounts.
+        exposure_percent = factory.get_user_exposure_percent(user_id, asset_class)
+        if exposure_percent >= MAX_PORTFOLIO_EXPOSURE * 100:
+            results.append({
+                "ticker": None,
+                "asset_class": asset_class,
+                "action": "skipped",
+                "message": f"Maximum portfolio exposure reached for "
+                           f"{broker.title()} ({exposure_percent:.1f}% >= "
+                           f"{MAX_PORTFOLIO_EXPOSURE * 100:.0f}% cap) -- "
+                           f"no new {asset_class} positions until an "
+                           f"existing one closes.",
             })
             continue
 

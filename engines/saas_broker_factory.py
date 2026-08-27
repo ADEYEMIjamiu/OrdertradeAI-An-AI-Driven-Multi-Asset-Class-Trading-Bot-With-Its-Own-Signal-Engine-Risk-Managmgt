@@ -289,6 +289,127 @@ def get_user_account_balance(user_id, asset_class):
     return 0.0
 
 
+def get_user_exposure_percent(user_id, asset_class):
+    """
+    Added 2026-08-27 to close the gap saas_decision_engine.py's own
+    module docstring flagged: "NOT included: portfolio-level exposure
+    cap (MAX_PORTFOLIO_EXPOSURE)". Per-user equivalent of risk_engine.
+    get_exposure_percent() -- % of this user's account equity already
+    tied up in open positions, for whichever broker owns this
+    asset_class.
+
+    Computed PER BROKER, not blended across a user's Alpaca/Binance/eToro
+    accounts -- those are three separate, unrelated external broker
+    accounts (bring-your-own-broker, see this module's own docstring),
+    not one shared portfolio, so a single blended number across all
+    three would be meaningless. This mirrors the single-owner bot's own
+    get_exposure_percent(), which (in its LIVE_TRADING branch) is
+    likewise Alpaca-specific, not a cross-broker blend.
+
+    Never raises -- returns 0.0 on any failure, same never-raise
+    contract as get_user_account_balance() above. A genuinely broken
+    connection is already caught earlier in the caller's own balance
+    check; this failing open (0% exposure) rather than closed just means
+    a bad connection blocks trading via the balance==0 gate, not this one
+    silently double-blocking with a less useful error message.
+    """
+    if asset_class == "US_STOCKS":
+        result = check_user_alpaca_connection(user_id)
+        if not result.get("connected"):
+            return 0.0
+        equity = float(result.get("equity", 0) or 0)
+        cash = float(result.get("cash", 0) or 0)
+        if equity <= 0:
+            return 0.0
+        invested = max(equity - cash, 0.0)
+        return (invested / equity) * 100
+
+    if asset_class == "CRYPTO":
+        return _get_binance_exposure_percent(user_id)
+
+    if asset_class in ("FOREX", "COMMODITIES"):
+        return _get_etoro_exposure_percent(user_id)
+
+    return 0.0
+
+
+def _get_binance_exposure_percent(user_id):
+    """Values only TRACKED_ASSETS (this project's actual crypto universe)
+    at a fresh per-coin ticker price -- mirrors binance_broker.
+    get_positions()'s own dust-filtering reasoning (a testnet account
+    commonly holds dozens of unrelated pre-seeded coins that would
+    otherwise inflate "invested" with noise this bot never traded)."""
+    try:
+        exchange = _require_binance_exchange(user_id)
+    except Exception:
+        return 0.0
+
+    try:
+        from data.asset_universe import ASSET_UNIVERSE
+        tracked = {t.replace("-USD", "") for t in ASSET_UNIVERSE["CRYPTO"]["symbols"]}
+
+        balance = exchange.fetch_balance()
+        free_usdt = float(balance.get("USDT", {}).get("free", 0) or 0)
+
+        crypto_value = 0.0
+        for asset, total_qty in balance.get("total", {}).items():
+            if asset not in tracked or not total_qty:
+                continue
+            try:
+                price = float(exchange.fetch_ticker(f"{asset}/USDT").get("last") or 0)
+            except Exception:
+                continue  # one bad ticker lookup shouldn't zero out the whole calculation
+            crypto_value += float(total_qty) * price
+
+        portfolio_value = free_usdt + crypto_value
+        if portfolio_value <= 0:
+            return 0.0
+        return (crypto_value / portfolio_value) * 100
+    except Exception:
+        return 0.0
+
+
+def _get_etoro_exposure_percent(user_id):
+    """Duplicates check_user_etoro_connection()'s portfolio fetch rather
+    than reusing it, since that function returns cash/equity only, not
+    the per-position "amount" (invested/margin, same field buy()/
+    etoro_broker.py already treat as position size) this needs. Costs one
+    extra eToro API call per run when FOREX/COMMODITIES are both
+    enabled -- same already-accepted tradeoff get_user_account_balance()
+    above has (it also calls check_user_etoro_connection() once per
+    asset class even though both share one eToro account)."""
+    creds = tenant.get_broker_credentials(user_id, "ETORO")
+    if creds is None:
+        return 0.0
+
+    is_demo = creds["environment"] != "real"
+    portfolio_path = "trading/info/demo/portfolio" if is_demo else "trading/info/portfolio"
+    api_base = "https://public-api.etoro.com/api/v1"
+    headers = {
+        "x-api-key": creds["api_key"],
+        "x-user-key": creds["api_secret"],
+        "x-request-id": str(uuid.uuid4()),
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.get(f"{api_base}/{portfolio_path}", headers=headers, timeout=15)
+        response.raise_for_status()
+        portfolio = response.json().get("clientPortfolio", {})
+
+        credit = float(portfolio.get("credit", 0.0))
+        positions = portfolio.get("positions", [])
+        unrealized_pnl = sum(float(p.get("netProfit", 0) or 0) for p in positions)
+        invested = sum(float(p.get("amount", 0) or 0) for p in positions)
+
+        equity = credit + unrealized_pnl
+        if equity <= 0:
+            return 0.0
+        return (invested / equity) * 100
+    except Exception:
+        return 0.0
+
+
 # ============================================================
 # ORDER EXECUTION -- Alpaca (stocks) and Binance (crypto) only.
 # See module docstring for why eToro isn't here yet and why

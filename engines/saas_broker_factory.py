@@ -548,6 +548,19 @@ def get_user_crypto_held_qty(user_id, ticker):
     Never raises -- returns 0.0 on any failure (no credentials, API
     error, ticker not held, etc.), so a lookup failure fails toward "sell
     nothing" rather than an unguarded exception reaching the caller.
+
+    FIX 2026-08-27 (same day, found immediately after deploying the
+    first version of this function): originally read balance["total"]
+    (free + locked/used), which still produced "insufficient balance"
+    live -- confirmed the sell WAS attempted (not skipped as zero-held),
+    so real_qty was > 0 but still exceeded what Binance would actually
+    let go. Only balance["free"] is genuinely sellable; "total" can
+    overstate that if any of the asset is locked in another open order
+    or otherwise reserved. Now reads "free". Note: binance_broker.py's
+    own get_positions() (the single-owner bot's reference this function
+    was modeled on) still reads "total" -- same latent gap there, not
+    fixed here since it's out of scope for this SaaS-side bug, but worth
+    a follow-up if the single-owner bot ever hits the same failure.
     """
     try:
         exchange = _require_binance_exchange(user_id)
@@ -557,7 +570,7 @@ def get_user_crypto_held_qty(user_id, ticker):
     try:
         base_asset = ticker.replace("-USD", "")
         balance = exchange.fetch_balance()
-        return float(balance.get("total", {}).get(base_asset, 0) or 0)
+        return float(balance.get("free", {}).get(base_asset, 0) or 0)
     except Exception:
         return 0.0
 

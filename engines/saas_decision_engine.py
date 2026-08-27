@@ -131,6 +131,7 @@ from engines import saas_broker_factory as factory
 from engines import saas_order_manager as journal
 from engines import saas_reconcile_engine as reconcile
 from engines import saas_exit_engine as exit_engine
+from engines import saas_etoro_trailing_engine as etoro_trailing_engine
 from engines import saas_emergency_stop
 from data.asset_universe import ASSET_UNIVERSE
 
@@ -288,6 +289,20 @@ def run_decision_loop_for_user(user_id, dry_run=True):
         # what saas_exit_engine.py itself supports.
         exit_results = exit_engine.check_and_apply_exits_for_user(user_id, dry_run=dry_run)
         results.extend(exit_results)
+
+    # eToro trailing-stop ratchet -- added 2026-08-27, closing the gap
+    # flagged in saas_broker_factory.py's module docstring ("no per-user
+    # equivalent of app.py's apply_etoro_trailing_lock()"). Runs
+    # unconditionally (not gated by dry_run, and not gated by the kill
+    # switches below) because it can only ever tighten protection on an
+    # ALREADY-open position -- it PATCHes a stop-loss up, never places a
+    # new order, never touches account funds, and never moves a stop
+    # down -- same reasoning as why exit protection above also isn't
+    # kill-switch-gated. A platform-wide halt should stop new BUYs, not
+    # strip existing positions of their best-available protection.
+    if "ETORO" in connected_brokers:
+        trailing_results = etoro_trailing_engine.apply_etoro_trailing_lock_for_user(user_id)
+        results.extend(trailing_results)
 
     # Kill switches -- both block new BUY evaluation only, never the
     # exit protection above (matches the single-owner bot's

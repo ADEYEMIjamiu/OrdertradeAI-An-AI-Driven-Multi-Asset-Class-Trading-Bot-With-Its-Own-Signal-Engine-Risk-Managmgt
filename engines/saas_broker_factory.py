@@ -46,22 +46,20 @@ is ~16k identical instruments regardless of whose key fetches it) in
 exchange for the same no-shared-state-across-users guarantee every other
 per-user function in this file already has.
 
-KNOWN GAP: buy_etoro_for_user() places the initial order (with a real
-broker-side fixed stop-loss/take-profit, same as etoro_broker.py's own
-buy()) and best-effort upgrades it to a broker-side TRAILING stop, but
-there is no per-user equivalent of app.py's apply_etoro_trailing_lock()
-(the single-owner bot's own workaround for eToro's trailing stop not
-actually working as documented -- see etoro_broker.py's 2026-08-24
-comment). SaaS eToro positions get the initial fixed 3%/5% band and
-whatever eToro's own (unreliable) trailing flag does, not the
-single-owner bot's proven local ratcheting. Also NOT included: eToro
-positions in engines/saas_exit_engine.py -- that module only checks
-US_STOCKS/CRYPTO for exits (relies on saas_order_manager's simple
-most-recent-FILLED tracking); an eToro SELL signal from the AI is still
-shown in results but never acted on, same "BUY-side new entries first"
-scoping this whole decision loop already has, just extended to this
-broker too. Both are real gaps worth closing before this is trusted
-beyond supervised testing, same caveat as everything else in this file.
+RESOLVED 2026-08-27 (was "KNOWN GAP" here): buy_etoro_for_user() places
+the initial order (with a real broker-side fixed stop-loss/take-profit,
+same as etoro_broker.py's own buy()) and best-effort upgrades it to a
+broker-side TRAILING stop -- there is now also a per-user equivalent of
+app.py's apply_etoro_trailing_lock() (the single-owner bot's own
+workaround for eToro's trailing stop not actually working as documented
+-- see etoro_broker.py's 2026-08-24 comment): see engines/saas_etoro_
+trailing_engine.py's apply_etoro_trailing_lock_for_user(), which uses
+get_user_etoro_positions()/set_etoro_fixed_stop_loss_for_user() below
+and is wired into saas_decision_engine.run_decision_loop_for_user() to
+run every scheduler tick. eToro positions in engines/saas_exit_engine.py
+were ALSO already resolved (see that file's own 2026-08-26 FOLLOW-UP
+note) -- this paragraph was stale, describing a state that no longer
+matched the code below it.
 
 SAFETY -- read this before changing paper=True / set_sandbox_mode(True)
 below: both are hardcoded, not derived from user_settings or the stored
@@ -896,6 +894,76 @@ def find_etoro_position_by_ticker_for_user(user_id, ticker):
             }
 
     return None
+
+
+def get_user_etoro_positions(user_id):
+    """
+    Per-user equivalent of etoro_broker.get_positions() -- full list of
+    this user's open eToro positions, with enough detail (position_id/
+    direction/open_price/stop_loss_rate/take_profit_rate) for
+    engines/saas_etoro_trailing_engine.py's apply_etoro_trailing_lock_
+    for_user() to ratchet stops the same way the single-owner bot's own
+    apply_etoro_trailing_lock() (app.py) already does. Field names/shape
+    deliberately mirror that function exactly -- see its docstring for
+    why the raw eToro API fields differ from eToro's own documented
+    field names (instrumentID not instrumentName, amount not
+    investedAmount, positionID not positionId, etc).
+    """
+    creds = _require_etoro_creds(user_id)
+
+    response = requests.get(
+        f"{ETORO_API_BASE}/{_etoro_portfolio_path(creds)}",
+        headers=_etoro_headers_for_user(creds),
+        timeout=25,
+    )
+    response.raise_for_status()
+    portfolio = response.json().get("clientPortfolio", {})
+    raw_positions = portfolio.get("positions", [])
+
+    catalog = _load_etoro_catalog_for_user(user_id, creds)
+    id_to_symbol = {v: k for k, v in catalog.items()}
+
+    positions = []
+    for p in raw_positions:
+        positions.append({
+            "symbol": id_to_symbol.get(p.get("instrumentID")),
+            "qty": float(p.get("amount") or 0),
+            "position_id": p.get("positionID"),
+            "direction": "LONG" if p.get("isBuy") else "SHORT",
+            "open_price": p.get("openRate"),
+            "stop_loss_rate": p.get("stopLossRate"),
+            "take_profit_rate": p.get("takeProfitRate"),
+        })
+    return positions
+
+
+def set_etoro_fixed_stop_loss_for_user(user_id, position_id, stop_loss_rate, take_profit_rate=None):
+    """
+    Per-user equivalent of etoro_broker.set_fixed_stop_loss() -- PATCH an
+    updated FIXED (never "trailing" -- see that function's docstring for
+    why eToro's own trailing flag isn't trusted) stop-loss level to an
+    already-open position. Used by apply_etoro_trailing_lock_for_user()
+    to push a ratcheted stop as price makes new highs. take_profit_rate
+    is passed through unchanged, same reasoning as the single-owner
+    version: the take-profit stays in place as a hard ceiling regardless
+    of how far the stop-loss has been ratcheted.
+
+    Callers must wrap this in try/except -- a failed PATCH here must
+    never be allowed to look like a successful update.
+    """
+    creds = _require_etoro_creds(user_id)
+    payload = {"stopLossType": "fixed", "stopLossRate": stop_loss_rate}
+    if take_profit_rate is not None:
+        payload["takeProfitRate"] = take_profit_rate
+
+    response = requests.patch(
+        f"{ETORO_EXECUTION_BASE_V2}/{_etoro_positions_prefix(creds)}/positions/{position_id}",
+        headers=_etoro_headers_for_user(creds),
+        json=payload,
+        timeout=25,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 # ============================================================

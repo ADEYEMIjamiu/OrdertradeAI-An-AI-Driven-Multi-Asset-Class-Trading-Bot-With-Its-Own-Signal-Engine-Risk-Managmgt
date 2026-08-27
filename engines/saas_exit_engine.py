@@ -237,6 +237,36 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
                     # already fetched above for the exit decision, same
                     # as the Binance branch.
                 else:
+                    # FIX 2026-08-27: `quantity` above comes from the
+                    # ORIGINAL BUY order's journaled filled_quantity,
+                    # which can drift from the wallet's real current
+                    # balance -- confirmed live: a SOL-USD take-profit
+                    # exit failed with "Account has insufficient balance
+                    # for requested action" because the journal's
+                    # quantity exceeded what was actually held. Same
+                    # class of bug the single-owner bot already avoids
+                    # (app.py's crypto risk-management SELL path sizes
+                    # off a live binance_broker.get_positions() wallet
+                    # query, not its own order history) -- mirrored here
+                    # via a fresh wallet balance check right before the
+                    # sell, capping to whatever's actually held rather
+                    # than trusting the journal blindly.
+                    real_qty = factory.get_user_crypto_held_qty(user_id, ticker)
+                    if real_qty <= 0:
+                        results.append({
+                            "ticker": ticker,
+                            "asset_class": asset_class,
+                            "action": "error",
+                            "message": f"Exit triggered ({exit_reason}) but "
+                                       f"the wallet shows zero {ticker} "
+                                       f"held -- position may already be "
+                                       f"closed outside this journal. "
+                                       f"Skipped to avoid a doomed sell; "
+                                       f"investigate if this persists.",
+                        })
+                        continue
+                    quantity = min(quantity, real_qty)
+
                     # Binance testnet market sells fill effectively
                     # synchronously -- same established assumption as
                     # buy_crypto_for_user()/binance_broker.py's own

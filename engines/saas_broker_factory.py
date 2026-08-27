@@ -532,6 +532,36 @@ def sell_crypto_for_user(user_id, ticker, quantity):
     return exchange.create_market_sell_order(symbol, quantity)
 
 
+def get_user_crypto_held_qty(user_id, ticker):
+    """
+    Added 2026-08-27 after a live SELL failure: "SOL-USD: Broker sell
+    failed (Take-profit hit ...): binance Account has insufficient
+    balance for requested action." saas_exit_engine.py was sizing its
+    SELL off the ORIGINAL BUY order's journaled filled_quantity, which
+    can drift from the wallet's real current balance -- exactly the
+    class of bug the single-owner bot already avoids: app.py's crypto
+    risk-management SELL path sizes off a live binance_broker.
+    get_positions() wallet query, not its own order history. This is
+    the per-user equivalent of that live query, for saas_exit_engine.py
+    to cap its journal-sourced quantity against before selling.
+
+    Never raises -- returns 0.0 on any failure (no credentials, API
+    error, ticker not held, etc.), so a lookup failure fails toward "sell
+    nothing" rather than an unguarded exception reaching the caller.
+    """
+    try:
+        exchange = _require_binance_exchange(user_id)
+    except Exception:
+        return 0.0
+
+    try:
+        base_asset = ticker.replace("-USD", "")
+        balance = exchange.fetch_balance()
+        return float(balance.get("total", {}).get(base_asset, 0) or 0)
+    except Exception:
+        return 0.0
+
+
 # ============================================================
 # ORDER EXECUTION -- eToro (forex/commodities). See module docstring
 # ("FOLLOW-UP 2026-08-26") for the per-user-catalog-cache design

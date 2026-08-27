@@ -35,12 +35,31 @@ full scope and the gaps that are still open (no portfolio-level
 exposure cap) before this should be trusted beyond supervised testing.
 """
 
+import os
+
 import pandas as pd
 import streamlit as st
 
 from engines import tenant_engine as tenant
 from engines import saas_broker_factory
 from engines import saas_decision_engine
+from engines import saas_emergency_stop
+from engines import saas_admin_engine
+
+# Platform admin gate -- comma-separated list of emails in the
+# environment (never hardcoded in source, never a database flag a bug
+# could accidentally flip). Empty by default: no ADMIN_EMAILS set means
+# no one sees the Admin Panel tab at all, fail-closed rather than
+# fail-open. Set in .env, e.g. ADMIN_EMAILS=you@example.com
+_ADMIN_EMAILS = {
+    e.strip().lower()
+    for e in os.environ.get("ADMIN_EMAILS", "").split(",")
+    if e.strip()
+}
+
+
+def _is_admin(email):
+    return bool(email) and email.strip().lower() in _ADMIN_EMAILS
 
 st.set_page_config(
     page_title="OrderTrade AI -- Sign In",
@@ -389,6 +408,86 @@ def render_open_positions(user_id):
         )
 
 
+# ============================================================
+# ADMIN PANEL (only rendered for emails in ADMIN_EMAILS)
+# ============================================================
+def render_admin_panel():
+    st.subheader("🛡️ Platform Kill Switch")
+    st.caption(
+        "Blocks new BUY evaluation for EVERY user on the platform at "
+        "once -- for a systemic issue (bad model, broken broker "
+        "integration, a bug in the decision loop itself), not a "
+        "response to one user's problem. Each user's stop-loss/take-"
+        "profit/max-hold-time exit protection keeps running on their "
+        "existing positions even while this is active -- a platform-"
+        "wide halt should never trap anyone in a position that would "
+        "otherwise have closed protectively. This is separate from "
+        "your own single-owner bot's kill switch and from each user's "
+        "individual pause toggle."
+    )
+    is_stopped = saas_emergency_stop.is_stopped()
+    if is_stopped:
+        reason = saas_emergency_stop.get_reason()
+        st.error(f"⏸ SaaS-wide trading is STOPPED.{f' Reason: {reason}' if reason else ''}")
+        if st.button("Resume platform-wide trading", key="admin_resume"):
+            saas_emergency_stop.deactivate()
+            st.rerun()
+    else:
+        st.success("✅ Platform is running normally.")
+        with st.form("admin_stop_form"):
+            reason = st.text_input("Reason (shown to you when reviewing this later)", key="admin_stop_reason")
+            stop_clicked = st.form_submit_button("🛑 Stop ALL trading platform-wide", use_container_width=True)
+        if stop_clicked:
+            saas_emergency_stop.activate(reason)
+            st.rerun()
+
+    st.divider()
+
+    st.subheader("📊 Aggregate Exposure")
+    st.caption(
+        "Open position COUNTS across every active user's connected "
+        "brokers -- deliberately not a blended dollar total. Different "
+        "users hold different brokers under different currencies/"
+        "leverage (eToro CFDs especially), so summing dollar P&L across "
+        "all of them would look precise while meaning nothing real."
+    )
+    with st.spinner("Reading positions across all users' connected brokers..."):
+        exposure = saas_admin_engine.get_platform_exposure_summary()
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total open positions", exposure["total_open_positions"])
+    col2.metric("Users with open positions", exposure["users_with_open_positions"])
+    col3.metric(
+        "Busiest broker",
+        max(exposure["per_broker"], key=exposure["per_broker"].get)
+        if exposure["total_open_positions"] else "--",
+    )
+    st.dataframe(
+        pd.DataFrame([
+            {"Broker": b, "Open Positions": c} for b, c in exposure["per_broker"].items()
+        ]),
+        use_container_width=True, hide_index=True,
+    )
+
+    st.divider()
+
+    st.subheader("👥 Users")
+    users = saas_admin_engine.get_admin_user_summary()
+    if not users:
+        st.info("No users yet.")
+        return
+    df = pd.DataFrame(users)
+    df["connected_brokers"] = df["connected_brokers"].apply(lambda b: ", ".join(b) if b else "--")
+    df = df.rename(columns={
+        "email": "Email",
+        "created_at": "Joined",
+        "is_active": "Active",
+        "trading_paused": "Paused (self)",
+        "connected_brokers": "Connected Brokers",
+    })
+    df = df[["Email", "Joined", "Active", "Paused (self)", "Connected Brokers"]]
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+
 def render_dashboard():
     user = tenant.get_user(st.session_state.saas_user_id)
     if user is None:
@@ -407,13 +506,26 @@ def render_dashboard():
             _log_out()
             st.rerun()
 
-    render_broker_connections(user["user_id"])
-    st.divider()
-    render_open_positions(user["user_id"])
-    st.divider()
-    render_settings(user["user_id"])
-    st.divider()
-    render_trading_run(user["user_id"])
+    if _is_admin(user["email"]):
+        my_tab, admin_tab = st.tabs(["My Dashboard", "🛡️ Admin Panel"])
+        with my_tab:
+            render_broker_connections(user["user_id"])
+            st.divider()
+            render_open_positions(user["user_id"])
+            st.divider()
+            render_settings(user["user_id"])
+            st.divider()
+            render_trading_run(user["user_id"])
+        with admin_tab:
+            render_admin_panel()
+    else:
+        render_broker_connections(user["user_id"])
+        st.divider()
+        render_open_positions(user["user_id"])
+        st.divider()
+        render_settings(user["user_id"])
+        st.divider()
+        render_trading_run(user["user_id"])
 
 
 # ============================================================

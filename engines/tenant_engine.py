@@ -293,6 +293,43 @@ def get_broker_credentials(user_id, broker):
         conn.close()
 
 
+def list_all_users_admin_view():
+    """
+    Every user account (active or deactivated), joined with their
+    trading_paused flag, for the platform admin view
+    (engines/saas_admin_engine.py). Deliberately separate from
+    list_active_users() below -- that one is a plain list of user_ids
+    for the scheduler to iterate; this one is a richer, read-only
+    summary meant for a human to look at, and intentionally includes
+    inactive accounts too (an admin should be able to see the whole
+    user base, not just who's currently live). Never includes broker
+    credentials or any encrypted/hashed field -- just account metadata.
+    """
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT u.user_id, u.email, u.created_at, u.is_active,
+                   COALESCE(s.trading_paused, 0)
+            FROM users u
+            LEFT JOIN user_settings s ON u.user_id = s.user_id
+            ORDER BY u.created_at DESC
+            """
+        ).fetchall()
+        return [
+            {
+                "user_id": r[0],
+                "email": r[1],
+                "created_at": r[2],
+                "is_active": bool(r[3]),
+                "trading_paused": bool(r[4]),
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
 def list_active_users():
     """
     All active user_ids (is_active=1), for the background scheduler

@@ -92,6 +92,7 @@ from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
 from engines import tenant_engine as tenant
+from engines import saas_order_manager as journal
 from etoro_broker import (
     resolve_project_ticker,
     _is_forex_or_commodity_ticker,
@@ -895,3 +896,172 @@ def find_etoro_position_by_ticker_for_user(user_id, ticker):
             }
 
     return None
+
+
+# ============================================================
+# PER-USER OPEN POSITIONS (added 2026-08-27, item #121 follow-up)
+# ============================================================
+#
+# saas_app.py had no way for a user to see their own open positions --
+# this is the per-user, multi-broker equivalent of app.py's own
+# "Current Positions" section (which reads broker.get_positions()
+# directly for the single owner's Alpaca account). Returns a common
+# shape across all three brokers so the dashboard can render one table:
+#   ticker, quantity, entry_price, current_price,
+#   unrealized_pnl, unrealized_pnl_pct, stop_loss, take_profit
+# unrealized_pnl / unrealized_pnl_pct may be None where a broker doesn't
+# give us enough to compute one honestly (see eToro note below) --
+# callers should render None as "--", not 0.
+#
+# Never raises -- each per-broker helper fails toward an empty list on
+# any error, same "never crash the caller" pattern as the rest of this
+# file's per-user lookups.
+
+
+def get_user_open_positions(user_id, broker):
+    """Dispatch helper -- get_user_open_positions(user_id, "ALPACA")."""
+    broker = broker.upper()
+    if broker == "ALPACA":
+        return _get_alpaca_open_positions(user_id)
+    if broker == "BINANCE":
+        return _get_binance_open_positions(user_id)
+    if broker == "ETORO":
+        return _get_etoro_open_positions(user_id)
+    return []
+
+
+def _get_alpaca_open_positions(user_id):
+    """
+    Reads straight from Alpaca's own get_all_positions() -- authoritative,
+    live, and already computes entry/current/PnL correctly server-side
+    (same call app.py's own Current Positions section makes for the
+    single owner). No journal lookup needed for the numbers themselves;
+    the journal is only consulted for stop_loss/take_profit, which
+    Alpaca's position object doesn't carry.
+    """
+    try:
+        client = _require_alpaca_client(user_id)
+        positions = client.get_all_positions()
+    except Exception:
+        return []
+
+    result = []
+    for p in positions:
+        try:
+            entry_order = journal.get_most_recent_filled_buy_for_user(user_id, p.symbol, "ALPACA")
+            result.append({
+                "ticker": p.symbol,
+                "quantity": float(p.qty),
+                "entry_price": round(float(p.avg_entry_price), 2),
+                "current_price": round(float(p.current_price), 2),
+                "unrealized_pnl": round(float(p.unrealized_pl), 2),
+                "unrealized_pnl_pct": round(float(p.unrealized_plpc) * 100, 2),
+                "stop_loss": entry_order.get("stop_loss") if entry_order else None,
+                "take_profit": entry_order.get("take_profit") if entry_order else None,
+            })
+        except Exception:
+            continue
+    return result
+
+
+def _get_binance_open_positions(user_id):
+    """
+    Sized off the REAL wallet balance (get_user_crypto_held_qty), not the
+    journal's filled_quantity -- same lesson as the 2026-08-27 SOL-USD
+    exit-sizing fix. A ticker the journal thinks is open but the wallet
+    actually holds zero of is silently skipped here rather than shown as
+    a ghost position (that's the reconcile_closed_sol_position.py class
+    of mismatch; this view should reflect reality, not the journal's
+    possibly-stale belief).
+    """
+    try:
+        tickers = journal.list_open_tickers_for_user(user_id, "BINANCE")
+    except Exception:
+        return []
+
+    result = []
+    for ticker in tickers:
+        try:
+            real_qty = get_user_crypto_held_qty(user_id, ticker)
+            if real_qty <= 0:
+                continue
+
+            entry_order = journal.get_most_recent_filled_buy_for_user(user_id, ticker, "BINANCE")
+            if entry_order is None:
+                continue
+            entry_price = float(entry_order.get("filled_price") or entry_order.get("price") or 0)
+
+            exchange = _require_binance_exchange(user_id)
+            symbol = _to_binance_symbol(ticker)
+            current_price = float(exchange.fetch_ticker(symbol)["last"])
+
+            pnl = None
+            pnl_pct = None
+            if entry_price > 0:
+                pnl = round((current_price - entry_price) * real_qty, 2)
+                pnl_pct = round((current_price - entry_price) / entry_price * 100, 2)
+
+            result.append({
+                "ticker": ticker,
+                "quantity": real_qty,
+                "entry_price": round(entry_price, 4),
+                "current_price": round(current_price, 4),
+                "unrealized_pnl": pnl,
+                "unrealized_pnl_pct": pnl_pct,
+                "stop_loss": entry_order.get("stop_loss"),
+                "take_profit": entry_order.get("take_profit"),
+            })
+        except Exception:
+            continue
+    return result
+
+
+def _get_etoro_open_positions(user_id):
+    """
+    unrealized_pnl is deliberately left as None for eToro: the journal's
+    "quantity" for an eToro position is the margin/invested amount
+    (etoro_broker.py's own convention -- see buy()), not a share count,
+    so (current_price - entry_price) * quantity would be a leveraged CFD
+    dollar figure this codebase doesn't have enough information to get
+    right (leverage varies by instrument, plus eToro's own fees/overnight
+    charges aren't visible here). unrealized_pnl_pct (simple price change)
+    IS shown, since that's honest regardless of leverage. Exact $ P&L for
+    eToro should be checked in the eToro app itself.
+    """
+    try:
+        tickers = journal.list_open_tickers_for_user(user_id, "ETORO")
+    except Exception:
+        return []
+
+    result = []
+    for ticker in tickers:
+        try:
+            live = find_etoro_position_by_ticker_for_user(user_id, ticker)
+            if live is None:
+                # Journal says open, eToro shows no matching position --
+                # same reconciliation gap class as the SOL-USD case.
+                # Skip rather than show a ghost row.
+                continue
+
+            entry_order = journal.get_most_recent_filled_buy_for_user(user_id, ticker, "ETORO")
+            entry_price = float(live.get("open_price") or 0)
+            amount = float(live.get("quantity") or 0)
+            current_price = get_etoro_current_price_for_user(user_id, ticker)
+
+            pnl_pct = None
+            if entry_price > 0 and current_price:
+                pnl_pct = round((current_price - entry_price) / entry_price * 100, 2)
+
+            result.append({
+                "ticker": ticker,
+                "quantity": amount,  # margin invested, NOT a share count
+                "entry_price": entry_price,
+                "current_price": round(current_price, 5) if current_price else None,
+                "unrealized_pnl": None,
+                "unrealized_pnl_pct": pnl_pct,
+                "stop_loss": entry_order.get("stop_loss") if entry_order else None,
+                "take_profit": entry_order.get("take_profit") if entry_order else None,
+            })
+        except Exception:
+            continue
+    return result

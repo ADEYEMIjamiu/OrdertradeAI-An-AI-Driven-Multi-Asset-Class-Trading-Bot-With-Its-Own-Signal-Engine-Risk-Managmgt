@@ -334,6 +334,61 @@ def render_trading_run(user_id):
             st.info("No approved BUY candidates or exit triggers right now.")
 
 
+def render_open_positions(user_id):
+    st.subheader("My Positions")
+    st.caption(
+        "Your currently open positions across all connected brokers, read "
+        "live from each broker's own account (Alpaca) or reconciled "
+        "against your real wallet/portfolio balance (Binance/eToro) -- "
+        "not just this dashboard's order history, so a position that's "
+        "actually already closed on the broker side won't show up here "
+        "as a ghost row."
+    )
+
+    connected_brokers = [c["broker"] for c in tenant.list_connected_brokers(user_id)]
+    if not connected_brokers:
+        st.info("Connect a broker above to see your positions here.")
+        return
+
+    all_positions = []
+    for broker_code in connected_brokers:
+        try:
+            positions = saas_broker_factory.get_user_open_positions(user_id, broker_code)
+        except Exception:
+            positions = []
+        for p in positions:
+            all_positions.append({"Broker": _BROKER_FIELDS[broker_code]["label"].split(" (")[0], **p})
+
+    if not all_positions:
+        st.info("No open positions right now.")
+        return
+
+    df = pd.DataFrame(all_positions)
+    df = df.rename(columns={
+        "ticker": "Ticker",
+        "quantity": "Quantity",
+        "entry_price": "Entry Price",
+        "current_price": "Current Price",
+        "unrealized_pnl": "Unrealized PnL ($)",
+        "unrealized_pnl_pct": "Unrealized PnL (%)",
+        "stop_loss": "Stop Loss",
+        "take_profit": "Take Profit",
+    })
+    column_order = ["Broker", "Ticker", "Quantity", "Entry Price", "Current Price",
+                     "Unrealized PnL ($)", "Unrealized PnL (%)", "Stop Loss", "Take Profit"]
+    df = df[[c for c in column_order if c in df.columns]]
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    if "eToro" in df["Broker"].values:
+        st.caption(
+            "Note: eToro Unrealized PnL ($) is intentionally left blank -- "
+            "the quantity/margin figures available here aren't enough to "
+            "compute a correct leveraged CFD dollar P&L. Unrealized PnL "
+            "(%) (raw price change) is shown instead; check the eToro app "
+            "for exact P&L."
+        )
+
+
 def render_dashboard():
     user = tenant.get_user(st.session_state.saas_user_id)
     if user is None:
@@ -353,6 +408,8 @@ def render_dashboard():
             st.rerun()
 
     render_broker_connections(user["user_id"])
+    st.divider()
+    render_open_positions(user["user_id"])
     st.divider()
     render_settings(user["user_id"])
     st.divider()

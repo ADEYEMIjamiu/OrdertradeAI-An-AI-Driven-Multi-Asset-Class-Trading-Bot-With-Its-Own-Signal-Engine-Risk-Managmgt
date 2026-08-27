@@ -132,6 +132,7 @@ from engines import saas_order_manager as journal
 from engines import saas_reconcile_engine as reconcile
 from engines import saas_exit_engine as exit_engine
 from engines import saas_etoro_trailing_engine as etoro_trailing_engine
+from engines import saas_position_lifecycle_engine as lifecycle_engine
 from engines import saas_emergency_stop
 from data.asset_universe import ASSET_UNIVERSE
 
@@ -278,8 +279,10 @@ def run_decision_loop_for_user(user_id, dry_run=True):
     # BUYs -- disabling future buying on an asset class shouldn't strand
     # an already-open position without stop-loss/take-profit/time-exit
     # coverage. See saas_exit_engine.py for what this does and doesn't
-    # cover (full-exit only, no partial profit-taking yet). Same
-    # dry_run gating as the BUY side -- Preview never touches the
+    # cover (full-exit hard stop-loss/take-profit/hard-time-exit --
+    # break-even ratchet and partial profit-taking now live separately
+    # in engines/saas_position_lifecycle_engine.py, wired in below).
+    # Same dry_run gating as the BUY side -- Preview never touches the
     # broker, Execute does.
     if "ALPACA" in connected_brokers or "BINANCE" in connected_brokers or "ETORO" in connected_brokers:
         # FOLLOW-UP 2026-08-26: ETORO added to this guard now that
@@ -303,6 +306,21 @@ def run_decision_loop_for_user(user_id, dry_run=True):
     if "ETORO" in connected_brokers:
         trailing_results = etoro_trailing_engine.apply_etoro_trailing_lock_for_user(user_id)
         results.extend(trailing_results)
+
+    # Break-even ratchet + partial profit-taking -- added 2026-08-27,
+    # US_STOCKS/CRYPTO only (mirrors the single-owner bot's own scope:
+    # position_lifecycle_engine.py isn't wired into eToro there either).
+    # Unlike the eToro trailing ratchet above, this DOES place real SELL
+    # orders (partial profit-taking, and the hard/soft time-exit), so it
+    # respects dry_run the same way exit protection above does -- Preview
+    # never touches the broker. Not kill-switch-gated, same reasoning as
+    # exit protection: this only ever manages an ALREADY-open position
+    # (tightens a stop, banks partial profit, or force-closes on a stale
+    # hold), never opens a new one, so a platform-wide halt on new BUYs
+    # shouldn't strand it without this protection either.
+    if "ALPACA" in connected_brokers or "BINANCE" in connected_brokers:
+        lifecycle_results = lifecycle_engine.apply_position_lifecycle_for_user(user_id, dry_run=dry_run)
+        results.extend(lifecycle_results)
 
     # Kill switches -- both block new BUY evaluation only, never the
     # exit protection above (matches the single-owner bot's

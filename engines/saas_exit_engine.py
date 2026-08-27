@@ -306,6 +306,20 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
                 )
             journal.save_order(sell_order)
 
+            # FIX 2026-08-27: reduce the ORIGINAL BUY lot's remaining
+            # quantity now that this exit is confirmed filled -- this is
+            # a full exit (the only kind this function does), so
+            # `quantity` here is the lot's entire remaining amount and
+            # this reduction takes it to (at or near) zero, correctly
+            # closing the position under the new lot-based has_open_
+            # position_for_user() tracking. A SUBMITTED-not-yet-filled
+            # SELL does NOT reduce anything yet -- saas_reconcile_engine.py
+            # does the equivalent reduction once it confirms the fill
+            # later, same "don't count it until it's real" discipline as
+            # everywhere else in this journal.
+            if is_confirmed_filled:
+                journal.reduce_remaining_quantity(entry_order["order_id"], quantity)
+
             if is_confirmed_filled:
                 results.append({
                     "ticker": ticker,

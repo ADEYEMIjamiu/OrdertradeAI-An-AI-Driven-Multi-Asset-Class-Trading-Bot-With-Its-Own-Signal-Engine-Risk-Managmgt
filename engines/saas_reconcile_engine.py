@@ -95,14 +95,31 @@ def reconcile_user_alpaca_orders(user_id):
         if "filled" in response_status:
             response_filled_price = getattr(alpaca_order, "filled_avg_price", None)
             response_filled_qty = getattr(alpaca_order, "filled_qty", None)
+            confirmed_qty = float(response_filled_qty) if response_filled_qty else order.get("quantity")
 
             order = _decode_priority(order)
             order = journal.mark_order_filled(
                 order,
                 filled_price=float(response_filled_price) if response_filled_price else order.get("price"),
-                filled_quantity=float(response_filled_qty) if response_filled_qty else order.get("quantity"),
+                filled_quantity=confirmed_qty,
             )
             journal.save_order(order)
+
+            # FIX 2026-08-27: a SELL that was SUBMITTED-not-yet-filled at
+            # exit-engine time and only confirms filled HERE (a moment
+            # later) must still reduce the original BUY lot's remaining
+            # quantity -- otherwise a position exited via this delayed
+            # path would stay "open" forever under the new lot-based
+            # has_open_position_for_user() tracking, even though it's
+            # genuinely closed on Alpaca. Same "most recent FILLED BUY,
+            # pyramiding-off assumption" lookup used everywhere else in
+            # this journal. BUY fills don't need this -- save_order()
+            # already defaults a freshly-FILLED BUY's own
+            # remaining_quantity to its filled_quantity.
+            if str(order.get("side", "")).upper() == "SELL":
+                entry_order = journal.get_most_recent_filled_buy_for_user(user_id, ticker, "ALPACA")
+                if entry_order is not None:
+                    journal.reduce_remaining_quantity(entry_order["order_id"], confirmed_qty)
 
             results.append({
                 "ticker": ticker,

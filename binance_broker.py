@@ -123,6 +123,17 @@ def get_positions():
     PYRAMIDING=False should have blocked. Now derived dynamically from
     the actual asset universe so this can never silently drift out of
     sync with it again.
+
+    FIX 2026-08-27: was reading balance["total"] (free + locked/used).
+    The SaaS side of this project (engines/saas_broker_factory.py) hit a
+    live "insufficient balance" failure from this exact pattern -- a
+    take-profit SELL sized off "total" tried to sell more than was
+    actually free, and Binance rejected it. This bot's own
+    apply_crypto_risk_management() (app.py) sizes its partial-profit and
+    full-exit SELLs directly off this function's "qty", so it has the
+    identical exposure even though it hasn't caused a live failure here
+    yet. Switched to balance["free"] -- the only portion actually
+    sellable right now -- closing the gap before it does.
     """
     TRACKED_ASSETS = {
         ticker.replace("-USD", "")
@@ -133,7 +144,7 @@ def get_positions():
         balance = exchange.fetch_balance()
         positions = []
 
-        for asset, amounts in balance.get("total", {}).items():
+        for asset, amounts in balance.get("free", {}).items():
             if asset not in TRACKED_ASSETS:
                 continue
             if amounts and amounts > 0:

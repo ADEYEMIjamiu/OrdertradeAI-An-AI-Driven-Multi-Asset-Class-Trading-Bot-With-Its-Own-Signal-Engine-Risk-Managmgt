@@ -112,6 +112,34 @@ def _get_connection():
     except sqlite3.OperationalError:
         pass  # column already exists
 
+    # Migration for databases created before 2026-08-28 (Stripe billing
+    # didn't exist yet). billing_status defaults to 'none' -- a brand
+    # new account hasn't started a subscription until they complete
+    # Stripe Checkout (see engines/billing_engine.py + the webhook
+    # handler in saas_webhook_server.py, which is what actually flips
+    # this to 'trialing'/'active'/'past_due'/'canceled'). Never set
+    # directly by any code path other than that webhook -- this column
+    # exists to mirror what Stripe says is true, not to be a second
+    # source of truth someone could accidentally desync.
+    try:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN stripe_customer_id TEXT"
+        )
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    try:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN stripe_subscription_id TEXT"
+        )
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    try:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN billing_status TEXT NOT NULL DEFAULT 'none'"
+        )
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS password_reset_tokens (
             token TEXT PRIMARY KEY,
@@ -347,7 +375,7 @@ def list_all_users_admin_view():
         rows = conn.execute(
             """
             SELECT u.user_id, u.email, u.created_at, u.is_active,
-                   COALESCE(s.trading_paused, 0)
+                   COALESCE(s.trading_paused, 0), u.billing_status
             FROM users u
             LEFT JOIN user_settings s ON u.user_id = s.user_id
             ORDER BY u.created_at DESC
@@ -360,6 +388,7 @@ def list_all_users_admin_view():
                 "created_at": r[2],
                 "is_active": bool(r[3]),
                 "trading_paused": bool(r[4]),
+                "billing_status": r[5],
             }
             for r in rows
         ]
@@ -633,5 +662,90 @@ def verify_email_token(token):
         )
         conn.commit()
         return True
+    finally:
+        conn.close()
+
+
+# ============================================================
+# BILLING (added 2026-08-28, engines/billing_engine.py creates Stripe
+# Checkout/Portal sessions; saas_webhook_server.py -- a separate
+# process, see that file's docstring for why -- is the ONLY thing that
+# calls the two update functions below, driven entirely by Stripe
+# webhook events. Nothing in saas_app.py ever sets billing_status
+# directly: Stripe is the single source of truth for whether someone
+# is actually paying, and this table just mirrors it.
+# ============================================================
+
+def link_stripe_customer(user_id, stripe_customer_id, stripe_subscription_id):
+    """
+    Called from the webhook handler when checkout.session.completed
+    fires -- ties this user's account to the Stripe customer/
+    subscription Stripe just created, and marks them 'trialing'
+    immediately (every Checkout Session this platform creates includes
+    a 7-day trial, so a just-completed session is trialing by
+    definition). The subscription's own customer.subscription.updated
+    webhook -- which Stripe sends around the same time -- is what
+    keeps this in sync from here on as the subscription's real status
+    changes (active, past_due, canceled, ...).
+    """
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET stripe_customer_id = ?, stripe_subscription_id = ?, "
+            "billing_status = 'trialing' WHERE user_id = ?",
+            (stripe_customer_id, stripe_subscription_id, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_billing_status_by_customer(stripe_customer_id, status, stripe_subscription_id=None):
+    """
+    Called from the webhook handler for subscription lifecycle events
+    (customer.subscription.updated/deleted, invoice.payment_failed),
+    which reference the Stripe customer rather than our own user_id --
+    looks the user up by their previously-stored stripe_customer_id.
+    A no-op (not an error) if no user matches: Stripe can send events
+    for customers/subscriptions this platform doesn't recognize (test
+    events, a customer created directly in the Stripe dashboard, etc),
+    and silently ignoring those is correct, not a bug to surface.
+    """
+    conn = _get_connection()
+    try:
+        if stripe_subscription_id:
+            conn.execute(
+                "UPDATE users SET billing_status = ?, stripe_subscription_id = ? "
+                "WHERE stripe_customer_id = ?",
+                (status, stripe_subscription_id, stripe_customer_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE users SET billing_status = ? WHERE stripe_customer_id = ?",
+                (status, stripe_customer_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_billing_info(user_id):
+    """Returns {"billing_status", "stripe_customer_id", "stripe_subscription_id"}
+    for this user, or None if the user doesn't exist. billing_status is
+    'none' until they complete Stripe Checkout at least once."""
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT billing_status, stripe_customer_id, stripe_subscription_id "
+            "FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "billing_status": row[0],
+            "stripe_customer_id": row[1],
+            "stripe_subscription_id": row[2],
+        }
     finally:
         conn.close()

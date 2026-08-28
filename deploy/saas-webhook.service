@@ -1,0 +1,14 @@
+[Unit]
+Description=OrderTrade AI Stripe webhook receiver
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/AI-Trading-Bot
+ExecStart=/root/AI-Trading-Bot/venv/bin/uvicorn saas_webhook_server:app --host 127.0.0.1 --port 8503
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

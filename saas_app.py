@@ -46,6 +46,7 @@ from engines import saas_decision_engine
 from engines import saas_emergency_stop
 from engines import saas_admin_engine
 from engines import email_engine
+from engines import billing_engine
 
 # Public product domain -- used to build the links inside password-reset
 # and verification emails. Deliberately a plain constant, not derived
@@ -545,9 +546,72 @@ def render_admin_panel():
         "is_active": "Active",
         "trading_paused": "Paused (self)",
         "connected_brokers": "Connected Brokers",
+        "billing_status": "Billing",
     })
-    df = df[["Email", "Joined", "Active", "Paused (self)", "Connected Brokers"]]
+    df = df[["Email", "Joined", "Active", "Paused (self)", "Billing", "Connected Brokers"]]
     st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+# ============================================================
+# BILLING GATE -- shown instead of the normal dashboard whenever a
+# non-admin user's billing_status isn't 'trialing' or 'active'. Admins
+# (ADMIN_EMAILS) are deliberately exempt -- the platform owner
+# shouldn't be able to lock themselves out by their own billing bugs,
+# an unpaid test invoice, or simply never having run Checkout on their
+# own account. Every real user still goes through this every time
+# their status isn't currently good, driven entirely by
+# tenant.get_billing_info() -- which only ever changes via the Stripe
+# webhook handler in saas_webhook_server.py, never from anything in
+# this file.
+# ============================================================
+def render_billing_gate(user):
+    st.title("📈 OrderTrade AI")
+    st.caption(f"Signed in as {user['email']}")
+
+    if st.query_params.get("billing") == "success":
+        st.info(
+            "Payment info received. If your access doesn't unlock within "
+            "a few seconds, refresh this page -- Stripe's confirmation "
+            "can take a moment to arrive."
+        )
+
+    billing = tenant.get_billing_info(user["user_id"]) or {}
+    status = billing.get("billing_status", "none")
+
+    if status in ("past_due", "canceled"):
+        reason = "a recent payment failed" if status == "past_due" else "it was canceled"
+        st.error(
+            f"⚠️ Your subscription needs attention ({reason}). "
+            "Update your billing to keep using OrderTrade AI."
+        )
+        if billing.get("stripe_customer_id"):
+            try:
+                portal_url = billing_engine.create_billing_portal_session(
+                    billing["stripe_customer_id"], BASE_URL
+                )
+                st.link_button("Manage Billing", portal_url, use_container_width=True)
+            except Exception:
+                st.warning("Couldn't load the billing portal right now -- try again shortly.")
+    else:
+        st.subheader("Start your 7-day free trial")
+        st.write(
+            "Full access to OrderTrade AI for 7 days, then **$39/month**. "
+            "Cancel anytime from your billing settings -- you won't be "
+            "charged if you cancel during the trial."
+        )
+        try:
+            checkout_url = billing_engine.create_checkout_session(
+                user["user_id"], user["email"], BASE_URL
+            )
+            st.link_button("Start Free Trial", checkout_url, use_container_width=True)
+        except Exception:
+            st.error("Couldn't start checkout right now -- try again shortly.")
+
+    st.divider()
+    st.caption("[Terms of Service](/?page=terms) · [Privacy Policy](/?page=privacy)")
+    if st.button("Log Out", key="billing_gate_logout"):
+        _log_out()
+        st.rerun()
 
 
 def render_dashboard():
@@ -558,10 +622,27 @@ def render_dashboard():
         st.rerun()
         return
 
-    header_col, logout_col = st.columns([4, 1])
+    is_admin_user = _is_admin(user["email"])
+    billing = tenant.get_billing_info(user["user_id"]) or {}
+    if not is_admin_user and billing.get("billing_status") not in ("trialing", "active"):
+        render_billing_gate(user)
+        return
+
+    header_col, billing_col, logout_col = st.columns([3, 1, 1])
     with header_col:
         st.title("📈 OrderTrade AI")
         st.caption(f"Signed in as {user['email']}")
+    with billing_col:
+        st.write("")
+        if billing.get("stripe_customer_id"):
+            if st.button("Manage Billing", use_container_width=True):
+                try:
+                    portal_url = billing_engine.create_billing_portal_session(
+                        billing["stripe_customer_id"], BASE_URL
+                    )
+                    st.link_button("Open Billing Portal", portal_url, use_container_width=True)
+                except Exception:
+                    st.error("Couldn't load the billing portal right now -- try again shortly.")
     with logout_col:
         st.write("")
         if st.button("Log Out", use_container_width=True):

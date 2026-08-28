@@ -79,6 +79,15 @@ async def stripe_webhook(request):
 
     event_type = event["type"]
     obj = event["data"]["object"]
+    # Newer stripe-python releases stopped making StripeObject act like a
+    # plain dict (a Session/Subscription/Invoice no longer supports
+    # .get(...) directly -- it raises AttributeError telling you to call
+    # .to_dict() first). Normalizing here once, defensively, means the
+    # dispatch logic below can keep using plain .get(...) regardless of
+    # which stripe-python version is actually installed (requirements.txt
+    # deliberately doesn't pin one -- see this file's module docstring).
+    if hasattr(obj, "to_dict"):
+        obj = obj.to_dict()
 
     if event_type == "checkout.session.completed":
         user_id = obj.get("client_reference_id")

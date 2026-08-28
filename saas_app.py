@@ -36,6 +36,7 @@ exposure cap) before this should be trusted beyond supervised testing.
 """
 
 import os
+import traceback
 
 import pandas as pd
 import streamlit as st
@@ -591,6 +592,12 @@ def render_billing_gate(user):
                 )
                 st.link_button("Manage Billing", portal_url, use_container_width=True)
             except Exception:
+                # Logged (not just shown to the user) so failures are
+                # actually diagnosable via journalctl -- a bare "except
+                # Exception: st.warning(...)" with no logging call was the
+                # root cause of a hard-to-debug Checkout failure earlier.
+                print("[billing] create_billing_portal_session failed:")
+                traceback.print_exc()
                 st.warning("Couldn't load the billing portal right now -- try again shortly.")
     else:
         st.subheader("Start your 7-day free trial")
@@ -605,6 +612,8 @@ def render_billing_gate(user):
             )
             st.link_button("Start Free Trial", checkout_url, use_container_width=True)
         except Exception:
+            print("[billing] create_checkout_session failed:")
+            traceback.print_exc()
             st.error("Couldn't start checkout right now -- try again shortly.")
 
     st.divider()
@@ -642,6 +651,8 @@ def render_dashboard():
                     )
                     st.link_button("Open Billing Portal", portal_url, use_container_width=True)
                 except Exception:
+                    print("[billing] create_billing_portal_session failed:")
+                    traceback.print_exc()
                     st.error("Couldn't load the billing portal right now -- try again shortly.")
     with logout_col:
         st.write("")

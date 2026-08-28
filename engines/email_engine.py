@@ -91,3 +91,31 @@ def send_verification_email(to_email, verify_url):
     </div>
     """
     return _send_email(to_email, "Verify your email for OrderTrade AI", html)
+
+
+def send_email_change_confirmation(to_email, confirm_url):
+    """
+    Sent to the NEW address someone entered in Account Settings -- see
+    tenant_engine.request_email_change()'s docstring for why the swap
+    only takes effect once this link is clicked (proves the new address
+    is actually reachable by the account owner, and gives a mistyped
+    address zero effect rather than locking anyone out).
+    """
+    html = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto;">
+        <h2>Confirm your new email for OrderTrade AI</h2>
+        <p>Someone requested to change the email on an OrderTrade AI account to this
+           address. Click the button below to confirm the change. This link expires in 1 hour.</p>
+        <p style="margin: 24px 0;">
+            <a href="{confirm_url}" style="background: #10b981; color: #fff; padding: 12px 24px;
+               text-decoration: none; border-radius: 6px; display: inline-block;">
+               Confirm New Email
+            </a>
+        </p>
+        <p style="color: #666; font-size: 13px;">
+            If you didn't request this, you can safely ignore this email -- the
+            account's email address will not change.
+        </p>
+    </div>
+    """
+    return _send_email(to_email, "Confirm your new email for OrderTrade AI", html)

@@ -81,6 +81,26 @@ _ADMIN_EMAILS = {
 def _is_admin(email):
     return bool(email) and email.strip().lower() in _ADMIN_EMAILS
 
+
+# Plain profile field, added 2026-08-29 alongside phone -- see
+# tenant_engine.py's 2026-08-29 migration notes. No billing/compliance
+# logic reads this list; it exists only so the signup and account
+# settings dropdowns aren't free-text. "Prefer not to say" is the
+# default so nobody is forced to pick one to finish signing up.
+COUNTRY_OPTIONS = [
+    "Prefer not to say",
+    "United States", "United Kingdom", "Canada", "Australia", "New Zealand",
+    "Ireland", "Nigeria", "Ghana", "South Africa", "Kenya", "Egypt",
+    "Germany", "France", "Spain", "Italy", "Portugal", "Netherlands",
+    "Belgium", "Switzerland", "Austria", "Sweden", "Norway", "Denmark",
+    "Finland", "Poland", "Czechia", "Greece", "Romania", "Hungary",
+    "Ukraine", "Turkey", "Israel", "United Arab Emirates", "Saudi Arabia",
+    "India", "Pakistan", "Bangladesh", "China", "Japan", "South Korea",
+    "Singapore", "Malaysia", "Indonesia", "Philippines", "Thailand",
+    "Vietnam", "Hong Kong", "Taiwan", "Mexico", "Brazil", "Argentina",
+    "Chile", "Colombia", "Peru", "Other",
+]
+
 st.set_page_config(
     page_title="OrderTrade AI -- Sign In",
     page_icon="📈",
@@ -172,6 +192,12 @@ def render_auth_screen():
             confirm_password = st.text_input(
                 "Confirm password", type="password", key="signup_confirm"
             )
+            new_phone = st.text_input(
+                "Phone number (optional)", key="signup_phone"
+            )
+            new_country = st.selectbox(
+                "Country (optional)", options=COUNTRY_OPTIONS, key="signup_country"
+            )
             agreed_to_terms = st.checkbox(
                 "I agree to the [Terms of Service](/app/?page=terms) and "
                 "[Privacy Policy](/app/?page=privacy)",
@@ -189,7 +215,14 @@ def render_auth_screen():
             elif not agreed_to_terms:
                 st.error("You must agree to the Terms of Service and Privacy Policy to create an account.")
             else:
-                user_id = tenant.create_user(new_email, new_password)
+                user_id = tenant.create_user(
+                    new_email,
+                    new_password,
+                    phone=new_phone,
+                    country=(
+                        new_country if new_country != "Prefer not to say" else None
+                    ),
+                )
                 if user_id is None:
                     st.error("An account with this email already exists. Try logging in instead.")
                 else:
@@ -341,6 +374,75 @@ def render_settings(user_id):
         )
         st.success("Settings saved.")
         st.rerun()
+
+
+def render_account_settings(user):
+    st.subheader("Account Settings")
+
+    with st.expander("Profile"):
+        with st.form("profile_form"):
+            phone = st.text_input(
+                "Phone number (optional)", value=user.get("phone") or "", key="profile_phone"
+            )
+            current_country = user.get("country") or "Prefer not to say"
+            country_index = (
+                COUNTRY_OPTIONS.index(current_country)
+                if current_country in COUNTRY_OPTIONS else 0
+            )
+            country = st.selectbox(
+                "Country (optional)", options=COUNTRY_OPTIONS,
+                index=country_index, key="profile_country",
+            )
+            profile_saved = st.form_submit_button("Save profile")
+
+        if profile_saved:
+            tenant.update_profile_fields(
+                user["user_id"],
+                phone=phone,
+                country=(country if country != "Prefer not to say" else ""),
+            )
+            st.success("Profile updated.")
+            st.rerun()
+
+    with st.expander("Change email"):
+        st.caption(
+            f"Current email: {user['email']}. Changing it sends a confirmation "
+            "link to the NEW address -- your current email keeps working until "
+            "you click that link."
+        )
+        with st.form("change_email_form"):
+            new_email = st.text_input("New email", key="change_email_new")
+            current_password = st.text_input(
+                "Current password", type="password", key="change_email_password"
+            )
+            change_submitted = st.form_submit_button("Send confirmation link")
+
+        if change_submitted:
+            if not new_email or not current_password:
+                st.error("Enter your new email and current password.")
+            elif tenant.authenticate_user(user["email"], current_password) is None:
+                st.error("Current password is incorrect.")
+            elif new_email.strip().lower() == user["email"]:
+                st.error("That's already your current email.")
+            else:
+                token = tenant.request_email_change(user["user_id"], new_email)
+                if token is None:
+                    st.error("That email is already in use by another account.")
+                else:
+                    try:
+                        confirm_url = f"{APP_URL}/?change_email_token={token}"
+                        email_engine.send_email_change_confirmation(new_email, confirm_url)
+                        st.success(
+                            f"Confirmation link sent to {new_email.strip().lower()}. "
+                            "Click it to finish changing your email."
+                        )
+                    except Exception:
+                        print("[account] send_email_change_confirmation failed:")
+                        traceback.print_exc()
+                        st.error(
+                            "Couldn't send the confirmation email right now -- "
+                            "try again shortly."
+                        )
 
 
 def render_trading_run(user_id):
@@ -695,6 +797,8 @@ def render_dashboard():
             render_settings(user["user_id"])
             st.divider()
             render_trading_run(user["user_id"])
+            st.divider()
+            render_account_settings(user)
         with admin_tab:
             render_admin_panel()
     else:
@@ -705,6 +809,8 @@ def render_dashboard():
         render_settings(user["user_id"])
         st.divider()
         render_trading_run(user["user_id"])
+        st.divider()
+        render_account_settings(user)
 
     st.divider()
     st.caption("[Terms of Service](/app/?page=terms) · [Privacy Policy](/app/?page=privacy)")
@@ -758,6 +864,26 @@ def render_email_verification_screen(token):
         st.success("✅ Email verified. Thanks!")
     else:
         st.error("This verification link is invalid or has expired. You can resend one from your dashboard.")
+    if st.button("Continue"):
+        st.query_params.clear()
+        st.rerun()
+
+
+def render_email_change_screen(token):
+    st.title("📈 OrderTrade AI")
+    new_email = tenant.confirm_email_change(token)
+    if new_email:
+        st.success(f"✅ Email updated to {new_email}. Use this address to log in from now on.")
+        # Keep an already-active session in sync so the header/caption
+        # don't keep showing the old address for the rest of this visit --
+        # doesn't touch anyone else's session, just this browser's.
+        if st.session_state.saas_user_id:
+            st.session_state.saas_user_email = new_email
+    else:
+        st.error(
+            "This confirmation link is invalid, expired, or was already used. "
+            "You can request a new one from Account Settings."
+        )
     if st.button("Continue"):
         st.query_params.clear()
         st.rerun()
@@ -1007,6 +1133,8 @@ if "reset_token" in _query_params:
     render_password_reset_screen(_query_params["reset_token"])
 elif "verify_token" in _query_params:
     render_email_verification_screen(_query_params["verify_token"])
+elif "change_email_token" in _query_params:
+    render_email_change_screen(_query_params["change_email_token"])
 elif _query_params.get("page") == "terms":
     render_legal_page("Terms of Service", _TERMS_MD)
 elif _query_params.get("page") == "privacy":

@@ -140,6 +140,21 @@ def _get_connection():
     except sqlite3.OperationalError:
         pass  # column already exists
 
+    # Migration for databases created before 2026-08-29 (phone/country
+    # didn't exist yet). Both are plain optional profile fields -- no
+    # SMS verification tied to phone, no billing/compliance logic tied
+    # to country. NULL by default rather than empty string so "never
+    # set" stays distinguishable from "set, then cleared" if that ever
+    # matters later.
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN country TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS password_reset_tokens (
             token TEXT PRIMARY KEY,
@@ -154,6 +169,23 @@ def _get_connection():
         CREATE TABLE IF NOT EXISTS email_verification_tokens (
             token TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        )
+    """)
+    # Added 2026-08-29 for the "change email" account setting. Deliberately
+    # a separate table from email_verification_tokens even though the
+    # shape is almost identical: this one carries new_email as its own
+    # column (the address being proposed hasn't been written to users.email
+    # yet -- see request_email_change()'s docstring for why), and mixing
+    # the two would make it easy to accidentally verify the wrong thing.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS email_change_tokens (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            new_email TEXT NOT NULL,
             created_at TEXT NOT NULL,
             expires_at TEXT NOT NULL,
             used INTEGER NOT NULL DEFAULT 0,
@@ -210,13 +242,21 @@ def decrypt_secret(ciphertext):
 # USERS
 # ============================================================
 
-def create_user(email, password):
+def create_user(email, password, phone=None, country=None):
     """
     Creates a new user account. Returns the new user_id, or None if the
     email is already registered (case-insensitive -- emails are
     normalized to lowercase before the uniqueness check and storage).
+
+    phone and country (added 2026-08-29) are both optional, plain
+    profile fields -- no SMS verification tied to phone, no billing/
+    compliance logic tied to country. Blank strings are stored as NULL
+    rather than "" so an unset field reads the same whether it came
+    from signup or an old pre-migration account.
     """
     email = str(email).strip().lower()
+    phone = phone.strip() if phone and phone.strip() else None
+    country = country.strip() if country and country.strip() else None
     conn = _get_connection()
     try:
         existing = conn.execute(
@@ -232,9 +272,9 @@ def create_user(email, password):
         now = datetime.now(timezone.utc).isoformat()
 
         conn.execute(
-            "INSERT INTO users (user_id, email, password_hash, created_at, is_active) "
-            "VALUES (?, ?, ?, ?, 1)",
-            (user_id, email, password_hash, now),
+            "INSERT INTO users (user_id, email, password_hash, created_at, is_active, phone, country) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?)",
+            (user_id, email, password_hash, now, phone, country),
         )
         # Every new user starts with paper/demo-only enforced -- see
         # allow_live_trading default and module docstring.
@@ -279,7 +319,8 @@ def get_user(user_id):
     conn = _get_connection()
     try:
         row = conn.execute(
-            "SELECT user_id, email, created_at, is_active, email_verified FROM users WHERE user_id = ?",
+            "SELECT user_id, email, created_at, is_active, email_verified, phone, country "
+            "FROM users WHERE user_id = ?",
             (user_id,),
         ).fetchone()
         if not row:
@@ -290,7 +331,41 @@ def get_user(user_id):
             "created_at": row[2],
             "is_active": bool(row[3]),
             "email_verified": bool(row[4]),
+            "phone": row[5],
+            "country": row[6],
         }
+    finally:
+        conn.close()
+
+
+def update_profile_fields(user_id, phone=None, country=None):
+    """
+    Updates phone and/or country for an existing account. Pass None for
+    a field to leave it unchanged (not to clear it) -- to explicitly
+    clear a field, pass an empty string, which is normalized to NULL
+    same as create_user() does. Both fields are plain profile data with
+    no verification or compliance logic attached (see module notes on
+    the 2026-08-29 migration above _get_connection()).
+    """
+    conn = _get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT phone, country FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if not existing:
+            return False
+        new_phone = (
+            (phone.strip() or None) if phone is not None else existing[0]
+        )
+        new_country = (
+            (country.strip() or None) if country is not None else existing[1]
+        )
+        conn.execute(
+            "UPDATE users SET phone = ?, country = ? WHERE user_id = ?",
+            (new_phone, new_country, user_id),
+        )
+        conn.commit()
+        return True
     finally:
         conn.close()
 
@@ -662,6 +737,94 @@ def verify_email_token(token):
         )
         conn.commit()
         return True
+    finally:
+        conn.close()
+
+
+# ============================================================
+# CHANGE EMAIL (added 2026-08-29). Deliberately a request/confirm split
+# rather than updating users.email immediately: the new address hasn't
+# been proven reachable yet, and this account's whole login identity is
+# its email (see users.email's UNIQUE NOT NULL, and authenticate_user()
+# above). Writing an unverified address straight into users.email would
+# risk locking the account owner out if they mistyped it -- old email
+# stays the login identity, and Stripe's own customer_email on file,
+# until the new one is actually confirmed by clicking the emailed link.
+# ============================================================
+
+_EMAIL_CHANGE_TOKEN_LIFETIME = timedelta(hours=1)
+
+
+def request_email_change(user_id, new_email):
+    """
+    Creates a one-hour, single-use token pairing this user with a
+    proposed new email, and returns it -- or returns None if that
+    email is already registered to a DIFFERENT active account (still
+    case-insensitive, same normalization as create_user()). Doesn't
+    touch users.email at all; that only happens in
+    confirm_email_change() once the link is actually clicked.
+    """
+    new_email = str(new_email).strip().lower()
+    conn = _get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT user_id FROM users WHERE email = ?", (new_email,)
+        ).fetchone()
+        if existing and existing[0] != user_id:
+            return None
+
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        expires_at = now + _EMAIL_CHANGE_TOKEN_LIFETIME
+        conn.execute(
+            "INSERT INTO email_change_tokens (token, user_id, new_email, created_at, expires_at, used) "
+            "VALUES (?, ?, ?, ?, ?, 0)",
+            (token, user_id, new_email, now.isoformat(), expires_at.isoformat()),
+        )
+        conn.commit()
+        return token
+    finally:
+        conn.close()
+
+
+def confirm_email_change(token):
+    """
+    Consumes the token and, if still valid, updates the account's
+    email to the proposed new_email and marks it verified (clicking a
+    link sent TO that address is itself proof of reachability, same
+    reasoning as the ordinary signup verification flow). Returns the
+    new email on success so the caller can show it, or None if the
+    token is missing/expired/already used, or if the target email got
+    claimed by someone else in the meantime (re-checked here, not just
+    at request time).
+    """
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT user_id, new_email, expires_at, used FROM email_change_tokens WHERE token = ?",
+            (token,),
+        ).fetchone()
+        if not row:
+            return None
+        user_id, new_email, expires_at, used = row
+        if used or datetime.now(timezone.utc) > datetime.fromisoformat(expires_at):
+            return None
+
+        conflict = conn.execute(
+            "SELECT user_id FROM users WHERE email = ?", (new_email,)
+        ).fetchone()
+        if conflict and conflict[0] != user_id:
+            return None
+
+        conn.execute(
+            "UPDATE users SET email = ?, email_verified = 1 WHERE user_id = ?",
+            (new_email, user_id),
+        )
+        conn.execute(
+            "UPDATE email_change_tokens SET used = 1 WHERE token = ?", (token,)
+        )
+        conn.commit()
+        return new_email
     finally:
         conn.close()
 

@@ -45,6 +45,15 @@ from engines import saas_broker_factory
 from engines import saas_decision_engine
 from engines import saas_emergency_stop
 from engines import saas_admin_engine
+from engines import email_engine
+
+# Public product domain -- used to build the links inside password-reset
+# and verification emails. Deliberately a plain constant, not derived
+# from the incoming request's Host header: this app is only ever meant
+# to be reached at this one domain (see deploy/nginx-ordertradeai-com.conf),
+# and trusting a request header for this would let anyone who spoofs
+# Host construct a reset link pointing at a domain they control.
+BASE_URL = "https://ordertradeai.com"
 
 # Platform admin gate -- comma-separated list of emails in the
 # environment (never hardcoded in source, never a database flag a bug
@@ -115,6 +124,35 @@ def render_auth_screen():
                     _log_in(user_id, email.strip().lower())
                     st.rerun()
 
+        with st.expander("Forgot password?"):
+            with st.form("forgot_password_form"):
+                forgot_email = st.text_input("Email", key="forgot_password_email")
+                forgot_submitted = st.form_submit_button("Send reset link")
+
+            if forgot_submitted:
+                if not forgot_email:
+                    st.error("Enter your email.")
+                else:
+                    # Deliberately the SAME message regardless of whether
+                    # this email is actually registered -- branching the
+                    # visible outcome would let anyone probe which emails
+                    # have accounts (see create_password_reset_token()'s
+                    # docstring for the same reasoning applied server-side).
+                    reset_token = tenant.create_password_reset_token(forgot_email)
+                    if reset_token is not None:
+                        try:
+                            reset_url = f"{BASE_URL}/?reset_token={reset_token}"
+                            email_engine.send_password_reset_email(forgot_email, reset_url)
+                        except Exception:
+                            # Swallowed deliberately -- surfacing a send
+                            # failure here would itself leak whether the
+                            # email was registered (only registered emails
+                            # reach this branch at all).
+                            pass
+                    st.success(
+                        "If that email is registered, a password reset link has been sent."
+                    )
+
     with signup_tab:
         with st.form("signup_form"):
             new_email = st.text_input("Email", key="signup_email")
@@ -136,7 +174,22 @@ def render_auth_screen():
                 if user_id is None:
                     st.error("An account with this email already exists. Try logging in instead.")
                 else:
-                    st.success("Account created.")
+                    # Log in immediately (don't gate account access on
+                    # verification -- that would strand a user with a
+                    # broken/slow mail delivery). The dashboard shows a
+                    # persistent banner with a resend option until
+                    # email_verified flips to True. See render_dashboard().
+                    try:
+                        verify_token = tenant.create_email_verification_token(user_id)
+                        verify_url = f"{BASE_URL}/?verify_token={verify_token}"
+                        email_engine.send_verification_email(new_email, verify_url)
+                        st.success("Account created. Check your email to verify your address.")
+                    except Exception:
+                        st.success("Account created.")
+                        st.warning(
+                            "We couldn't send a verification email right now -- "
+                            "you can resend it from your dashboard."
+                        )
                     _log_in(user_id, new_email.strip().lower())
                     st.rerun()
 
@@ -506,6 +559,21 @@ def render_dashboard():
             _log_out()
             st.rerun()
 
+    if not user["email_verified"]:
+        banner_col, button_col = st.columns([4, 1])
+        with banner_col:
+            st.warning("📧 Please verify your email address.")
+        with button_col:
+            st.write("")
+            if st.button("Resend email", key="resend_verification"):
+                try:
+                    verify_token = tenant.create_email_verification_token(user["user_id"])
+                    verify_url = f"{BASE_URL}/?verify_token={verify_token}"
+                    email_engine.send_verification_email(user["email"], verify_url)
+                    st.success("Verification email sent.")
+                except Exception:
+                    st.error("Couldn't send the email right now -- try again shortly.")
+
     if _is_admin(user["email"]):
         my_tab, admin_tab = st.tabs(["My Dashboard", "🛡️ Admin Panel"])
         with my_tab:
@@ -529,9 +597,68 @@ def render_dashboard():
 
 
 # ============================================================
+# PASSWORD RESET / EMAIL VERIFICATION LANDING SCREENS
+# Reached via the links inside the emails sent above -- ordertradeai.com/
+# ?reset_token=... or ?verify_token=.... Checked BEFORE the normal
+# logged-in/logged-out branch below so these work whether or not the
+# person clicking the link happens to already be signed in on this
+# browser.
+# ============================================================
+def render_password_reset_screen(token):
+    st.title("📈 OrderTrade AI")
+    st.subheader("Reset your password")
+
+    user_id = tenant.verify_password_reset_token(token)
+    if user_id is None:
+        st.error("This reset link is invalid or has expired. Request a new one from the Log In page.")
+        if st.button("Back to Log In"):
+            st.query_params.clear()
+            st.rerun()
+        return
+
+    with st.form("password_reset_form"):
+        new_password = st.text_input("New password", type="password", key="reset_new_password")
+        confirm = st.text_input("Confirm new password", type="password", key="reset_confirm_password")
+        submitted = st.form_submit_button("Reset Password", use_container_width=True)
+
+    if submitted:
+        if len(new_password) < 8:
+            st.error("Password must be at least 8 characters.")
+        elif new_password != confirm:
+            st.error("Passwords don't match.")
+        else:
+            ok = tenant.reset_password(token, new_password)
+            if ok:
+                st.success("Password updated. You can now log in with your new password.")
+                if st.button("Go to Log In"):
+                    st.query_params.clear()
+                    st.rerun()
+            else:
+                st.error("This link was already used or has expired. Request a new one from the Log In page.")
+
+
+def render_email_verification_screen(token):
+    st.title("📈 OrderTrade AI")
+    ok = tenant.verify_email_token(token)
+    if ok:
+        st.success("✅ Email verified. Thanks!")
+    else:
+        st.error("This verification link is invalid or has expired. You can resend one from your dashboard.")
+    if st.button("Continue"):
+        st.query_params.clear()
+        st.rerun()
+
+
+# ============================================================
 # ENTRY POINT
 # ============================================================
-if st.session_state.saas_user_id is None:
+_query_params = st.query_params
+
+if "reset_token" in _query_params:
+    render_password_reset_screen(_query_params["reset_token"])
+elif "verify_token" in _query_params:
+    render_email_verification_screen(_query_params["verify_token"])
+elif st.session_state.saas_user_id is None:
     render_auth_screen()
 else:
     render_dashboard()

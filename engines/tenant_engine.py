@@ -30,9 +30,10 @@ never be recoverable, even by us).
 """
 
 import os
+import secrets
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import bcrypt
 from cryptography.fernet import Fernet, InvalidToken
@@ -96,6 +97,41 @@ def _get_connection():
         )
     except sqlite3.OperationalError:
         pass  # column already exists
+
+    # Migration for databases created before 2026-08-28 (email_verified
+    # didn't exist yet). New signups default to 0 (unverified) --
+    # deliberately NOT auto-verified on signup, otherwise the whole
+    # point of a verification email is defeated. Existing accounts
+    # created before this migration are left at 0 too rather than
+    # silently marked verified -- there's no way to know if those
+    # emails were ever actually confirmed as reachable.
+    try:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS email_verification_tokens (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        )
+    """)
     return conn
 
 
@@ -215,7 +251,7 @@ def get_user(user_id):
     conn = _get_connection()
     try:
         row = conn.execute(
-            "SELECT user_id, email, created_at, is_active FROM users WHERE user_id = ?",
+            "SELECT user_id, email, created_at, is_active, email_verified FROM users WHERE user_id = ?",
             (user_id,),
         ).fetchone()
         if not row:
@@ -225,6 +261,7 @@ def get_user(user_id):
             "email": row[1],
             "created_at": row[2],
             "is_active": bool(row[3]),
+            "email_verified": bool(row[4]),
         }
     finally:
         conn.close()
@@ -435,6 +472,164 @@ def save_user_settings(
             "UPDATE user_settings SET max_position_size = ?, enabled_asset_classes = ?, "
             "trading_paused = ?, updated_at = ? WHERE user_id = ?",
             (new_max_position_size, new_enabled_classes, new_trading_paused, now, user_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+# ============================================================
+# PASSWORD RESET (added 2026-08-28, engines/email_engine.py sends the
+# actual email via Resend; this file only manages the tokens)
+# ============================================================
+
+_RESET_TOKEN_LIFETIME = timedelta(hours=1)
+_VERIFY_TOKEN_LIFETIME = timedelta(days=3)
+
+
+def create_password_reset_token(email):
+    """
+    Creates a one-hour, single-use reset token for this email and
+    returns it, or returns None if no active account matches. The
+    caller (saas_app.py) MUST show the same "if that email is
+    registered, we've sent a link" message either way -- returning
+    None vs a token here is a signal for internal logic only, never
+    for the UI to branch its message on. Branching the visible message
+    would let anyone probe which emails are registered (account
+    enumeration), which the login flow already deliberately avoids
+    (see authenticate_user()'s docstring for the same reasoning).
+    """
+    email = str(email).strip().lower()
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT user_id FROM users WHERE email = ? AND is_active = 1", (email,)
+        ).fetchone()
+        if not row:
+            return None
+        user_id = row[0]
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        expires_at = now + _RESET_TOKEN_LIFETIME
+        conn.execute(
+            "INSERT INTO password_reset_tokens (token, user_id, created_at, expires_at, used) "
+            "VALUES (?, ?, ?, ?, 0)",
+            (token, user_id, now.isoformat(), expires_at.isoformat()),
+        )
+        conn.commit()
+        return token
+    finally:
+        conn.close()
+
+
+def _get_valid_token_user_id(table, token):
+    """Shared lookup for both token tables -- not used across process
+    boundaries in a security-sensitive way, just avoids duplicating the
+    same expiry/used-check logic twice."""
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            f"SELECT user_id, expires_at, used FROM {table} WHERE token = ?", (token,)
+        ).fetchone()
+        if not row:
+            return None
+        user_id, expires_at, used = row
+        if used:
+            return None
+        if datetime.now(timezone.utc) > datetime.fromisoformat(expires_at):
+            return None
+        return user_id
+    finally:
+        conn.close()
+
+
+def verify_password_reset_token(token):
+    """Returns the user_id this token belongs to if it's valid and unused, else None.
+    Does NOT mark it used -- reset_password() does that atomically with the actual
+    password change, so a token that's merely been looked at (e.g. the reset page
+    loading to show the form) doesn't get burned before the user submits."""
+    return _get_valid_token_user_id("password_reset_tokens", token)
+
+
+def reset_password(token, new_password):
+    """Consumes the token and sets the new password in one step. Returns
+    False (and changes nothing) if the token is missing, expired, or
+    already used."""
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT user_id, expires_at, used FROM password_reset_tokens WHERE token = ?",
+            (token,),
+        ).fetchone()
+        if not row:
+            return False
+        user_id, expires_at, used = row
+        if used or datetime.now(timezone.utc) > datetime.fromisoformat(expires_at):
+            return False
+
+        password_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE user_id = ?", (password_hash, user_id)
+        )
+        conn.execute(
+            "UPDATE password_reset_tokens SET used = 1 WHERE token = ?", (token,)
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+# ============================================================
+# EMAIL VERIFICATION (added 2026-08-28)
+# ============================================================
+
+def create_email_verification_token(user_id):
+    """
+    Three-day, single-use token. Called both right after signup and
+    from a "Resend verification email" button, so this can be called
+    repeatedly for the same user -- each call is a fresh independent
+    token; old unused ones for the same user are simply left to expire
+    on their own rather than being explicitly revoked (not worth the
+    extra query, and a stale reset link failing silently is fine).
+    """
+    conn = _get_connection()
+    try:
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        expires_at = now + _VERIFY_TOKEN_LIFETIME
+        conn.execute(
+            "INSERT INTO email_verification_tokens (token, user_id, created_at, expires_at, used) "
+            "VALUES (?, ?, ?, ?, 0)",
+            (token, user_id, now.isoformat(), expires_at.isoformat()),
+        )
+        conn.commit()
+        return token
+    finally:
+        conn.close()
+
+
+def verify_email_token(token):
+    """Consumes the token and marks the account's email_verified=1.
+    Returns False (changes nothing) if missing/expired/already used."""
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT user_id, expires_at, used FROM email_verification_tokens WHERE token = ?",
+            (token,),
+        ).fetchone()
+        if not row:
+            return False
+        user_id, expires_at, used = row
+        if used or datetime.now(timezone.utc) > datetime.fromisoformat(expires_at):
+            return False
+
+        conn.execute(
+            "UPDATE users SET email_verified = 1 WHERE user_id = ?", (user_id,)
+        )
+        conn.execute(
+            "UPDATE email_verification_tokens SET used = 1 WHERE token = ?", (token,)
         )
         conn.commit()
         return True

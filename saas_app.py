@@ -160,6 +160,11 @@ def render_auth_screen():
             confirm_password = st.text_input(
                 "Confirm password", type="password", key="signup_confirm"
             )
+            agreed_to_terms = st.checkbox(
+                "I agree to the [Terms of Service](/?page=terms) and "
+                "[Privacy Policy](/?page=privacy)",
+                key="signup_agree_terms",
+            )
             signup_submitted = st.form_submit_button("Create Account", use_container_width=True)
 
         if signup_submitted:
@@ -169,6 +174,8 @@ def render_auth_screen():
                 st.error("Password must be at least 8 characters.")
             elif new_password != confirm_password:
                 st.error("Passwords don't match.")
+            elif not agreed_to_terms:
+                st.error("You must agree to the Terms of Service and Privacy Policy to create an account.")
             else:
                 user_id = tenant.create_user(new_email, new_password)
                 if user_id is None:
@@ -192,6 +199,8 @@ def render_auth_screen():
                         )
                     _log_in(user_id, new_email.strip().lower())
                     st.rerun()
+
+    st.caption("[Terms of Service](/?page=terms) · [Privacy Policy](/?page=privacy)")
 
 
 # ============================================================
@@ -595,6 +604,9 @@ def render_dashboard():
         st.divider()
         render_trading_run(user["user_id"])
 
+    st.divider()
+    st.caption("[Terms of Service](/?page=terms) · [Privacy Policy](/?page=privacy)")
+
 
 # ============================================================
 # PASSWORD RESET / EMAIL VERIFICATION LANDING SCREENS
@@ -650,6 +662,241 @@ def render_email_verification_screen(token):
 
 
 # ============================================================
+# LEGAL PAGES -- Terms of Service / Privacy Policy
+# Reached via ordertradeai.com/?page=terms or ?page=privacy, same
+# query-param routing pattern as the reset/verify screens above.
+# Linked from the auth screen footer and from the required signup
+# consent checkbox. First-draft boilerplate written 2026-08-28 --
+# NOT reviewed by a lawyer. Treat this as a placeholder that lets the
+# platform launch billing (Stripe expects a published policy link) and
+# have SOMETHING that governs the relationship, not as something to
+# rely on if a real dispute ever comes up. Get actual legal review
+# before that matters.
+# ============================================================
+_LEGAL_LAST_UPDATED = "August 28, 2026"
+
+_TERMS_MD = f"""
+*Last updated: {_LEGAL_LAST_UPDATED}*
+
+**This is a draft. It has not been reviewed by a lawyer. It is provided
+to give the platform a published Terms of Service while in early
+access, not as a substitute for real legal advice.**
+
+### 1. Acceptance of terms
+
+By creating an account or using OrderTrade AI ("the Service"), you
+agree to these Terms of Service ("Terms"). If you don't agree, don't
+use the Service.
+
+### 2. What the Service does
+
+OrderTrade AI generates AI-assisted trade signals and, at your
+explicit request, places orders through broker accounts that **you**
+connect using your own API credentials. The Service never holds,
+custodies, or has independent access to your funds -- every order is
+placed directly against your own connected broker account, and you
+must separately confirm ("Execute") before any live order is sent.
+
+**During early access, the Service is paper/demo trading only.**
+There is no way to enable trading with real broker funds through the
+Service at this time. This may change in the future with advance
+notice.
+
+### 3. Not investment advice, no guaranteed results
+
+Nothing generated or displayed by the Service -- signals, scores,
+grades, backtests, or any other output -- is investment, financial,
+tax, or legal advice, and none of it is a recommendation to buy or
+sell any security, currency, commodity, or crypto asset. Trading and
+investing involve substantial risk of loss, including total loss of
+principal. Past performance (including any backtested or paper-traded
+results shown in the Service) is not indicative of future results.
+You are solely responsible for every trading decision made through
+your account, whether initiated by you or executed by the Service at
+your direction.
+
+### 4. Eligibility and your account
+
+You must be at least 18 years old (or the age of majority in your
+jurisdiction) to use the Service. You're responsible for keeping your
+password confidential and for all activity under your account. Tell
+us promptly if you believe your account has been compromised.
+
+### 5. Your broker credentials
+
+You provide your own broker/exchange API keys. We encrypt them at
+rest and only ever decrypt them to place orders you've directed
+through the Service. You're responsible for complying with your
+broker's own terms of service, and for any fees, restrictions, or
+consequences your broker applies to API-driven trading on your
+account.
+
+### 6. Subscription and billing
+
+After a 7-day free trial, continued use of the Service requires a
+paid subscription, billed monthly in advance through our payment
+processor (Stripe). Your subscription renews automatically each month
+until you cancel. You can cancel at any time from your account
+billing settings; cancellation takes effect at the end of your
+current billing period, and we don't provide refunds for partial
+periods already paid for. We may change our pricing with reasonable
+advance notice; continuing to use the Service after a price change
+takes effect means you accept the new price.
+
+### 7. Acceptable use
+
+You agree not to: use the Service for anything illegal; attempt to
+reverse-engineer, scrape, or resell access to the Service; interfere
+with or overload the Service's infrastructure; or use the Service to
+violate any broker's or exchange's own terms of service.
+
+### 8. Disclaimers
+
+The Service is provided "as is" and "as available," without warranty
+of any kind, express or implied, including warranties of
+merchantability, fitness for a particular purpose, or
+non-infringement. We don't warrant that the Service will be
+uninterrupted, error-free, or that any signal, price, or position
+data shown will always be accurate or current -- broker/exchange
+outages, market data delays, and third-party API failures are outside
+our control.
+
+### 9. Limitation of liability
+
+To the maximum extent permitted by law, OrderTrade AI and its
+operator will not be liable for any indirect, incidental, special,
+consequential, or punitive damages, or for any trading losses, lost
+profits, or lost data, arising from your use of the Service. Our
+total liability for any claim relating to the Service is limited to
+the amount you paid us in the 12 months before the claim arose.
+
+### 10. Termination
+
+We may suspend or terminate your access if you violate these Terms or
+if we reasonably believe your use of the Service poses a risk to the
+platform or other users. You may stop using the Service and cancel
+your subscription at any time.
+
+### 11. Changes to these terms
+
+We may update these Terms from time to time. We'll update the "Last
+updated" date above when we do; continued use of the Service after a
+change takes effect means you accept the updated Terms.
+
+### 12. Governing law
+
+*[Placeholder -- to be filled in with the operator's actual
+jurisdiction.]* These Terms are governed by the laws of your
+jurisdiction, without regard to its conflict-of-laws principles.
+
+### 13. Contact
+
+Questions about these Terms? Contact us at
+support@ordertradeai.com.
+"""
+
+_PRIVACY_MD = f"""
+*Last updated: {_LEGAL_LAST_UPDATED}*
+
+**This is a draft. It has not been reviewed by a lawyer. It is
+provided to give the platform a published Privacy Policy while in
+early access, not as a substitute for real legal advice.**
+
+### 1. What we collect
+
+- **Account info:** your email address and a securely hashed (bcrypt)
+  password -- we never store your password in plain text.
+- **Broker credentials:** the API key/secret you provide for each
+  broker you connect, encrypted at rest (Fernet symmetric encryption)
+  and decrypted only at the moment we place a trade you've directed.
+- **Trading activity:** positions, orders, and settings associated
+  with your account, so the Service can function and so you can see
+  your own history.
+- **Billing info:** handled directly by our payment processor,
+  Stripe -- we never see or store your full card number. We keep only
+  what Stripe tells us (subscription status, plan, renewal date).
+- **Basic technical logs:** standard web server logs (IP address,
+  timestamp, request path) kept for security and troubleshooting.
+
+### 2. How we use it
+
+To operate the Service (including placing trades you direct), send
+you transactional email (password resets, email verification, billing
+notices), respond to support requests, and improve the Service. We do
+not use your data for advertising, and we do not sell your personal
+data to anyone.
+
+### 3. Who we share it with
+
+Only the third parties needed to run the Service:
+
+- **Your connected brokers** (e.g. Alpaca, Binance, eToro) -- to place
+  the orders you direct.
+- **Stripe** -- to process subscription billing.
+- **Resend** -- to deliver transactional email (password reset,
+  verification, billing notices).
+
+We don't share your data with anyone else, and we don't sell it.
+
+### 4. Security
+
+Broker credentials are encrypted at rest; passwords are hashed, never
+stored in plain text; all traffic to the Service is encrypted in
+transit (HTTPS); and access to the servers that store this data is
+restricted. No system is perfectly secure, but we treat your broker
+credentials with the same care we'd want for our own.
+
+### 5. Data retention
+
+We keep your account data for as long as your account is active. If
+you'd like your account and associated data deleted, contact us at
+the address below and we'll process the request.
+
+### 6. Your rights
+
+Depending on where you live, you may have rights to access, correct,
+or delete your personal data, or to object to certain processing.
+Contact us at the address below to exercise any of these rights.
+
+### 7. Cookies
+
+The Service uses only the session cookie needed to keep you logged
+in. We don't use third-party advertising or tracking cookies.
+
+### 8. Children
+
+The Service isn't directed at anyone under 18, and we don't knowingly
+collect data from children.
+
+### 9. Where your data is processed
+
+Our servers are located in the EU. Some of our third-party processors
+(brokers you connect, Stripe, Resend) may process data in other
+regions as part of providing their services.
+
+### 10. Changes to this policy
+
+We may update this Privacy Policy from time to time. We'll update the
+"Last updated" date above when we do.
+
+### 11. Contact
+
+Questions about this policy, or want to exercise a data right? Contact
+us at support@ordertradeai.com.
+"""
+
+
+def render_legal_page(title, body_markdown):
+    st.title("📈 OrderTrade AI")
+    st.header(title)
+    st.markdown(body_markdown)
+    st.divider()
+    if st.button("Back"):
+        st.query_params.clear()
+        st.rerun()
+
+
+# ============================================================
 # ENTRY POINT
 # ============================================================
 _query_params = st.query_params
@@ -658,6 +905,10 @@ if "reset_token" in _query_params:
     render_password_reset_screen(_query_params["reset_token"])
 elif "verify_token" in _query_params:
     render_email_verification_screen(_query_params["verify_token"])
+elif _query_params.get("page") == "terms":
+    render_legal_page("Terms of Service", _TERMS_MD)
+elif _query_params.get("page") == "privacy":
+    render_legal_page("Privacy Policy", _PRIVACY_MD)
 elif st.session_state.saas_user_id is None:
     render_auth_screen()
 else:

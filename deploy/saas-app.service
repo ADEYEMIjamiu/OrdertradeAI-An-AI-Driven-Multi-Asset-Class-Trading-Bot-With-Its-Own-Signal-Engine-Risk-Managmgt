@@ -6,12 +6,21 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/root/AI-Trading-Bot
-# UPDATED 2026-08-27: dropped --server.baseUrlPath=saas -- this app now
-# has its own dedicated domain (ordertradeai.com, see
-# deploy/nginx-ordertradeai-com.conf) instead of living under
-# ordertradeai.adeyemiadegbenro.com/saas/, so it serves at the plain
-# root path again, same as it does when run locally.
-ExecStart=/root/AI-Trading-Bot/venv/bin/streamlit run saas_app.py --server.port=8502 --server.address=127.0.0.1
+# UPDATED 2026-08-27: dropped --server.baseUrlPath=saas -- this app had
+# its own dedicated domain (ordertradeai.com) and served at the plain
+# root path.
+#
+# UPDATED 2026-08-28 (again): --server.baseUrlPath=app is back, for a
+# different reason than the --saas path it replaced. ordertradeai.com
+# root now serves the new static marketing landing page (see
+# landing/index.html and deploy/nginx-ordertradeai-com.conf) instead of
+# this app -- Streamlit itself can't serve a hand-built static page
+# alongside its own app, so the split is done at nginx: root ("/") goes
+# to the static file, "/app" proxies here. saas_app.py's own BASE_URL
+# usage was updated to match (see its APP_URL constant) so password
+# reset, email verification, and Stripe checkout/portal links all still
+# point at /app and not the marketing page.
+ExecStart=/root/AI-Trading-Bot/venv/bin/streamlit run saas_app.py --server.port=8502 --server.address=127.0.0.1 --server.baseUrlPath=app
 Restart=always
 RestartSec=5
 

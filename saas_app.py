@@ -57,6 +57,15 @@ from engines import billing_engine
 # Host construct a reset link pointing at a domain they control.
 BASE_URL = "https://ordertradeai.com"
 
+# Added when the marketing landing page took over the domain root
+# (ordertradeai.com/): this Streamlit app now lives at /app instead of
+# root, so every link this file builds (password reset, email
+# verification, Stripe checkout/portal return URLs) needs the /app
+# prefix or it sends people to the landing page instead of back into
+# the product. Streamlit itself is started with
+# --server.baseUrlPath=app to match (see deploy/saas-app.service).
+APP_URL = f"{BASE_URL}/app"
+
 # Platform admin gate -- comma-separated list of emails in the
 # environment (never hardcoded in source, never a database flag a bug
 # could accidentally flip). Empty by default: no ADMIN_EMAILS set means
@@ -143,7 +152,7 @@ def render_auth_screen():
                     reset_token = tenant.create_password_reset_token(forgot_email)
                     if reset_token is not None:
                         try:
-                            reset_url = f"{BASE_URL}/?reset_token={reset_token}"
+                            reset_url = f"{APP_URL}/?reset_token={reset_token}"
                             email_engine.send_password_reset_email(forgot_email, reset_url)
                         except Exception:
                             # Swallowed deliberately -- surfacing a send
@@ -163,8 +172,8 @@ def render_auth_screen():
                 "Confirm password", type="password", key="signup_confirm"
             )
             agreed_to_terms = st.checkbox(
-                "I agree to the [Terms of Service](/?page=terms) and "
-                "[Privacy Policy](/?page=privacy)",
+                "I agree to the [Terms of Service](/app/?page=terms) and "
+                "[Privacy Policy](/app/?page=privacy)",
                 key="signup_agree_terms",
             )
             signup_submitted = st.form_submit_button("Create Account", use_container_width=True)
@@ -190,7 +199,7 @@ def render_auth_screen():
                     # email_verified flips to True. See render_dashboard().
                     try:
                         verify_token = tenant.create_email_verification_token(user_id)
-                        verify_url = f"{BASE_URL}/?verify_token={verify_token}"
+                        verify_url = f"{APP_URL}/?verify_token={verify_token}"
                         email_engine.send_verification_email(new_email, verify_url)
                         st.success("Account created. Check your email to verify your address.")
                     except Exception:
@@ -202,7 +211,7 @@ def render_auth_screen():
                     _log_in(user_id, new_email.strip().lower())
                     st.rerun()
 
-    st.caption("[Terms of Service](/?page=terms) · [Privacy Policy](/?page=privacy)")
+    st.caption("[Terms of Service](/app/?page=terms) · [Privacy Policy](/app/?page=privacy)")
 
 
 # ============================================================
@@ -588,7 +597,7 @@ def render_billing_gate(user):
         if billing.get("stripe_customer_id"):
             try:
                 portal_url = billing_engine.create_billing_portal_session(
-                    billing["stripe_customer_id"], BASE_URL
+                    billing["stripe_customer_id"], APP_URL
                 )
                 st.link_button("Manage Billing", portal_url, use_container_width=True)
             except Exception:
@@ -608,7 +617,7 @@ def render_billing_gate(user):
         )
         try:
             checkout_url = billing_engine.create_checkout_session(
-                user["user_id"], user["email"], BASE_URL
+                user["user_id"], user["email"], APP_URL
             )
             st.link_button("Start Free Trial", checkout_url, use_container_width=True)
         except Exception:
@@ -617,7 +626,7 @@ def render_billing_gate(user):
             st.error("Couldn't start checkout right now -- try again shortly.")
 
     st.divider()
-    st.caption("[Terms of Service](/?page=terms) · [Privacy Policy](/?page=privacy)")
+    st.caption("[Terms of Service](/app/?page=terms) · [Privacy Policy](/app/?page=privacy)")
     if st.button("Log Out", key="billing_gate_logout"):
         _log_out()
         st.rerun()
@@ -647,7 +656,7 @@ def render_dashboard():
             if st.button("Manage Billing", use_container_width=True):
                 try:
                     portal_url = billing_engine.create_billing_portal_session(
-                        billing["stripe_customer_id"], BASE_URL
+                        billing["stripe_customer_id"], APP_URL
                     )
                     st.link_button("Open Billing Portal", portal_url, use_container_width=True)
                 except Exception:
@@ -669,7 +678,7 @@ def render_dashboard():
             if st.button("Resend email", key="resend_verification"):
                 try:
                     verify_token = tenant.create_email_verification_token(user["user_id"])
-                    verify_url = f"{BASE_URL}/?verify_token={verify_token}"
+                    verify_url = f"{APP_URL}/?verify_token={verify_token}"
                     email_engine.send_verification_email(user["email"], verify_url)
                     st.success("Verification email sent.")
                 except Exception:
@@ -697,7 +706,7 @@ def render_dashboard():
         render_trading_run(user["user_id"])
 
     st.divider()
-    st.caption("[Terms of Service](/?page=terms) · [Privacy Policy](/?page=privacy)")
+    st.caption("[Terms of Service](/app/?page=terms) · [Privacy Policy](/app/?page=privacy)")
 
 
 # ============================================================

@@ -1,0 +1,434 @@
+<!--
+  OrderTrade AI marketing landing page. Single self-contained static
+  file, no build step, deliberately separate from saas_app.py (which
+  now lives at /app -- see deploy/nginx-ordertradeai-com.conf's header
+  comment for why the domain root split this way).
+
+  Deploy target: /var/www/ordertradeai-landing/index.html on the
+  droplet.
+    scp landing/index.html root@159.223.226.4:/var/www/ordertradeai-landing/index.html
+  (create the directory first if it doesn't exist yet:
+    ssh root@159.223.226.4 "mkdir -p /var/www/ordertradeai-landing")
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OrderTrade AI: AI trade signals for your own broker accounts</title>
+<meta name="description" content="Connect your own Alpaca, Binance or eToro account. OrderTrade AI scores signals across stocks, crypto, forex and commodities, then shows you exactly what it would trade before anything executes." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0a0c0f;
+    --bg-alt: #0f1216;
+    --bg-raised: #14181d;
+    --text: #e7e9ec;
+    --text-dim: #97a0ab;
+    --text-faint: #5c6570;
+    --border: #1f252c;
+    --border-soft: #181d23;
+    --accent: #3fb6f0;
+    --accent-dim: #235a72;
+    --green: #22c55e;
+    --red: #ef4444;
+    --radius: 4px;
+    --radius-sm: 2px;
+    --maxw: 1180px;
+  }
+  *{box-sizing:border-box;}
+  html{background:var(--bg);}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size:16px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:"IBM Plex Mono","SFMono-Regular",Consolas,monospace;}
+  a{color:inherit;}
+  img{max-width:100%;display:block;}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px;}
+  @media (max-width:640px){ .wrap{padding:0 20px;} }
+
+  @media (prefers-reduced-motion: reduce){
+    *{animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important;}
+  }
+
+  /* ---------- Nav ---------- */
+  header.nav{
+    position:sticky; top:0; z-index:40;
+    background:rgba(10,12,15,0.86);
+    backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--border-soft);
+    height:64px;
+  }
+  .nav-inner{
+    max-width:var(--maxw); margin:0 auto; padding:0 28px;
+    height:64px; display:flex; align-items:center; justify-content:space-between;
+  }
+  .brand{display:flex; align-items:center; gap:9px; font-weight:600; font-size:15px; letter-spacing:0.01em; white-space:nowrap;}
+  .brand-mark{
+    width:20px;height:20px;border-radius:var(--radius-sm);
+    background:linear-gradient(160deg, var(--accent), var(--accent-dim));
+    display:flex;align-items:center;justify-content:center;
+    color:#04141c; font-family:"IBM Plex Mono"; font-weight:700; font-size:12px;
+    flex-shrink:0;
+  }
+  .nav-actions{display:flex; align-items:center; gap:22px;}
+  .nav-signin{font-size:14px; color:var(--text-dim); text-decoration:none;}
+  .nav-signin:hover{color:var(--text);}
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center;
+    font-family:"IBM Plex Sans"; font-weight:600; font-size:14px;
+    padding:9px 18px; border-radius:var(--radius);
+    text-decoration:none; white-space:nowrap; border:1px solid transparent;
+    cursor:pointer;
+  }
+  .btn-primary{background:var(--accent); color:#04141c;}
+  .btn-primary:hover{background:#5cc4f2;}
+  .btn-ghost{background:transparent; color:var(--text); border-color:var(--border);}
+  .btn-ghost:hover{border-color:var(--accent-dim);}
+
+  /* ---------- Hero ---------- */
+  .hero{padding:76px 0 56px; border-bottom:1px solid var(--border-soft);}
+  .eyebrow{
+    display:inline-block; font-family:"IBM Plex Mono"; font-size:12.5px;
+    color:var(--text-dim); border:1px solid var(--border); border-radius:var(--radius-sm);
+    padding:5px 10px; margin-bottom:22px;
+  }
+  h1{
+    font-size:clamp(34px, 5vw, 54px); line-height:1.1; letter-spacing:-0.02em;
+    font-weight:700; margin:0 0 20px; max-width:640px;
+  }
+  .hero p.sub{
+    font-size:18px; color:var(--text-dim); max-width:52ch; line-height:1.55; margin:0 0 30px;
+  }
+  .hero-ctas{display:flex; gap:14px; flex-wrap:wrap;}
+  .btn-lg{padding:12px 24px; font-size:15px;}
+
+  /* ---------- Preview panel ---------- */
+  .preview{padding:52px 0 60px; border-bottom:1px solid var(--border-soft); background:var(--bg-alt);}
+  .preview-head{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:18px; flex-wrap:wrap; gap:8px;}
+  .preview-head h2{font-size:15px; font-weight:600; margin:0; color:var(--text);}
+  .preview-note{font-size:13px; color:var(--text-faint);}
+  .panel{
+    background:var(--bg-raised); border:1px solid var(--border); border-radius:var(--radius);
+    overflow:hidden;
+  }
+  table.signals{width:100%; border-collapse:collapse; font-size:13.5px;}
+  table.signals th{
+    text-align:left; font-family:"IBM Plex Mono"; font-weight:500; font-size:11.5px;
+    text-transform:uppercase; letter-spacing:0.06em; color:var(--text-faint);
+    padding:12px 16px; border-bottom:1px solid var(--border);
+  }
+  table.signals td{padding:13px 16px; border-bottom:1px solid var(--border-soft); font-family:"IBM Plex Mono"; color:var(--text);}
+  table.signals tr:last-child td{border-bottom:none;}
+  .up{color:var(--green);}
+  .down{color:var(--red);}
+  .grade{
+    display:inline-block; font-weight:700; font-size:12px; padding:2px 8px;
+    border-radius:var(--radius-sm); border:1px solid;
+  }
+  .grade-a{color:var(--green); border-color:var(--green);}
+  .grade-b{color:var(--accent); border-color:var(--accent-dim);}
+  .grade-c{color:var(--text-dim); border-color:var(--border);}
+
+  /* ---------- Section shell ---------- */
+  section{padding:70px 0; border-bottom:1px solid var(--border-soft);}
+  .section-label{font-family:"IBM Plex Mono"; font-size:12px; color:var(--accent); letter-spacing:0.04em; margin-bottom:10px;}
+  h2.section-title{font-size:30px; font-weight:700; letter-spacing:-0.01em; margin:0 0 14px; max-width:24ch;}
+  .section-sub{color:var(--text-dim); font-size:16px; max-width:56ch; line-height:1.6; margin:0 0 42px;}
+
+  /* ---------- How it works: asymmetric rows ---------- */
+  .steps{display:flex; flex-direction:column; gap:0;}
+  .step{
+    display:grid; grid-template-columns:64px 1fr; gap:22px;
+    padding:26px 0; border-top:1px solid var(--border-soft);
+  }
+  .step:first-child{border-top:none;}
+  .step-num{font-family:"IBM Plex Mono"; font-size:13px; color:var(--text-faint); padding-top:3px;}
+  .step h3{font-size:18px; margin:0 0 8px; font-weight:600;}
+  .step p{color:var(--text-dim); font-size:15px; line-height:1.6; margin:0; max-width:62ch;}
+
+  /* ---------- Asset class grid: 1 + 3 asymmetric ---------- */
+  .asset-grid{display:grid; grid-template-columns:1.3fr 1fr 1fr 1fr; gap:1px; background:var(--border-soft); border:1px solid var(--border-soft);}
+  .asset-card{background:var(--bg-alt); padding:26px 22px;}
+  .asset-card .tag{font-family:"IBM Plex Mono"; font-size:11px; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:10px;}
+  .asset-card h3{font-size:17px; margin:0 0 8px; font-weight:600;}
+  .asset-card p{font-size:14px; color:var(--text-dim); margin:0; line-height:1.55;}
+  @media (max-width:900px){ .asset-grid{grid-template-columns:1fr 1fr;} }
+  @media (max-width:560px){ .asset-grid{grid-template-columns:1fr;} }
+
+  /* ---------- Risk list ---------- */
+  .risk-list{display:flex; flex-direction:column;}
+  .risk-row{
+    display:grid; grid-template-columns:220px 1fr; gap:24px;
+    padding:20px 0; border-top:1px solid var(--border-soft);
+  }
+  .risk-row:first-child{border-top:none;}
+  .risk-row h4{margin:0; font-size:15px; font-weight:600; color:var(--text);}
+  .risk-row p{margin:0; font-size:14.5px; color:var(--text-dim); line-height:1.6;}
+  @media (max-width:700px){ .risk-row{grid-template-columns:1fr; gap:6px;} }
+
+  /* ---------- Custody band ---------- */
+  .custody{background:var(--bg-alt);}
+  .custody-inner{display:grid; grid-template-columns:1fr 1fr; gap:48px; align-items:start;}
+  .custody h2.section-title{max-width:14ch;}
+  .custody-points{display:flex; flex-direction:column; gap:20px;}
+  .custody-points div{border-left:2px solid var(--accent-dim); padding-left:16px;}
+  .custody-points p{margin:0; font-size:14.5px; color:var(--text-dim); line-height:1.6;}
+  .custody-points strong{color:var(--text); font-weight:600; display:block; margin-bottom:4px; font-size:14.5px;}
+  @media (max-width:800px){ .custody-inner{grid-template-columns:1fr;} }
+
+  /* ---------- Pricing ---------- */
+  .pricing-wrap{display:flex; justify-content:center;}
+  .price-card{
+    max-width:440px; width:100%; background:var(--bg-raised); border:1px solid var(--border);
+    border-radius:var(--radius); padding:40px 36px;
+  }
+  .price-card .plan-name{font-family:"IBM Plex Mono"; font-size:12.5px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:14px;}
+  .price-amount{display:flex; align-items:baseline; gap:6px; margin-bottom:6px;}
+  .price-amount .num{font-size:44px; font-weight:700; letter-spacing:-0.02em;}
+  .price-amount .per{color:var(--text-dim); font-size:15px;}
+  .trial-note{font-size:14.5px; color:var(--accent); margin:0 0 26px;}
+  .price-features{list-style:none; margin:0 0 30px; padding:0; display:flex; flex-direction:column; gap:11px;}
+  .price-features li{font-size:14.5px; color:var(--text-dim); padding-left:20px; position:relative; line-height:1.5;}
+  .price-features li::before{content:"+"; position:absolute; left:0; color:var(--accent); font-family:"IBM Plex Mono"; font-weight:600;}
+  .price-card .btn{width:100%;}
+  .price-fine{font-size:12.5px; color:var(--text-faint); margin:14px 0 0; text-align:center;}
+
+  /* ---------- Final CTA ---------- */
+  .final-cta{text-align:center; padding:80px 0;}
+  .final-cta h2{font-size:32px; font-weight:700; margin:0 0 14px; letter-spacing:-0.01em;}
+  .final-cta p{color:var(--text-dim); font-size:16px; margin:0 0 30px;}
+  .final-cta .btn{margin:0 auto;}
+
+  /* ---------- Footer ---------- */
+  footer{padding:34px 0;}
+  .footer-inner{display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;}
+  .footer-links{display:flex; gap:22px; font-size:13.5px; color:var(--text-dim);}
+  .footer-links a{text-decoration:none;}
+  .footer-links a:hover{color:var(--text);}
+  .footer-copy{font-size:13px; color:var(--text-faint);}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-inner">
+    <div class="brand"><span class="brand-mark">OT</span>OrderTrade AI</div>
+    <div class="nav-actions">
+      <a class="nav-signin" href="/app">Sign in</a>
+      <a class="btn btn-primary" href="/app">Start free trial</a>
+    </div>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <span class="eyebrow">Paper and demo trading only during early access</span>
+    <h1>AI signals for the broker account you already have.</h1>
+    <p class="sub">Connect your own Alpaca, Binance or eToro account. Preview every signal before anything executes, then place the trade yourself.</p>
+    <div class="hero-ctas">
+      <a class="btn btn-primary btn-lg" href="/app">Start free trial</a>
+      <a class="btn btn-ghost btn-lg" href="/app">Sign in</a>
+    </div>
+  </div>
+</section>
+
+<section class="preview">
+  <div class="wrap">
+    <div class="preview-head">
+      <h2>AI Decision Engine, illustrative preview</h2>
+      <span class="preview-note">Actual signals depend on live market data and your connected brokers.</span>
+    </div>
+    <div class="panel">
+      <table class="signals">
+        <thead>
+          <tr><th>Ticker</th><th>Asset class</th><th>Signal</th><th>Confidence</th><th>Risk / reward</th><th>Grade</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>NVDA</td><td>US stocks</td><td class="up">Buy</td><td>82%</td><td>1 : 2.4</td>
+            <td><span class="grade grade-a">A</span></td>
+          </tr>
+          <tr>
+            <td>SOL-USD</td><td>Crypto</td><td class="up">Buy</td><td>71%</td><td>1 : 1.8</td>
+            <td><span class="grade grade-b">B</span></td>
+          </tr>
+          <tr>
+            <td>EUR/USD</td><td>Forex</td><td class="down">Wait</td><td>54%</td><td>1 : 1.1</td>
+            <td><span class="grade grade-c">C</span></td>
+          </tr>
+          <tr>
+            <td>XAU/USD</td><td>Commodities</td><td class="up">Buy</td><td>76%</td><td>1 : 2.1</td>
+            <td><span class="grade grade-a">A</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2 class="section-title">How it works</h2>
+    <p class="section-sub">Three steps between connecting an account and reviewing your first signal.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num mono">01</div>
+        <div>
+          <h3>Connect your own broker</h3>
+          <p>Link Alpaca, Binance or eToro with your own API keys. They are encrypted at rest and only ever decrypted to act on your own account. OrderTrade AI never pools or holds anyone's funds.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num mono">02</div>
+        <div>
+          <h3>The AI scores opportunities</h3>
+          <p>The signal engine reads market data across your enabled asset classes and produces a graded, ranked list, sized against your real connected-account balance.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num mono">03</div>
+        <div>
+          <h3>You review, then execute</h3>
+          <p>Preview shows exactly what would be bought and why. Nothing is placed until you check the confirmation box and click Execute yourself.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2 class="section-title">One dashboard, four asset classes</h2>
+    <p class="section-sub">Each asset class runs through the same signal engine, with its own position caps and broker connection.</p>
+    <div class="asset-grid">
+      <div class="asset-card">
+        <div class="tag">Stocks</div>
+        <h3>US equities via Alpaca</h3>
+        <p>Paper trading account. Full order history and stop-loss, take-profit and trailing-exit coverage.</p>
+      </div>
+      <div class="asset-card">
+        <div class="tag">Crypto</div>
+        <h3>Binance testnet</h3>
+        <p>Wallet-balance-based position sizing, not just this dashboard's own trade log.</p>
+      </div>
+      <div class="asset-card">
+        <div class="tag">Forex</div>
+        <h3>eToro demo</h3>
+        <p>Leverage and stop-loss rate handled per broker rules for currency pairs.</p>
+      </div>
+      <div class="asset-card">
+        <div class="tag">Commodities</div>
+        <h3>eToro demo</h3>
+        <p>Gold, oil and other CFD instruments alongside your forex positions.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2 class="section-title">Risk management runs in the background</h2>
+    <p class="section-sub">Protection that applies once a position is open, not just at entry.</p>
+    <div class="risk-list">
+      <div class="risk-row">
+        <h4>Stop-loss and take-profit</h4>
+        <p>Set from real price structure at trade time, not a fixed percentage guess.</p>
+      </div>
+      <div class="risk-row">
+        <h4>Trailing-profit lock and break-even ratchet</h4>
+        <p>Gives back less of an open gain as a position moves in your favor, with partial profit-taking along the way.</p>
+      </div>
+      <div class="risk-row">
+        <h4>Hard time-based exit</h4>
+        <p>Positions held past a set number of days are closed regardless of current profit or loss.</p>
+      </div>
+      <div class="risk-row">
+        <h4>Portfolio-level exposure cap</h4>
+        <p>A ceiling on how much of your account can be at risk at once, checked before every new trade.</p>
+      </div>
+      <div class="risk-row">
+        <h4>Kill switch</h4>
+        <p>One control stops all automated activity across every connected broker immediately.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="custody">
+  <div class="wrap custody-inner">
+    <div>
+      <h2 class="section-title">Your money stays in your own broker account</h2>
+      <p class="section-sub" style="margin-bottom:0;">OrderTrade AI is a signal and execution layer, not a custodian.</p>
+    </div>
+    <div class="custody-points">
+      <div>
+        <strong>We never hold or pool funds</strong>
+        <p>Every trade is placed directly on your own Alpaca, Binance or eToro account using your own API keys.</p>
+      </div>
+      <div>
+        <strong>Paper and demo only, for now</strong>
+        <p>Early access runs exclusively on paper and demo broker environments. There is no control anywhere in the product to switch this on for live trading.</p>
+      </div>
+      <div>
+        <strong>Encrypted credential storage</strong>
+        <p>Broker API keys are encrypted at rest and decrypted only at the moment a request is made on your own account.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <div style="text-align:center; margin-bottom:44px;">
+      <h2 class="section-title" style="margin-left:auto; margin-right:auto;">Pricing</h2>
+      <p class="section-sub" style="margin-left:auto; margin-right:auto;">One plan. Every asset class and every risk-management feature included.</p>
+    </div>
+    <div class="pricing-wrap">
+      <div class="price-card">
+        <div class="plan-name">OrderTrade AI</div>
+        <div class="price-amount"><span class="num mono">$39</span><span class="per">/ month</span></div>
+        <p class="trial-note">7 day free trial, cancel anytime before it ends and you will not be charged.</p>
+        <ul class="price-features">
+          <li>Stocks, crypto, forex and commodities signals</li>
+          <li>Stop-loss, take-profit and trailing-exit protection</li>
+          <li>Portfolio-level exposure cap and kill switch</li>
+          <li>Bring your own broker, your funds never leave your account</li>
+          <li>Manage or cancel your billing at any time</li>
+        </ul>
+        <a class="btn btn-primary" href="/app">Start free trial</a>
+        <p class="price-fine">Billed monthly through Stripe. No long-term contract.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="final-cta" style="border-bottom:none;">
+  <div class="wrap">
+    <h2>Connect a broker and see your first signal.</h2>
+    <p>Paper and demo trading, so there is nothing at risk while you try it.</p>
+    <a class="btn btn-primary btn-lg" href="/app">Start free trial</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap footer-inner">
+    <div class="footer-copy">© 2026 OrderTrade AI. A Speedit Digital Technology product.</div>
+    <div class="footer-links">
+      <a href="/app?page=terms">Terms of Service</a>
+      <a href="/app?page=privacy">Privacy Policy</a>
+      <a href="/app">Sign in</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

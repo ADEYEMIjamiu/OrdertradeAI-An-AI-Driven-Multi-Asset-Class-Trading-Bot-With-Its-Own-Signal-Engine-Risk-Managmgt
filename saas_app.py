@@ -110,6 +110,7 @@ def _log_out():
 # LOGGED-OUT VIEW: LOGIN / SIGN UP
 # ============================================================
 def render_auth_screen():
+    st.caption(f"[← Back to ordertradeai.com]({BASE_URL}/)")
     st.title("📈 OrderTrade AI")
     st.caption(
         "Early access -- paper/demo trading only. Connect your own "

@@ -80,8 +80,20 @@
     flex-shrink:0;
   }
   .nav-actions{display:flex; align-items:center; gap:22px;}
-  .nav-signin{font-size:14px; color:var(--text-dim); text-decoration:none;}
+  .nav-signin{font-size:14px; color:var(--text-dim); text-decoration:none; white-space:nowrap;}
   .nav-signin:hover{color:var(--text);}
+  /* Fixed at 375px wide: "OrderTrade AI" + "Sign in" + "Start free
+     trial" don't all fit on one 64px-tall row without help. nav-signin
+     was missing white-space:nowrap above, so "Sign in" wrapped onto a
+     second line and visually collided with the wordmark next to it --
+     narrowing the gap and shrinking the brand text below gives
+     everything enough room to stay on one line instead. */
+  @media (max-width:420px){
+    .nav-inner{padding:0 16px;}
+    .nav-actions{gap:12px;}
+    .brand{font-size:13px;}
+    .btn-primary{padding:9px 14px; font-size:13px;}
+  }
   .btn{
     display:inline-flex; align-items:center; justify-content:center;
     font-family:"IBM Plex Sans"; font-weight:600; font-size:14px;

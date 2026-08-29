@@ -352,6 +352,11 @@ def render_settings(user_id):
         tenant.save_user_settings(user_id, trading_paused=not is_paused)
         st.rerun()
 
+    # A visual break before the settings form below -- this button takes
+    # effect immediately (see save_user_settings() above), it isn't part
+    # of the form, and without a divider the two read as one control.
+    st.divider()
+
     with st.form("settings_form"):
         max_position_size = st.slider(
             "Max position size (% of account per trade)",
@@ -756,12 +761,26 @@ def render_dashboard():
     with billing_col:
         st.write("")
         if billing.get("stripe_customer_id"):
+            # UPDATED 2026-08-29: still creates the Stripe Billing Portal
+            # session lazily, only when clicked -- NOT on every dashboard
+            # render, which would otherwise hit Stripe's API on every
+            # single rerun (Streamlit reruns the whole script on every
+            # widget interaction, and this dashboard also has autorefresh
+            # -- see that feature's own notes elsewhere in this file).
+            # What changed is the second click: instead of surfacing a
+            # separate "Open Billing Portal" link-button the user then
+            # had to click again, an instant meta-refresh takes them
+            # straight to Stripe the moment the session is created.
             if st.button("Manage Billing", use_container_width=True):
                 try:
                     portal_url = billing_engine.create_billing_portal_session(
                         billing["stripe_customer_id"], APP_URL
                     )
-                    st.link_button("Open Billing Portal", portal_url, use_container_width=True)
+                    st.markdown(
+                        f'<meta http-equiv="refresh" content="0; url={portal_url}">',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption("Opening the billing portal...")
                 except Exception:
                     print("[billing] create_billing_portal_session failed:")
                     traceback.print_exc()
@@ -1013,9 +1032,8 @@ change takes effect means you accept the updated Terms.
 
 ### 12. Governing law
 
-*[Placeholder -- to be filled in with the operator's actual
-jurisdiction.]* These Terms are governed by the laws of your
-jurisdiction, without regard to its conflict-of-laws principles.
+These Terms are governed by the laws of Nigeria, without regard to its
+conflict-of-laws principles.
 
 ### 13. Contact
 
@@ -1115,11 +1133,18 @@ us at support@ordertradeai.com.
 
 
 def render_legal_page(title, body_markdown):
+    # Added 2026-08-29: a top-of-page way out, not just the "Back" button
+    # at the very bottom -- someone who lands here from a search engine
+    # (rather than clicking through from the signup checkbox) shouldn't
+    # have to scroll past the entire document just to leave.
+    if st.button("← Back", key="legal_back_top"):
+        st.query_params.clear()
+        st.rerun()
     st.title("📈 OrderTrade AI")
     st.header(title)
     st.markdown(body_markdown)
     st.divider()
-    if st.button("Back"):
+    if st.button("Back", key="legal_back_bottom"):
         st.query_params.clear()
         st.rerun()
 

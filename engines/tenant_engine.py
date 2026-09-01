@@ -192,6 +192,28 @@ def _get_connection():
             FOREIGN KEY(user_id) REFERENCES users(user_id)
         )
     """)
+    # Added 2026-09-01 to fix users being signed out every time they take
+    # a full round trip to Stripe (Checkout or the Billing Portal) and
+    # back. Streamlit's login state lives only in st.session_state, which
+    # is tied to the browser tab's live WebSocket connection -- a full
+    # top-level navigation away to checkout.stripe.com/billing.stripe.com
+    # and back tears that connection down and silently wipes it, even
+    # though the person never explicitly logged out. This table backs a
+    # long-lived "remember me" browser cookie (see saas_app.py's
+    # _ISSUE_SESSION_COOKIE/_read_session_cookie) that survives that trip:
+    # an opaque random token, same pattern as the other token tables
+    # above, rather than a signed/stateless cookie -- so a session can
+    # still be individually revoked (logout deletes its row) without
+    # needing a separate signing secret in the environment.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS login_sessions (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        )
+    """)
     return conn
 
 
@@ -825,6 +847,76 @@ def confirm_email_change(token):
         )
         conn.commit()
         return new_email
+    finally:
+        conn.close()
+
+
+# ============================================================
+# PERSISTENT LOGIN SESSIONS (added 2026-09-01) -- see login_sessions'
+# table comment above in _get_connection() for the full "why". Backs a
+# long-lived browser cookie so a full-page trip to Stripe and back
+# doesn't sign the user out.
+# ============================================================
+
+_LOGIN_SESSION_LIFETIME = timedelta(days=30)
+
+
+def create_login_session(user_id):
+    """
+    Issues a new 30-day session token for this user and returns it.
+    Called at actual login (password or persisted-cookie restore).
+    Each call is a fresh independent token -- logging in from a second
+    browser doesn't invalidate the first one, same as most SaaS
+    products' "signed in on 2 devices" behavior.
+    """
+    conn = _get_connection()
+    try:
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        expires_at = now + _LOGIN_SESSION_LIFETIME
+        conn.execute(
+            "INSERT INTO login_sessions (token, user_id, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?)",
+            (token, user_id, now.isoformat(), expires_at.isoformat()),
+        )
+        conn.commit()
+        return token
+    finally:
+        conn.close()
+
+
+def get_user_id_for_login_session(token):
+    """Returns the user_id this session token belongs to, or None if the
+    token is missing/expired/was revoked (logged out). Unlike the other
+    token tables, this one is deliberately NOT single-use -- it has to
+    keep working across every page load for 30 days, not just once."""
+    if not token:
+        return None
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT user_id, expires_at FROM login_sessions WHERE token = ?", (token,)
+        ).fetchone()
+        if not row:
+            return None
+        user_id, expires_at = row
+        if datetime.now(timezone.utc) > datetime.fromisoformat(expires_at):
+            return None
+        return user_id
+    finally:
+        conn.close()
+
+
+def delete_login_session(token):
+    """Revokes a single session token -- called on explicit Log Out so
+    the browser's cookie (even if it lingers client-side) can't silently
+    log the person back in afterward."""
+    if not token:
+        return
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM login_sessions WHERE token = ?", (token,))
+        conn.commit()
     finally:
         conn.close()
 

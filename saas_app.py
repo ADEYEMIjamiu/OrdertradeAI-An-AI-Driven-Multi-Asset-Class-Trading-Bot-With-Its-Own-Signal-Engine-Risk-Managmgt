@@ -40,6 +40,7 @@ import traceback
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from engines import tenant_engine as tenant
 from engines import saas_broker_factory
@@ -114,16 +115,94 @@ if "saas_user_id" not in st.session_state:
     st.session_state.saas_user_id = None
 if "saas_user_email" not in st.session_state:
     st.session_state.saas_user_email = None
+if "saas_session_token" not in st.session_state:
+    st.session_state.saas_session_token = None
+
+
+# ============================================================
+# PERSISTENT LOGIN COOKIE -- added 2026-09-01 to fix users getting
+# signed out after any full-page round trip to Stripe (Checkout OR the
+# Billing Portal's "Return to OrderTrade AI" link) and back.
+#
+# Root cause: st.session_state only lives as long as the browser tab's
+# WebSocket connection to this app. Navigating fully away to
+# checkout.stripe.com / billing.stripe.com and back tears that
+# connection down and opens a fresh one, which wipes session_state even
+# though the person never clicked Log Out. Fixing that needs login to
+# survive outside session_state -- a browser cookie backed by
+# tenant.login_sessions (see that table's comment in tenant_engine.py).
+#
+# Streamlit has no server-side "set-cookie" call, so writing the cookie
+# goes through a tiny injected script instead (_set_session_cookie/
+# _clear_session_cookie below). Reading it back doesn't need JS, though:
+# Streamlit 1.37+ exposes st.context.cookies, which reflects whatever
+# cookies the browser actually sent with THIS page load's HTTP request
+# -- populated correctly even on a brand-new WebSocket connection,
+# unlike session_state.
+# ============================================================
+_SESSION_COOKIE_NAME = "ot_session"
+_SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days -- matches tenant.create_login_session()
+
+
+def _set_session_cookie(token):
+    """SameSite=Lax (NOT Strict) is required here -- Strict cookies are
+    withheld by the browser on the very cross-site top-level GET that
+    Stripe's redirect back to APP_URL is, which would silently defeat
+    this whole fix for exactly the case it exists to cover."""
+    components.html(
+        f"""<script>
+        document.cookie = "{_SESSION_COOKIE_NAME}={token}; path=/; max-age={_SESSION_COOKIE_MAX_AGE}; SameSite=Lax; Secure";
+        </script>""",
+        height=0,
+        width=0,
+    )
+
+
+def _clear_session_cookie():
+    components.html(
+        f"""<script>
+        document.cookie = "{_SESSION_COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax; Secure";
+        </script>""",
+        height=0,
+        width=0,
+    )
 
 
 def _log_in(user_id, email):
     st.session_state.saas_user_id = user_id
     st.session_state.saas_user_email = email
+    token = tenant.create_login_session(user_id)
+    st.session_state.saas_session_token = token
+    _set_session_cookie(token)
 
 
 def _log_out():
+    if st.session_state.saas_session_token:
+        tenant.delete_login_session(st.session_state.saas_session_token)
     st.session_state.saas_user_id = None
     st.session_state.saas_user_email = None
+    st.session_state.saas_session_token = None
+    _clear_session_cookie()
+
+
+# Runs on every script execution (Streamlit reruns the whole script on
+# every interaction), but only ever finds something to do the first time
+# a fresh connection shows up already logged out in session_state --
+# which is exactly the situation right after a Stripe round trip. Does
+# NOT call _log_in() (that would reissue a brand-new cookie/token on
+# every single rerun for no reason); it just repopulates session_state
+# from the still-valid existing session so the rest of this run's
+# rendering sees a logged-in user.
+if st.session_state.saas_user_id is None:
+    _cookie_token = st.context.cookies.get(_SESSION_COOKIE_NAME)
+    if _cookie_token:
+        _restored_user_id = tenant.get_user_id_for_login_session(_cookie_token)
+        if _restored_user_id:
+            _restored_user = tenant.get_user(_restored_user_id)
+            if _restored_user is not None:
+                st.session_state.saas_user_id = _restored_user_id
+                st.session_state.saas_user_email = _restored_user["email"]
+                st.session_state.saas_session_token = _cookie_token
 
 
 # ============================================================

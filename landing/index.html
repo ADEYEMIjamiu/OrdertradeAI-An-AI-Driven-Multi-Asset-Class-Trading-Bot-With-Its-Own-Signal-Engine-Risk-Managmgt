@@ -297,6 +297,7 @@
   #cookie-banner{
     display:none; position:fixed; left:0; right:0; bottom:0; z-index:60;
     background:var(--bg-raised); border-top:1px solid var(--border);
+    box-shadow:0 -8px 24px rgba(0,0,0,0.35);
     padding:18px 28px; align-items:center; justify-content:center; gap:24px;
     flex-wrap:wrap;
   }
@@ -305,6 +306,12 @@
   #cookie-banner .cookie-actions{display:flex; gap:10px; flex-shrink:0;}
   #cookie-banner .btn{padding:8px 16px; font-size:13.5px;}
   @media (max-width:640px){ #cookie-banner{padding:16px 20px; justify-content:flex-start;} }
+  /* Reserves room at the bottom of the page equal to the banner's own
+     height (measured in JS, see otaSyncBannerPadding below) so the
+     fixed banner never sits on top of real content underneath it --
+     it was previously just overlapping whatever happened to be at the
+     bottom of the viewport when it appeared. */
+  body.has-cookie-banner{ transition:padding-bottom 0.15s ease; }
 
   /* ---------- Footer ---------- */
   footer{padding:34px 0;}
@@ -659,10 +666,29 @@
       }
     };
 
+    // Keeps the fixed banner from ever sitting on top of real content:
+    // measures its actual rendered height (it wraps to more lines on
+    // narrow screens, so a fixed guess wouldn't hold up) and pushes the
+    // page's bottom padding out to match whenever it's shown, then
+    // removes that padding again once it's hidden.
+    function syncBannerPadding() {
+      var banner = document.getElementById("cookie-banner");
+      if (!banner) return;
+      if (banner.style.display === "flex") {
+        document.body.classList.add("has-cookie-banner");
+        document.body.style.paddingBottom = banner.offsetHeight + "px";
+      } else {
+        document.body.classList.remove("has-cookie-banner");
+        document.body.style.paddingBottom = "";
+      }
+    }
+    window.addEventListener("resize", syncBannerPadding);
+
     window.otaConsent = function (choice) {
       localStorage.setItem(CONSENT_KEY, choice);
       var banner = document.getElementById("cookie-banner");
       if (banner) banner.style.display = "none";
+      syncBannerPadding();
       if (choice === "granted") loadGA();
     };
 
@@ -671,6 +697,7 @@
     window.otaShowPreferences = function () {
       var banner = document.getElementById("cookie-banner");
       if (banner) banner.style.display = "flex";
+      syncBannerPadding();
     };
 
     var stored = localStorage.getItem(CONSENT_KEY);
@@ -680,6 +707,7 @@
       document.addEventListener("DOMContentLoaded", function () {
         var banner = document.getElementById("cookie-banner");
         if (banner) banner.style.display = "flex";
+        syncBannerPadding();
       });
     }
   })();

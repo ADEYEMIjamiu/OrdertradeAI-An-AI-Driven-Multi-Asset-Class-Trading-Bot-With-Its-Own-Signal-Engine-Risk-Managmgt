@@ -26,6 +26,7 @@ jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3
+metaapi-cloud-sdk
 mdurl==0.1.2
 msgpack==1.2.1
 multitasking==0.0.13

@@ -628,13 +628,12 @@
   // choice -- either just now via the Accept button, or previously
   // (remembered in localStorage, checked on every page load below).
   //
-  // TODO before going live: replace GA_MEASUREMENT_ID with your real
-  // GA4 property's Measurement ID. Create the property at
-  // https://analytics.google.com (free) -- Admin -> Data Streams ->
-  // your web stream -- the ID looks like "G-XXXXXXXXXX". Nothing here
-  // will actually send data to Google until that's a real ID.
+  // GA4 property "OrderTrade AI" created 2026-09-01 under the same
+  // Google Analytics account as the user's other project (Analytics
+  // supports multiple independent properties per account -- no
+  // separate Google login needed). Data Stream: https://ordertradeai.com
   (function () {
-    var GA_MEASUREMENT_ID = "G-XXXXXXXXXX";
+    var GA_MEASUREMENT_ID = "G-HBGC4V59RS";
     var CONSENT_KEY = "ota_analytics_consent";
 
     function loadGA() {

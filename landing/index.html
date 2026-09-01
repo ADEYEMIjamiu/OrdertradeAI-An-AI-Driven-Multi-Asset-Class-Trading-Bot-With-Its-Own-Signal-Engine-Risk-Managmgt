@@ -293,6 +293,19 @@
   .final-cta p{color:var(--text-dim); font-size:16px; margin:0 0 30px;}
   .final-cta .btn{margin:0 auto;}
 
+  /* ---------- Cookie consent banner ---------- */
+  #cookie-banner{
+    display:none; position:fixed; left:0; right:0; bottom:0; z-index:60;
+    background:var(--bg-raised); border-top:1px solid var(--border);
+    padding:18px 28px; align-items:center; justify-content:center; gap:24px;
+    flex-wrap:wrap;
+  }
+  #cookie-banner p{margin:0; font-size:13.5px; color:var(--text-dim); max-width:56ch; line-height:1.5;}
+  #cookie-banner p a{color:var(--accent); text-decoration:underline;}
+  #cookie-banner .cookie-actions{display:flex; gap:10px; flex-shrink:0;}
+  #cookie-banner .btn{padding:8px 16px; font-size:13.5px;}
+  @media (max-width:640px){ #cookie-banner{padding:16px 20px; justify-content:flex-start;} }
+
   /* ---------- Footer ---------- */
   footer{padding:34px 0;}
   .footer-inner{display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;}
@@ -308,8 +321,8 @@
   <div class="nav-inner">
     <div class="brand"><span class="brand-mark">OT</span>OrderTrade AI</div>
     <div class="nav-actions">
-      <a class="nav-signin" href="/app">Sign in</a>
-      <a class="btn btn-primary" href="/app">Start free trial</a>
+      <a class="nav-signin" href="/app" onclick="window.otaTrack && otaTrack('sign_in_click')">Sign in</a>
+      <a class="btn btn-primary" href="/app" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
     </div>
   </div>
 </header>
@@ -320,8 +333,8 @@
     <h1>AI signals for the broker account you already have.</h1>
     <p class="sub">Connect your own Alpaca, Binance or eToro account. Preview every signal before anything executes, then place the trade yourself.</p>
     <div class="hero-ctas">
-      <a class="btn btn-primary btn-lg" href="/app">Start free trial</a>
-      <a class="btn btn-ghost btn-lg" href="/app">Sign in</a>
+      <a class="btn btn-primary btn-lg" href="/app" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
+      <a class="btn btn-ghost btn-lg" href="/app" onclick="window.otaTrack && otaTrack('sign_in_click')">Sign in</a>
     </div>
   </div>
 </section>
@@ -489,7 +502,7 @@
           <li>Bring your own broker, your funds never leave your account</li>
           <li>Manage or cancel your billing at any time</li>
         </ul>
-        <a class="btn btn-primary" href="/app">Start free trial</a>
+        <a class="btn btn-primary" href="/app" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
         <p class="price-fine">Billed monthly through Stripe. No long-term contract.</p>
       </div>
     </div>
@@ -579,7 +592,7 @@
   <div class="wrap">
     <h2>Connect a broker and see your first signal.</h2>
     <p>Paper and demo trading, so there is nothing at risk while you try it.</p>
-    <a class="btn btn-primary btn-lg" href="/app">Start free trial</a>
+    <a class="btn btn-primary btn-lg" href="/app" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
   </div>
 </section>
 
@@ -590,10 +603,88 @@
       <a href="#faq">FAQ</a>
       <a href="/app?page=terms">Terms of Service</a>
       <a href="/app?page=privacy">Privacy Policy</a>
-      <a href="/app">Sign in</a>
+      <a href="#" onclick="window.otaShowPreferences && otaShowPreferences(); return false;">Cookie preferences</a>
+      <a href="/app" onclick="window.otaTrack && otaTrack('sign_in_click')">Sign in</a>
     </div>
   </div>
 </footer>
+
+<div id="cookie-banner">
+  <p>We use Google Analytics to see how visitors use this page -- only after you accept. No advertising cookies, and you can change your mind any time. See our <a href="/app?page=privacy">Privacy Policy</a>.</p>
+  <div class="cookie-actions">
+    <a class="btn btn-ghost" href="#" onclick="otaConsent('denied'); return false;">Reject</a>
+    <a class="btn btn-primary" href="#" onclick="otaConsent('granted'); return false;">Accept</a>
+  </div>
+</div>
+
+<script>
+  // Google Analytics (GA4), gated behind cookie consent -- see the
+  // banner above and Privacy Policy section 7. GA4's script tag is
+  // deliberately NOT in <head> as a bare <script src="...">: that would
+  // load it (and set its cookie) unconditionally on every visit,
+  // regardless of consent, which is exactly what GDPR/ePrivacy requires
+  // NOT to happen for EU/UK visitors. Instead it's only ever injected
+  // by loadGA(), which only ever runs after an explicit "granted"
+  // choice -- either just now via the Accept button, or previously
+  // (remembered in localStorage, checked on every page load below).
+  //
+  // TODO before going live: replace GA_MEASUREMENT_ID with your real
+  // GA4 property's Measurement ID. Create the property at
+  // https://analytics.google.com (free) -- Admin -> Data Streams ->
+  // your web stream -- the ID looks like "G-XXXXXXXXXX". Nothing here
+  // will actually send data to Google until that's a real ID.
+  (function () {
+    var GA_MEASUREMENT_ID = "G-XXXXXXXXXX";
+    var CONSENT_KEY = "ota_analytics_consent";
+
+    function loadGA() {
+      if (window.__otaGaLoaded || GA_MEASUREMENT_ID.indexOf("XXXX") !== -1) return;
+      window.__otaGaLoaded = true;
+      var s = document.createElement("script");
+      s.async = true;
+      s.src = "https://www.googletagmanager.com/gtag/js?id=" + GA_MEASUREMENT_ID;
+      document.head.appendChild(s);
+      window.dataLayer = window.dataLayer || [];
+      window.gtag = function () { dataLayer.push(arguments); };
+      gtag("js", new Date());
+      gtag("config", GA_MEASUREMENT_ID, { anonymize_ip: true });
+    }
+
+    // Exposed globally so the CTA buttons below can fire a lightweight
+    // event before navigating to /app -- transport_type "beacon" uses
+    // navigator.sendBeacon under the hood, which is fire-and-forget and
+    // doesn't need to delay the click/navigation to complete.
+    window.otaTrack = function (eventName) {
+      if (window.gtag) {
+        window.gtag("event", eventName, { transport_type: "beacon" });
+      }
+    };
+
+    window.otaConsent = function (choice) {
+      localStorage.setItem(CONSENT_KEY, choice);
+      var banner = document.getElementById("cookie-banner");
+      if (banner) banner.style.display = "none";
+      if (choice === "granted") loadGA();
+    };
+
+    // Re-opens the banner so a visitor can change an earlier choice --
+    // wired to the "Cookie preferences" footer link.
+    window.otaShowPreferences = function () {
+      var banner = document.getElementById("cookie-banner");
+      if (banner) banner.style.display = "flex";
+    };
+
+    var stored = localStorage.getItem(CONSENT_KEY);
+    if (stored === "granted") {
+      loadGA();
+    } else if (stored !== "denied") {
+      document.addEventListener("DOMContentLoaded", function () {
+        var banner = document.getElementById("cookie-banner");
+        if (banner) banner.style.display = "flex";
+      });
+    }
+  })();
+</script>
 
 </body>
 </html>

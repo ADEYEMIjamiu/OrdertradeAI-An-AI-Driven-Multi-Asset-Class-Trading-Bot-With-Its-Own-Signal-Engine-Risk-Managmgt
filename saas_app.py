@@ -1185,8 +1185,17 @@ Contact us at the address below to exercise any of these rights.
 
 ### 7. Cookies
 
-The Service uses only the session cookie needed to keep you logged
-in. We don't use third-party advertising or tracking cookies.
+The Service itself (this dashboard, at /app) uses only a session
+cookie needed to keep you logged in -- no advertising or tracking
+cookies here.
+
+Our marketing site at ordertradeai.com/ uses Google Analytics (GA4) to
+understand visitor traffic, which sets a cookie and shares data with
+Google. This only runs after you accept it in the cookie banner shown
+on that page -- declining, or not choosing, means it never loads. You
+can change your choice at any time using the "Cookie preferences" link
+in that page's footer. See Google's own privacy policy for how Google
+processes this data: https://policies.google.com/privacy
 
 ### 8. Children
 

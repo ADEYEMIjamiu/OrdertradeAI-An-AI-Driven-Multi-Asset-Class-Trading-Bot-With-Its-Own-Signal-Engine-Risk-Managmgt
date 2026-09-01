@@ -1,12 +1,19 @@
 <!--
-  OrderTrade AI marketing landing page. Single self-contained static
-  file, no build step, deliberately separate from saas_app.py (which
-  now lives at /app -- see deploy/nginx-ordertradeai-com.conf's header
-  comment for why the domain root split this way).
+  OrderTrade AI marketing landing page. No build step, deliberately
+  separate from saas_app.py (which now lives at /app -- see
+  deploy/nginx-ordertradeai-com.conf's header comment for why the
+  domain root split this way).
 
-  Deploy target: /var/www/ordertradeai-landing/index.html on the
-  droplet.
-    scp landing/index.html root@159.223.226.4:/var/www/ordertradeai-landing/index.html
+  UPDATED 2026-09-01: no longer just this one file -- favicon.svg,
+  favicon-32.png, apple-touch-icon.png, icon-512.png, og-image.png,
+  robots.txt and sitemap.xml all live alongside it in landing/ and are
+  referenced by relative/absolute path from this page's <head> (see the
+  favicon and Open Graph/Twitter tags there). All of them need to be on
+  the server for those tags to resolve to something real instead of a
+  404 -- copy the whole directory, not just this file.
+
+  Deploy target: /var/www/ordertradeai-landing/ on the droplet.
+    scp landing/*.html landing/*.png landing/*.svg landing/*.xml landing/*.txt root@159.223.226.4:/var/www/ordertradeai-landing/
   (create the directory first if it doesn't exist yet:
     ssh root@159.223.226.4 "mkdir -p /var/www/ordertradeai-landing")
 -->
@@ -17,9 +24,58 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>OrderTrade AI: AI trade signals for your own broker accounts</title>
 <meta name="description" content="Connect your own Alpaca, Binance or eToro account. OrderTrade AI scores signals across stocks, crypto, forex and commodities, then shows you exactly what it would trade before anything executes." />
+<link rel="canonical" href="https://ordertradeai.com/" />
+
+<!-- Favicon -- SVG first (crisp at any size, modern browsers), PNG/
+     apple-touch-icon as fallbacks for everything else. All three match
+     the .brand-mark gradient square used in the nav above. -->
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+<meta name="theme-color" content="#0a0c0f" />
+
+<!-- Open Graph / Twitter Card -- without these, sharing this link on
+     Twitter/X, LinkedIn, Reddit or Slack renders a blank/generic
+     preview instead of the branding and description below. Matters
+     directly for the launch push: this link is going out on exactly
+     those platforms. -->
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://ordertradeai.com/" />
+<meta property="og:site_name" content="OrderTrade AI" />
+<meta property="og:title" content="OrderTrade AI: AI trade signals for your own broker accounts" />
+<meta property="og:description" content="Connect your own Alpaca, Binance or eToro account. OrderTrade AI scores signals across stocks, crypto, forex and commodities, then shows you exactly what it would trade before anything executes." />
+<meta property="og:image" content="https://ordertradeai.com/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="OrderTrade AI: AI trade signals for your own broker accounts" />
+<meta name="twitter:description" content="Connect your own Alpaca, Binance or eToro account. Preview every signal before anything executes." />
+<meta name="twitter:image" content="https://ordertradeai.com/og-image.png" />
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<!-- Structured data: lets Google show this as a recognized software
+     product (and, for FAQPage, potentially render the questions below
+     directly in search results) rather than an undifferentiated page. -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "OrderTrade AI",
+  "applicationCategory": "FinanceApplication",
+  "operatingSystem": "Web",
+  "description": "Connect your own Alpaca, Binance or eToro account. OrderTrade AI scores signals across stocks, crypto, forex and commodities, then shows you exactly what it would trade before anything executes.",
+  "url": "https://ordertradeai.com/",
+  "offers": {
+    "@type": "Offer",
+    "price": "39.00",
+    "priceCurrency": "USD",
+    "priceValidUntil": "2027-12-31"
+  }
+}
+</script>
 <style>
   :root{
     --bg: #0a0c0f;
@@ -213,6 +269,23 @@
   .price-features li::before{content:"+"; position:absolute; left:0; color:var(--accent); font-family:"IBM Plex Mono"; font-weight:600;}
   .price-card .btn{width:100%;}
   .price-fine{font-size:12.5px; color:var(--text-faint); margin:14px 0 0; text-align:center;}
+
+  /* ---------- FAQ (native <details>/<summary>, no JS needed) ---------- */
+  .faq-list{display:flex; flex-direction:column; max-width:760px;}
+  .faq-item{border-top:1px solid var(--border-soft); padding:20px 0;}
+  .faq-item:first-child{border-top:none;}
+  .faq-item summary{
+    cursor:pointer; font-size:16px; font-weight:600; color:var(--text);
+    list-style:none; display:flex; justify-content:space-between;
+    align-items:center; gap:16px;
+  }
+  .faq-item summary::-webkit-details-marker{display:none;}
+  .faq-item summary::after{
+    content:"+"; color:var(--accent); font-family:"IBM Plex Mono";
+    font-size:18px; flex-shrink:0;
+  }
+  .faq-item[open] summary::after{content:"\2212";}
+  .faq-item p{margin:12px 0 0; color:var(--text-dim); font-size:14.5px; line-height:1.6; max-width:64ch;}
 
   /* ---------- Final CTA ---------- */
   .final-cta{text-align:center; padding:80px 0;}
@@ -423,6 +496,85 @@
   </div>
 </section>
 
+<section id="faq">
+  <div class="wrap">
+    <span class="section-label mono">FAQ</span>
+    <h2 class="section-title">Frequently asked questions</h2>
+    <p class="section-sub">The questions that come up before connecting a broker.</p>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary>Is this financial advice?</summary>
+        <p>No. OrderTrade AI shows you graded signals and the reasoning behind them -- you decide whether to act on any of it. It isn't a registered investment adviser, and nothing here is a recommendation to buy or sell any specific security, coin, or instrument. Trading involves risk, including of loss.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Why is it limited to paper and demo trading right now?</summary>
+        <p>Early access is deliberately paper/demo-only across every connected broker -- there is no control anywhere in the product that switches this on for live trading. It lets you see exactly how the signal engine and risk management behave with your real account balance and settings, without real money on the line, while the product is still new.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Which brokers do I need?</summary>
+        <p>Alpaca for US stocks (paper), Binance for crypto (testnet), and eToro for forex and commodities (demo). Connect whichever ones match the asset classes you want signals for -- you don't need all three, and you can add more later from your dashboard.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Do you ever hold or touch my money?</summary>
+        <p>No. Every trade is placed directly on your own connected broker account using your own API keys, which are encrypted at rest. OrderTrade AI is a signal and execution layer, not a custodian -- see "Your money stays in your own broker account" above.</p>
+      </details>
+      <details class="faq-item">
+        <summary>What happens after the 7-day free trial?</summary>
+        <p>If you don't cancel before the trial ends, billing continues at $39/month through Stripe. You can manage or cancel your subscription at any time from your account settings -- no long-term contract, and canceling during the trial means you're never charged.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Is this financial advice?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. OrderTrade AI shows you graded signals and the reasoning behind them -- you decide whether to act on any of it. It isn't a registered investment adviser, and nothing here is a recommendation to buy or sell any specific security, coin, or instrument. Trading involves risk, including of loss."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Why is it limited to paper and demo trading right now?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Early access is deliberately paper/demo-only across every connected broker -- there is no control anywhere in the product that switches this on for live trading. It lets you see exactly how the signal engine and risk management behave with your real account balance and settings, without real money on the line, while the product is still new."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Which brokers do I need?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Alpaca for US stocks (paper), Binance for crypto (testnet), and eToro for forex and commodities (demo). Connect whichever ones match the asset classes you want signals for -- you don't need all three, and you can add more later from your dashboard."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Do you ever hold or touch my money?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. Every trade is placed directly on your own connected broker account using your own API keys, which are encrypted at rest. OrderTrade AI is a signal and execution layer, not a custodian."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What happens after the 7-day free trial?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "If you don't cancel before the trial ends, billing continues at $39/month through Stripe. You can manage or cancel your subscription at any time from your account settings -- no long-term contract, and canceling during the trial means you're never charged."
+      }
+    }
+  ]
+}
+</script>
+
 <section class="final-cta" style="border-bottom:none;">
   <div class="wrap">
     <h2>Connect a broker and see your first signal.</h2>
@@ -435,6 +587,7 @@
   <div class="wrap footer-inner">
     <div class="footer-copy">© 2026 OrderTrade AI. A Speedit Digital Technology product.</div>
     <div class="footer-links">
+      <a href="#faq">FAQ</a>
       <a href="/app?page=terms">Terms of Service</a>
       <a href="/app?page=privacy">Privacy Policy</a>
       <a href="/app">Sign in</a>

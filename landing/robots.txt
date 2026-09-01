@@ -1,0 +1,9 @@
+# /app is the Streamlit product itself (login-gated, client-rendered --
+# crawlers can't usefully index it and it isn't marketing content), so
+# it's kept out of the crawl. Everything on the marketing site at the
+# domain root is fair game.
+User-agent: *
+Allow: /
+Disallow: /app
+
+Sitemap: https://ordertradeai.com/sitemap.xml

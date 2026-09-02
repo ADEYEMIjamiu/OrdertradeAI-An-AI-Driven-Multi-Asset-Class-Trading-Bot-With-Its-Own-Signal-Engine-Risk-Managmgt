@@ -127,11 +127,36 @@ async def save_mt_credentials(user_id, login, password, server, platform="mt5", 
     UI. Does NOT contact MetaApi or validate the credentials -- pair this
     with check_user_mt_connection() (which does) the same way the
     existing "Test Connection" buttons for Alpaca/Binance/eToro work.
+
+    IMPORTANT: if this user already has a MetaApi account provisioned
+    for this exact login/server/platform, its metaapi_account_id is
+    preserved rather than discarded -- overwriting it unconditionally
+    on every re-save (e.g. a test script run twice, or a user re-opening
+    the connect form without changing anything) used to force a brand
+    new MetaApi account to be created each time, silently accumulating
+    duplicate accounts on MetaApi's side and burning through their
+    free-tier account allowance. If login/server/platform actually
+    changed, the old id is correctly dropped so a fresh account gets
+    provisioned for the new broker connection.
     """
-    extra = json.dumps({"server": server, "platform": platform})
+    existing = tenant.get_broker_credentials(user_id, BROKER_CODE)
+    metaapi_account_id = None
+    if existing:
+        old_extra = _parse_extra(existing.get("extra"))
+        if (
+            existing.get("api_key") == login
+            and old_extra.get("server") == server
+            and old_extra.get("platform") == platform
+        ):
+            metaapi_account_id = old_extra.get("metaapi_account_id")
+
+    extra = {"server": server, "platform": platform}
+    if metaapi_account_id:
+        extra["metaapi_account_id"] = metaapi_account_id
+
     tenant.save_broker_credentials(
         user_id, BROKER_CODE, environment,
-        api_key=login, api_secret=password, extra=extra,
+        api_key=login, api_secret=password, extra=json.dumps(extra),
     )
 
 

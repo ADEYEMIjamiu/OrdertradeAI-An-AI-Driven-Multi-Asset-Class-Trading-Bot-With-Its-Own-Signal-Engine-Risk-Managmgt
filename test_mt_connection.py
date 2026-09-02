@@ -49,8 +49,10 @@ async def main():
     print("   Saved (encrypted) via tenant_engine.save_broker_credentials.\n")
 
     print("2. Calling check_user_mt_connection() -- this will create the "
-          "MetaApi account, deploy it, connect, read account info, then "
-          "undeploy again. Expect this to take 30-90+ seconds...\n")
+          "MetaApi account, deploy it, wait for the broker connection to "
+          "come up, then read account info. It stays deployed afterward "
+          "(see mt_broker.py's COST MODEL docstring) -- expect this to "
+          "take 30-90+ seconds on a first-ever deploy...\n")
     result = await mt_broker.check_user_mt_connection(_TEST_USER_ID)
 
     print("3. Result:")
@@ -58,8 +60,8 @@ async def main():
         print(f"   {key}: {value}")
 
     if result["connected"]:
-        print("\nCONNECTED SUCCESSFULLY. mt_broker.py's core connect/deploy/"
-              "undeploy cycle works against a real account.")
+        print("\nCONNECTED SUCCESSFULLY. mt_broker.py's core deploy/wait/"
+              "connect flow works against a real account.")
         print("Next: try get_user_mt_positions() (should be empty on a "
               "fresh demo account) and, if you want to go further, a real "
               "execute_buy() test with a tiny volume like 0.01.")

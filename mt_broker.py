@@ -83,6 +83,7 @@ for live production users, since expiry would silently break every
 connected user's MT4/5 access at once.
 """
 
+import asyncio
 import json
 import os
 
@@ -326,3 +327,196 @@ async def disconnect_user_mt_account(user_id):
         await account.undeploy()
     except Exception:
         pass
+
+
+# ============================================================
+# PHASE 2 (2026-09-02): TICKER RESOLUTION + DOLLAR-BASED SIZING
+# ============================================================
+#
+# Everything above this point is Phase 1 (standalone, symbol/volume are
+# raw MT4/5 inputs the caller must already know). This section is what
+# makes mt_broker.py usable as a real FOREX/COMMODITIES option inside
+# saas_decision_engine.py's per-user execution branch, alongside eToro:
+# translating this project's own yfinance-style tickers ("EURUSD=X",
+# "GC=F") into real MT symbol names, and converting the AI's
+# dollar-sized trade recommendation into a real MT lot size.
+#
+# All symbol names and the leverage/contract-size math below were
+# confirmed LIVE against the real connected Pepperstone demo account
+# (2026-09-02) via get_symbol_specification()/get_symbols(), not
+# guessed -- see that day's diagnostic scripts. Two things worth
+# flagging for whoever touches this next:
+#
+# 1. MT symbol names are NOT standardized across brokers. XAUUSD/XAGUSD
+#    (gold/silver) are near-universal MT conventions and very likely to
+#    exist unchanged on other brokers, but oil has no standard name at
+#    all -- this broker exposes "SpotCrude" (a plain WTI cash/spot CFD,
+#    no expiration) alongside "WTOIL-PERP" (a perpetual swap, priced in
+#    US cents not dollars, different margin/funding mechanics) and
+#    "Crude-F" (a dated forward that rolls to a new contract every few
+#    weeks). SpotCrude was chosen deliberately as the one that behaves
+#    like a normal instrument (USD-denominated, no expiration/roll,
+#    plain market fills) -- if a future broker doesn't have a
+#    "SpotCrude"-equivalent, this mapping needs a broker-specific
+#    override, not a blind guess at a similarly-named symbol.
+# 2. Some MT brokers append suffixes to symbol names (e.g. "EURUSDm" on
+#    ECN-style accounts) -- Pepperstone's demo does not, so this isn't
+#    handled here yet. If a future broker connection's symbol lookups
+#    start failing with "not found" for tickers that clearly should
+#    exist, a broker-specific suffix is the first thing to check.
+
+_MT_TICKER_OVERRIDES = {
+    "GC=F": "XAUUSD",   # Gold
+    "SI=F": "XAGUSD",   # Silver
+    "CL=F": "SpotCrude",  # WTI Crude -- see note above on why this one
+                          # specifically, not WTOIL-PERP or Crude-F.
+}
+
+
+def resolve_mt_symbol(project_ticker):
+    """
+    Translate one of this project's own tickers (data/asset_universe.py
+    -- yfinance-style, e.g. "EURUSD=X", "GC=F") into the real MT symbol
+    name this broker uses (e.g. "EURUSD", "XAUUSD"). Mirrors
+    etoro_broker.resolve_project_ticker()'s exact same job for eToro.
+    """
+    ticker = project_ticker.upper().strip()
+
+    if ticker in _MT_TICKER_OVERRIDES:
+        return _MT_TICKER_OVERRIDES[ticker]
+
+    if ticker.endswith("=X") or ticker.endswith("=F"):
+        return ticker.split("=")[0]
+
+    return ticker
+
+
+async def _compute_lot_size(connection, account_info, symbol, usd_amount):
+    """
+    Converts a dollar trade_amount (same semantics as eToro's
+    margin-based sizing -- see saas_broker_factory.buy_etoro_for_user()'s
+    ETORO_LEVERAGE handling: usd_amount is the user's own capital being
+    put up as margin, not the full position value) into a real MT lot
+    size, using THIS account's own real leverage (read from account
+    info, NOT a hardcoded constant -- MT accounts vary in leverage by
+    broker/region/regulator, unlike eToro's single ETORO_LEVERAGE
+    constant -- an FCA-regulated UK demo account like this one is capped
+    at 30:1, while offshore-regulated accounts commonly used in Nigeria/
+    Malaysia run far higher) and this symbol's real contract size
+    (100,000 base-currency units for a standard forex lot, but a
+    completely different number for commodities -- 100 oz/lot for
+    XAUUSD on this broker, confirmed live rather than assumed).
+
+        notional_value = usd_amount * account_leverage
+        lot_size = notional_value / (contract_size * current_price)
+
+    Rounded DOWN to the symbol's own volumeStep (never up past what the
+    requested dollar amount actually supports) and capped at maxVolume.
+    Returns None if the resulting lot size would round down to less than
+    minVolume -- caller should treat this as "skip, don't attempt the
+    order" rather than let MetaApi's own rejection surface as a raw
+    broker-error string.
+    """
+    leverage = float(account_info.get("leverage") or 1)
+
+    spec = await connection.get_symbol_specification(symbol)
+    contract_size = float(spec.get("contractSize") or 0)
+    volume_step = float(spec.get("volumeStep") or 0.01)
+    min_volume = float(spec.get("minVolume") or 0.01)
+    max_volume = float(spec.get("maxVolume") or 100)
+
+    if contract_size <= 0:
+        raise ValueError(f"No contract size available for {symbol!r} -- cannot size a position.")
+
+    price_data = await connection.get_symbol_price(symbol)
+    price = float(price_data.get("ask") or price_data.get("bid") or 0)
+    if price <= 0:
+        raise ValueError(f"No usable price available for {symbol!r} -- cannot size a position.")
+
+    notional_value = usd_amount * leverage
+    raw_lots = notional_value / (contract_size * price)
+
+    steps = int(raw_lots / volume_step)
+    lot_size = round(steps * volume_step, 2)
+
+    if lot_size < min_volume:
+        return None
+    return min(lot_size, max_volume)
+
+
+async def execute_buy_by_usd_amount(user_id, ticker, usd_amount, stop_loss_price=None, take_profit_price=None):
+    """
+    Higher-level entry point matching the dollar-based sizing semantics
+    every other broker in this codebase uses (buy_stock_for_user(dollars)
+    in saas_broker_factory.py, buy_etoro_for_user(usd_amount)) -- MT4/5
+    itself only understands lot sizes, so this resolves the project
+    ticker to a real MT symbol (resolve_mt_symbol()), converts usd_amount
+    into a real lot size (_compute_lot_size() -- see that function's
+    docstring for the leverage/contract-size math), then places the
+    order.
+
+    stop_loss_price/take_profit_price are ABSOLUTE prices (not
+    percentages or rates) -- pass whatever create_trade_plan() already
+    computed, same convention the other three brokers' execution
+    functions use.
+
+    Returns None (not an order response) if usd_amount is too small to
+    reach this symbol's minimum lot size at this account's leverage --
+    saas_decision_engine.py should treat that the same as any other
+    "skip this trade" gate, not attempt the order.
+    """
+    symbol = resolve_mt_symbol(ticker)
+
+    account = await _get_or_create_metaapi_account(user_id)
+    connection = await _deploy_and_connect(account)
+    account_info = await connection.get_account_information()
+
+    lot_size = await _compute_lot_size(connection, account_info, symbol, usd_amount)
+    if lot_size is None:
+        return None
+
+    return await connection.create_market_buy_order(
+        symbol=symbol,
+        volume=lot_size,
+        stop_loss=stop_loss_price,
+        take_profit=take_profit_price,
+        options={"comment": "OrderTradeAI"},
+    )
+
+
+# ============================================================
+# SYNC WRAPPERS -- saas_decision_engine.py and saas_broker_factory.py
+# are entirely synchronous (requests, sync ccxt, sync alpaca-py), but
+# the MetaApi SDK is async-only (websocket-based). Rather than making
+# the whole decision loop async -- a much larger, riskier change to
+# code every other broker integration also depends on -- each of these
+# just runs its async counterpart to completion via asyncio.run() and
+# returns a plain value. This does mean each call spins up and tears
+# down its own event loop rather than reusing one; acceptable given the
+# call frequency here (once per user per decision-loop tick, not a hot
+# path), and it keeps the async/MetaApi-specific complexity fully
+# contained to this one file.
+# ============================================================
+
+def save_mt_credentials_sync(user_id, login, password, server, platform="mt5", environment="demo"):
+    return asyncio.run(save_mt_credentials(user_id, login, password, server, platform, environment))
+
+
+def check_user_mt_connection_sync(user_id):
+    return asyncio.run(check_user_mt_connection(user_id))
+
+
+def get_user_mt_positions_sync(user_id):
+    return asyncio.run(get_user_mt_positions(user_id))
+
+
+def execute_buy_by_usd_amount_sync(user_id, ticker, usd_amount, stop_loss_price=None, take_profit_price=None):
+    return asyncio.run(execute_buy_by_usd_amount(user_id, ticker, usd_amount, stop_loss_price, take_profit_price))
+
+
+def execute_sell_close_sync(user_id, position_id):
+    return asyncio.run(execute_sell_close(user_id, position_id))
+
+
+def disconnect_user_mt_account_sync(user_id):
+    return asyncio.run(disconnect_user_mt_account(user_id))

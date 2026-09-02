@@ -99,6 +99,7 @@ from etoro_broker import (
     ETORO_TAKE_PROFIT_PCT,
     ETORO_USE_TRAILING_STOP,
 )
+import mt_broker
 
 
 def check_user_alpaca_connection(user_id):
@@ -232,10 +233,25 @@ def check_user_etoro_connection(user_id):
         }
 
 
+def check_user_mt_bridge_connection(user_id):
+    """
+    Thin wrapper around mt_broker.check_user_mt_connection_sync() --
+    that function already returns this exact shape (connected/
+    account_status/trading_blocked/buying_power/cash/equity/error), see
+    mt_broker.py's check_user_mt_connection() docstring: it was built to
+    mirror this file's checker return shape from the start (Phase 1,
+    2026-09-02). Exists as a real function (not just a dict alias) so
+    this file's own docstring/import list stays the single place other
+    code looks to find every broker this platform supports.
+    """
+    return mt_broker.check_user_mt_connection_sync(user_id)
+
+
 _CHECKERS = {
     "ALPACA": check_user_alpaca_connection,
     "BINANCE": check_user_binance_connection,
     "ETORO": check_user_etoro_connection,
+    "MT_BRIDGE": check_user_mt_bridge_connection,
 }
 
 
@@ -247,7 +263,7 @@ def check_user_broker_connection(user_id, broker):
     return checker(user_id)
 
 
-def get_user_account_balance(user_id, asset_class):
+def get_user_account_balance(user_id, asset_class, broker=None):
     """
     Real, current spendable balance for this user's own broker account,
     for whichever broker owns this asset class. Mirrors risk_engine.
@@ -259,6 +275,15 @@ def get_user_account_balance(user_id, asset_class):
 
     US_STOCKS (Alpaca), CRYPTO (Binance), and -- as of the 2026-08-26
     eToro follow-up -- FOREX/COMMODITIES (eToro) are all wired here.
+
+    FOLLOW-UP 2026-09-02: FOREX/COMMODITIES can now also be served by
+    MT_BRIDGE (MT4/5 via MetaApi) instead of ETORO -- since a given user
+    only ever has ONE of the two connected for a given asset class (see
+    saas_decision_engine.py's per-user broker preference), this needs an
+    explicit `broker` argument rather than re-deriving it, to avoid
+    silently checking the wrong one. `broker=None` preserves the exact
+    old behavior (always ETORO for FOREX/COMMODITIES) for any caller that
+    hasn't been updated to pass it explicitly.
     """
     if asset_class == "CRYPTO":
         result = check_user_binance_connection(user_id)
@@ -276,6 +301,17 @@ def get_user_account_balance(user_id, asset_class):
         return float(result.get("buying_power", 0) or 0)
 
     if asset_class in ("FOREX", "COMMODITIES"):
+        if broker == "MT_BRIDGE":
+            result = check_user_mt_bridge_connection(user_id)
+            if not result.get("connected"):
+                return 0.0
+            # buying_power here is MetaApi's freeMargin -- how much of
+            # this account's own capital is actually available to open a
+            # NEW position (same reasoning as Alpaca's buying_power
+            # above), not the raw balance, which can be fully tied up in
+            # existing positions' margin.
+            return float(result.get("buying_power", 0) or 0)
+
         result = check_user_etoro_connection(user_id)
         if not result.get("connected"):
             return 0.0
@@ -288,7 +324,7 @@ def get_user_account_balance(user_id, asset_class):
     return 0.0
 
 
-def get_user_exposure_percent(user_id, asset_class):
+def get_user_exposure_percent(user_id, asset_class, broker=None):
     """
     Added 2026-08-27 to close the gap saas_decision_engine.py's own
     module docstring flagged: "NOT included: portfolio-level exposure
@@ -311,6 +347,13 @@ def get_user_exposure_percent(user_id, asset_class):
     check; this failing open (0% exposure) rather than closed just means
     a bad connection blocks trading via the balance==0 gate, not this one
     silently double-blocking with a less useful error message.
+
+    FOLLOW-UP 2026-09-02: same `broker` argument as
+    get_user_account_balance() above, for the same reason -- FOREX/
+    COMMODITIES can now be served by MT_BRIDGE instead of ETORO, and
+    which one applies must come from the caller (saas_decision_engine.py
+    already knows which broker this user has connected for this asset
+    class), not be re-derived here. `broker=None` preserves old behavior.
     """
     if asset_class == "US_STOCKS":
         result = check_user_alpaca_connection(user_id)
@@ -327,9 +370,32 @@ def get_user_exposure_percent(user_id, asset_class):
         return _get_binance_exposure_percent(user_id)
 
     if asset_class in ("FOREX", "COMMODITIES"):
+        if broker == "MT_BRIDGE":
+            return _get_mt_bridge_exposure_percent(user_id)
         return _get_etoro_exposure_percent(user_id)
 
     return 0.0
+
+
+def _get_mt_bridge_exposure_percent(user_id):
+    """
+    Same invested=equity-cash approach as the US_STOCKS branch above
+    (mirrors risk_engine.get_exposure_percent()'s LIVE_TRADING math) --
+    MetaApi's own account info already gives us both equity and
+    freeMargin directly (see check_user_mt_bridge_connection()), no need
+    to sum individual positions' margin the way _get_etoro_exposure_
+    percent() has to (eToro's connection check doesn't return per-
+    position margin, MetaApi's does via freeMargin at the account level).
+    """
+    result = check_user_mt_bridge_connection(user_id)
+    if not result.get("connected"):
+        return 0.0
+    equity = float(result.get("equity", 0) or 0)
+    free_margin = float(result.get("buying_power", 0) or 0)
+    if equity <= 0:
+        return 0.0
+    invested = max(equity - free_margin, 0.0)
+    return (invested / equity) * 100
 
 
 def _get_binance_exposure_percent(user_id):
@@ -995,7 +1061,78 @@ def get_user_open_positions(user_id, broker):
         return _get_binance_open_positions(user_id)
     if broker == "ETORO":
         return _get_etoro_open_positions(user_id)
+    if broker == "MT_BRIDGE":
+        return _get_mt_bridge_open_positions(user_id)
     return []
+
+
+def _get_mt_bridge_open_positions(user_id):
+    """
+    Reads straight from MetaApi's own get_positions() -- authoritative
+    and live, same reasoning as _get_alpaca_open_positions() above (no
+    journal lookup needed for the position numbers themselves, only for
+    stop_loss/take_profit which this project's own trade plan set, not
+    necessarily what MetaApi's position object reports back). unrealized_
+    pnl comes straight from MetaApi's own "profit" field -- unlike eToro,
+    MetaApi already computes this correctly account-currency-converted,
+    no leverage-ambiguity caveat needed here.
+    """
+    try:
+        positions = mt_broker.get_user_mt_positions_sync(user_id)
+    except Exception:
+        return []
+
+    result = []
+    for p in positions:
+        try:
+            ticker = p.get("symbol")
+            entry_order = journal.get_most_recent_filled_buy_for_user(user_id, ticker, "MT_BRIDGE")
+            open_price = float(p.get("openPrice") or 0)
+            current_price = float(p.get("currentPrice") or 0)
+            pnl_pct = None
+            if open_price > 0 and current_price:
+                pnl_pct = round((current_price - open_price) / open_price * 100, 2)
+
+            result.append({
+                "ticker": ticker,
+                "quantity": float(p.get("volume") or 0),  # lots, not shares/margin
+                "entry_price": open_price,
+                "current_price": current_price,
+                "unrealized_pnl": round(float(p.get("profit") or 0), 2),
+                "unrealized_pnl_pct": pnl_pct,
+                "stop_loss": entry_order.get("stop_loss") if entry_order else None,
+                "take_profit": entry_order.get("take_profit") if entry_order else None,
+            })
+        except Exception:
+            continue
+    return result
+
+
+# ============================================================
+# ORDER EXECUTION -- MT4/5 via MetaApi (FOREX/COMMODITIES, alternative
+# to eToro). Added 2026-09-02 (Phase 2). Unlike Alpaca/Binance/eToro
+# above, the actual broker logic (deploy/connect, symbol resolution,
+# leverage-aware lot sizing) lives entirely in mt_broker.py, not here --
+# this is a thin pass-through so saas_decision_engine.py can call MT4/5
+# the same way it calls every other broker, without needing to know
+# mt_broker.py's functions are async under the hood (see that file's
+# SYNC WRAPPERS section for why).
+# ============================================================
+
+def buy_mt_for_user(user_id, ticker, usd_amount, stop_loss_price=None, take_profit_price=None):
+    """
+    Per-user MT4/5 market BUY, sized by dollar amount (converted to a
+    real lot size inside mt_broker.execute_buy_by_usd_amount() -- see
+    that function's docstring for the leverage/contract-size math).
+
+    Returns None if usd_amount was too small to reach this symbol's
+    minimum lot size -- callers must treat that the same as any other
+    "skip this trade" gate (see execute_buy_by_usd_amount()'s docstring),
+    not as a failure to report as an error.
+    """
+    return mt_broker.execute_buy_by_usd_amount_sync(
+        user_id, ticker, usd_amount, stop_loss_price, take_profit_price
+    )
 
 
 def _get_alpaca_open_positions(user_id):

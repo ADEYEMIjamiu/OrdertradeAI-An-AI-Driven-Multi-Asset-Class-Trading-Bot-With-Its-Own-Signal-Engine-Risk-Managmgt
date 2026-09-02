@@ -30,17 +30,17 @@ async def main():
     print(f"1. Placing a real (demo) BUY: ${_TEST_USD_AMOUNT} of {_TEST_TICKER} "
           f"for user_id={_TEST_USER_ID!r}...\n")
 
-    order = await mt_broker.execute_buy_by_usd_amount(
+    result = await mt_broker.execute_buy_by_usd_amount(
         _TEST_USER_ID, _TEST_TICKER, _TEST_USD_AMOUNT,
     )
 
-    if order is None:
+    if result is None:
         print("Result: None -- trade_amount was too small to reach this "
               "symbol's minimum lot size. Try a larger _TEST_USD_AMOUNT.")
         return
 
-    print("2. Raw order response from MetaApi:")
-    print(json.dumps(order, indent=2, default=str))
+    print("2. Structured result:")
+    print(json.dumps(result, indent=2, default=str))
 
     print("\n3. Checking open positions to confirm it actually filled...")
     positions = await mt_broker.get_user_mt_positions(_TEST_USER_ID)

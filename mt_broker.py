@@ -460,10 +460,24 @@ async def execute_buy_by_usd_amount(user_id, ticker, usd_amount, stop_loss_price
     computed, same convention the other three brokers' execution
     functions use.
 
-    Returns None (not an order response) if usd_amount is too small to
-    reach this symbol's minimum lot size at this account's leverage --
-    saas_decision_engine.py should treat that the same as any other
-    "skip this trade" gate, not attempt the order.
+    Returns None if usd_amount is too small to reach this symbol's
+    minimum lot size at this account's leverage -- saas_decision_engine.py
+    should treat that the same as any other "skip this trade" gate, not
+    attempt the order. Otherwise returns a structured dict --
+    {"position_id", "executed_price", "lot_size", "raw"} -- matching the
+    same shape convention saas_broker_factory.buy_etoro_for_user() uses,
+    rather than MetaApi's raw response, which does NOT include a fill
+    price (confirmed live 2026-09-02, see test_mt_buy.py's first real
+    order: the response only carried stringCode/orderId/positionId/
+    timestamps). "executed_price" here is therefore the quote price used
+    to compute the lot size, not a broker-confirmed fill price -- market
+    IOC orders (this symbol's only fillingMode) fill at or extremely
+    close to the quoted price with negligible slippage, so this is a
+    reasonable stand-in, same tradeoff every other part of this project
+    already accepts when an exact fill price isn't directly available.
+    position_id confirms the position genuinely opened (MetaApi returns
+    stringCode="TRADE_RETCODE_DONE" with a real positionId synchronously
+    for a filled market order -- no polling needed, unlike eToro).
     """
     symbol = resolve_mt_symbol(ticker)
 
@@ -475,13 +489,25 @@ async def execute_buy_by_usd_amount(user_id, ticker, usd_amount, stop_loss_price
     if lot_size is None:
         return None
 
-    return await connection.create_market_buy_order(
+    price_data = await connection.get_symbol_price(symbol)
+    quote_price = float(price_data.get("ask") or price_data.get("bid") or 0)
+
+    order = await connection.create_market_buy_order(
         symbol=symbol,
         volume=lot_size,
         stop_loss=stop_loss_price,
         take_profit=take_profit_price,
         options={"comment": "OrderTradeAI"},
     )
+
+    position_id = order.get("positionId") if order.get("stringCode") == "TRADE_RETCODE_DONE" else None
+
+    return {
+        "position_id": position_id,
+        "executed_price": quote_price if position_id else None,
+        "lot_size": lot_size,
+        "raw": order,
+    }
 
 
 # ============================================================

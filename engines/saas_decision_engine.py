@@ -101,6 +101,28 @@ need this (see that file's docstring); eToro now has per-user execution
 (FOLLOW-UP 2026-08-26, see saas_broker_factory.py) but still no
 reconciliation pass of its own -- see that file's docstring for why.
 
+FOLLOW-UP 2026-09-02 (Phase 2 of the MT4/MT5 bridge -- see mt_broker.py's
+module docstring for the full "why this exists" story: MT4/5 covers the
+retail forex/CFD brokers actually used in Nigeria, Malaysia, the UAE,
+and most of the world outside the US/EU, which eToro alone didn't):
+FOREX/COMMODITIES now have TWO possible brokers per user instead of one
+fixed platform-wide broker -- a user can connect eToro OR an MT4/5
+account, and whichever one they've connected is what their trades route
+through (see _resolve_broker_for_asset_class() below; MT_BRIDGE is
+preferred if a user somehow has both). MT4/5 orders confirm filled
+SYNCHRONOUSLY (no polling needed, unlike eToro -- see mt_broker.
+execute_buy_by_usd_amount()'s docstring, live-tested via test_mt_buy.py),
+and are sized in real lots via account-leverage- and contract-size-aware
+math (mt_broker._compute_lot_size()) rather than eToro's simpler
+percentage-of-leverage approach -- MT accounts vary in leverage by
+broker/region/regulator, so this couldn't reuse a single ETORO_LEVERAGE-
+style constant. Same scope limits as eToro's original wiring: BUY-side
+only, no reconciliation pass yet, no exit-engine/trailing-stop coverage
+yet (Phase 3, not built here) -- an MT4/5 position opened by this
+function currently has NO automated stop-loss/take-profit enforcement
+beyond whatever broker-side stop_loss_price/take_profit_price was set at
+order time.
+
 FIX 2026-08-27: portfolio-level exposure cap (MAX_PORTFOLIO_EXPOSURE) is
 now enforced too -- see saas_broker_factory.get_user_exposure_percent()
 and its call site below (right after the balance check, once per asset
@@ -155,12 +177,51 @@ FEATURES_PATH = "models/features.pkl"
 # follow-up landed 2026-08-26 -- see saas_broker_factory.py's module
 # docstring for the known gaps: no trailing-lock ratchet, no exit-engine
 # coverage for FOREX/COMMODITIES yet).
+#
+# FOLLOW-UP 2026-09-02 (Phase 2 of the MT4/MT5 bridge -- see mt_broker.py's
+# module docstring for why this integration exists): FOREX/COMMODITIES
+# are no longer pinned to a single global broker. A user can now connect
+# EITHER eToro OR an MT4/5 account (via MetaApi) for these two asset
+# classes, so the broker has to be resolved PER USER, per run, based on
+# what they've actually connected -- see _resolve_broker_for_asset_class()
+# below. US_STOCKS/CRYPTO are untouched (still exactly one broker each,
+# platform-wide) -- only FOREX/COMMODITIES gained a second option.
 _ASSET_CLASS_BROKER = {
     "US_STOCKS": "ALPACA",
     "CRYPTO": "BINANCE",
-    "FOREX": "ETORO",
-    "COMMODITIES": "ETORO",
 }
+
+_FOREX_COMMODITIES_ASSET_CLASSES = ("FOREX", "COMMODITIES")
+
+# MT_BRIDGE checked first when a user has BOTH connected -- no strong
+# reason to prefer one over the other when both exist, but MT4/5 is
+# typically the lower-cost-to-the-user option (see mt_broker.py's module
+# docstring's original cost-reduction rationale for building this
+# integration at all), so it gets first look.
+_FOREX_COMMODITIES_BROKER_PREFERENCE = ("MT_BRIDGE", "ETORO")
+
+_ALL_ASSET_CLASSES = ("US_STOCKS", "CRYPTO") + _FOREX_COMMODITIES_ASSET_CLASSES
+
+
+def _resolve_broker_for_asset_class(asset_class, connected_brokers):
+    """
+    Returns which broker THIS user's FOREX/COMMODITIES trades should
+    route through this run, or the fixed single broker for US_STOCKS/
+    CRYPTO. For FOREX/COMMODITIES, checks _FOREX_COMMODITIES_BROKER_
+    PREFERENCE in order and returns the first one this user actually has
+    connected; if neither is connected, returns eToro's code anyway so
+    the existing "not connected" skip message below names a real broker
+    rather than "none" -- purely cosmetic, doesn't change behavior (the
+    `broker not in connected_brokers` check right after this call is
+    what actually gates the skip).
+    """
+    if asset_class in _ASSET_CLASS_BROKER:
+        return _ASSET_CLASS_BROKER[asset_class]
+
+    for candidate in _FOREX_COMMODITIES_BROKER_PREFERENCE:
+        if candidate in connected_brokers:
+            return candidate
+    return _FOREX_COMMODITIES_BROKER_PREFERENCE[-1]
 
 _POSITION_CAPS = {
     "CRYPTO": MAX_CRYPTO_POSITIONS,
@@ -361,15 +422,18 @@ def run_decision_loop_for_user(user_id, dry_run=True):
             "message": f"Could not load AI model: {e}",
         }]
 
-    # FOREX and COMMODITIES both map to broker="ETORO" (see
-    # _ASSET_CLASS_BROKER) -- without this guard, reconcile_user_etoro_
-    # orders() would run twice in the same tick if both are enabled.
+    # FOREX and COMMODITIES may both resolve to the SAME broker for a
+    # given user (e.g. both routed to eToro, or both to MT_BRIDGE) --
+    # without this guard, reconcile_user_etoro_orders() would run twice
+    # in the same tick if both are enabled and both landed on eToro.
     # Harmless either way (idempotent), just wasted API calls.
     reconciled_brokers = set()
 
-    for asset_class, broker in _ASSET_CLASS_BROKER.items():
+    for asset_class in _ALL_ASSET_CLASSES:
         if asset_class not in enabled_classes:
             continue
+
+        broker = _resolve_broker_for_asset_class(asset_class, connected_brokers)
 
         if broker not in connected_brokers:
             results.append({
@@ -405,7 +469,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     "message": r["message"],
                 })
 
-        balance = factory.get_user_account_balance(user_id, asset_class)
+        balance = factory.get_user_account_balance(user_id, asset_class, broker=broker)
         if balance <= 0:
             results.append({
                 "ticker": None,
@@ -424,7 +488,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
         # would be wasteful. See saas_broker_factory.get_user_exposure_
         # percent() for why this is scoped per-broker, not blended across
         # a user's Alpaca/Binance/eToro accounts.
-        exposure_percent = factory.get_user_exposure_percent(user_id, asset_class)
+        exposure_percent = factory.get_user_exposure_percent(user_id, asset_class, broker=broker)
         if exposure_percent >= MAX_PORTFOLIO_EXPOSURE * 100:
             results.append({
                 "ticker": None,
@@ -559,6 +623,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
             is_confirmed_filled = False
             filled_price = estimated_price
             filled_quantity = estimated_quantity
+            lot_size_too_small = False
 
             try:
                 if asset_class == "US_STOCKS":
@@ -595,6 +660,38 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     _order, filled_price, filled_quantity = factory.buy_crypto_for_user(
                         user_id, ticker, trade_amount
                     )
+                elif broker == "MT_BRIDGE":
+                    # FOREX/COMMODITIES via MT4/5 (MetaApi) -- added
+                    # 2026-09-02, alongside eToro (see this function's
+                    # module docstring FOLLOW-UP). Unlike eToro,
+                    # buy_mt_for_user() confirms a fill SYNCHRONOUSLY
+                    # (MetaApi's market-order response returns a real
+                    # positionId immediately, live-tested via
+                    # test_mt_buy.py -- no polling needed). It can also
+                    # return None outright if trade_amount was too small
+                    # to reach this symbol's minimum lot size at this
+                    # account's leverage (see mt_broker._compute_lot_
+                    # size()'s docstring) -- that's a sizing gate, not a
+                    # broker error, so it's handled as a "skipped" result
+                    # below rather than falling into the except block's
+                    # generic "error" message.
+                    #
+                    # broker_order_id stores the MT4/5 POSITION id --
+                    # same reasoning as eToro above: needed for any
+                    # future SELL/reconciliation support (Phase 3).
+                    mt_result = factory.buy_mt_for_user(
+                        user_id, ticker, trade_amount,
+                        stop_loss_price=row.get("Stop Loss"),
+                        take_profit_price=row.get("Take Profit"),
+                    )
+                    if mt_result is None:
+                        lot_size_too_small = True
+                    elif mt_result["position_id"] is not None:
+                        is_confirmed_filled = True
+                        broker_order_id = str(mt_result["position_id"])
+                        if mt_result["executed_price"]:
+                            filled_price = float(mt_result["executed_price"])
+                            filled_quantity = trade_amount / filled_price if filled_price > 0 else estimated_quantity
                 else:
                     # FOREX/COMMODITIES via eToro. buy_etoro_for_user()
                     # already polls for a confirmed fill internally (15s
@@ -627,6 +724,19 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     "asset_class": asset_class,
                     "action": "error",
                     "message": f"Broker execution failed: {e}",
+                })
+                continue
+
+            if lot_size_too_small:
+                results.append({
+                    "ticker": ticker,
+                    "asset_class": asset_class,
+                    "action": "skipped",
+                    "message": f"${trade_amount:.2f} is below the minimum "
+                               f"tradable position size for {ticker} on "
+                               f"this MT4/5 account -- increase account "
+                               f"balance or reduce position sizing to "
+                               f"trade this instrument.",
                 })
                 continue
 

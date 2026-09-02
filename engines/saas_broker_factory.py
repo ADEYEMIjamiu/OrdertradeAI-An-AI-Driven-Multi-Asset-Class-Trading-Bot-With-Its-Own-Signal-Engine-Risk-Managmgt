@@ -1127,8 +1127,14 @@ def buy_mt_for_user(user_id, ticker, usd_amount, stop_loss_price=None, take_prof
 
     Returns None if usd_amount was too small to reach this symbol's
     minimum lot size -- callers must treat that the same as any other
-    "skip this trade" gate (see execute_buy_by_usd_amount()'s docstring),
-    not as a failure to report as an error.
+    "skip this trade" gate, not as a failure to report as an error.
+    Otherwise returns {"position_id", "executed_price", "lot_size",
+    "raw"} -- position_id confirms the order genuinely filled (MetaApi
+    market orders on this symbol's fillingMode confirm synchronously,
+    no polling needed, unlike eToro's buy_etoro_for_user()); a None
+    position_id here (with a non-None dict) would mean the order was
+    REJECTED, not just slow to confirm -- see that function's docstring
+    for the live-tested response shape this was built from.
     """
     return mt_broker.execute_buy_by_usd_amount_sync(
         user_id, ticker, usd_amount, stop_loss_price, take_profit_price

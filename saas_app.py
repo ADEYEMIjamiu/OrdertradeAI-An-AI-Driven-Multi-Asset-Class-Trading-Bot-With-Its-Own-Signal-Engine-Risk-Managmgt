@@ -49,6 +49,7 @@ from engines import saas_emergency_stop
 from engines import saas_admin_engine
 from engines import email_engine
 from engines import billing_engine
+import mt_broker
 
 # Public product domain -- used to build the links inside password-reset
 # and verification emails. Deliberately a plain constant, not derived
@@ -402,6 +403,78 @@ def render_broker_connections(user_id):
                     else:
                         st.error(f"Connection failed: {result.get('error')}")
 
+    render_mt_bridge_connection(user_id, connected)
+
+
+def render_mt_bridge_connection(user_id, connected):
+    """
+    MT4/MT5 connect form -- added 2026-09-02 (Phase 2 of the MT4/5 bridge,
+    see mt_broker.py's module docstring). Kept separate from the
+    _BROKER_FIELDS-driven loop above rather than shoehorned into it:
+    every other broker there needs exactly two credential fields (an API
+    key + a secret), but MT4/5 needs four (login, password, server,
+    platform) since it authenticates against a specific broker server,
+    not a single global API endpoint -- see mt_broker.save_mt_credentials()
+    for why each of these is required.
+
+    Alternative to eToro for FOREX/COMMODITIES, not a replacement -- a
+    user can have either, both, or neither connected; see
+    saas_decision_engine.py's _resolve_broker_for_asset_class() for how
+    that choice is resolved per user at trade time.
+    """
+    status = connected.get("MT_BRIDGE")
+    status_text = (
+        f"✅ Connected ({status['environment']}, updated {status['updated_at'][:10]})"
+        if status else "Not connected"
+    )
+
+    with st.expander(f"MT4/MT5 (Forex/Commodities -- alternative to eToro) -- {status_text}"):
+        st.caption(
+            "Connect a real MetaTrader 4 or 5 account from any supported "
+            "broker (Exness, XM, Pepperstone, IC Markets, and dozens more "
+            "-- this covers most retail forex brokers used outside the "
+            "US/EU). Your login and password are encrypted the same way "
+            "as every other broker connection here."
+        )
+        with st.form("broker_form_MT_BRIDGE"):
+            mt_login = st.text_input("Account login (number)", key="MT_BRIDGE_login")
+            mt_password = st.text_input(
+                "Account password", type="password", key="MT_BRIDGE_password",
+                help="The MASTER password, not the investor/read-only "
+                     "password -- placing trades requires full trading rights.",
+            )
+            mt_server = st.text_input(
+                "Broker server name", key="MT_BRIDGE_server",
+                help="Exactly as shown in your MT4/5 login screen, e.g. "
+                     "'PepperstoneUK-Demo' or 'Exness-Real3'.",
+            )
+            mt_platform = st.selectbox("Platform", options=["mt5", "mt4"], key="MT_BRIDGE_platform")
+            mt_save_clicked = st.form_submit_button("Save credentials")
+
+        if mt_save_clicked:
+            if not mt_login or not mt_password or not mt_server:
+                st.error("Account login, password, and server name are all required.")
+            else:
+                mt_broker.save_mt_credentials_sync(
+                    user_id, mt_login, mt_password, mt_server,
+                    platform=mt_platform, environment="demo",
+                )
+                st.success("MT4/5 credentials saved.")
+                st.rerun()
+
+        if status:
+            if st.button("Test Connection", key="test_MT_BRIDGE"):
+                with st.spinner("Connecting to your MT4/5 account (first connect can take a minute)..."):
+                    result = saas_broker_factory.check_user_mt_bridge_connection(user_id)
+                if result.get("connected"):
+                    st.success(
+                        f"Connected to {result.get('broker_name', 'your broker')} -- "
+                        f"balance: ${result.get('cash', 0):,.2f}, "
+                        f"equity: ${result.get('equity', 0):,.2f}"
+                    )
+                else:
+                    st.error(f"Connection failed: {result.get('error')}")
+
 
 def render_settings(user_id):
     st.subheader("Trading Settings")
@@ -535,16 +608,17 @@ def render_trading_run(user_id):
         "Checks your existing positions for stop-loss/take-profit/max-"
         "hold-time exits, then runs the AI signal engine across your "
         "enabled asset classes (US Stocks via Alpaca, Crypto via Binance, "
-        "Forex/Commodities via eToro), sizes any approved BUY against "
+        "Forex/Commodities via eToro or a connected MT4/MT5 account -- "
+        "whichever you've connected), sizes any approved BUY against "
         "your real connected-broker balance, and shows you exactly what "
         "it would do. Nothing is ever bought or sold without you "
         "clicking Execute separately below. Exit protection (stop-loss/"
         "take-profit/a hard max-hold-time, no partial profit-taking) "
-        "currently covers US Stocks and Crypto only -- an eToro position "
-        "relies on the fixed stop-loss/take-profit set on the broker "
-        "side at trade-open, same as everywhere else in this project, "
-        "just without this dashboard's own exit-protection pass checking "
-        "on it in between visits."
+        "currently covers US Stocks and Crypto only -- an eToro or MT4/5 "
+        "position relies on the fixed stop-loss/take-profit set on the "
+        "broker side at trade-open, same as everywhere else in this "
+        "project, just without this dashboard's own exit-protection pass "
+        "checking on it in between visits."
     )
 
     preview_clicked = st.button("Preview AI Signals", key="preview_signals")

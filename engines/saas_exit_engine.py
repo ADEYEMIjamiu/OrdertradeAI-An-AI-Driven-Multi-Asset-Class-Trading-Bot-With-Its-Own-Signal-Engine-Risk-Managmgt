@@ -50,6 +50,47 @@ file. eToro's close-position endpoint is synchronous (confirmed by
 etoro_broker.close_position()'s own live-testing history), so an eToro
 exit is always treated as immediately filled, same as the Binance
 branch.
+
+FOLLOW-UP 2026-09-02 (Phase 3 of the MT4/MT5 bridge): MT_BRIDGE added
+below, but NOT the same way ETORO was. eToro's per-position "trailing"
+flag is application-level and confirmed unreliable (see etoro_broker.py's
+2026-08-24 comment), so this file's own price-vs-stored-stop/take-profit
+check is the thing actually protecting an eToro position. MT4/5 is the
+opposite: every BUY already sets a REAL broker-side stop-loss/take-
+profit on the position itself (an actual MT5 stop order the broker
+enforces on its own -- see mt_broker.execute_buy_by_usd_amount()), so
+re-running the same yfinance-price-vs-stored-levels check here and
+racing a SECOND close against the broker's own already-reliable one
+would be redundant at best (the position may already be gone by the
+time this runs -- see reconcile_user_mt_orders() below) and could act on
+stale/mismatched data at worst (yfinance's forex/commodity feed is not
+necessarily the same feed MT5's own stop order watches). _decide_exit_
+reason() below therefore takes a check_stop_take flag, passed False for
+MT_BRIDGE -- only the hard MAX_HOLD_DAYS_HARD time-based exit (which the
+broker has no concept of at all) applies to it.
+
+A position already closed by its own broker-side stop-loss/take-profit
+should never even reach this loop for MT_BRIDGE: saas_decision_engine.
+run_decision_loop_for_user() calls engines.saas_reconcile_engine.
+reconcile_user_mt_orders() before this function, specifically to close
+that gap (bring the journal back in sync with MetaApi's live position
+list) first. If it somehow does reach here anyway (e.g. this function
+called directly, bypassing that ordering), the broker SELL call below
+will simply fail with a "position not found"-style error from MetaApi,
+caught the same way any other broker error is caught in this loop --
+never a silent false "sold".
+
+_ASSET_CLASS_BROKER (a dict of asset_class -> exactly one broker) was
+retired in this same follow-up in favor of a flat _BROKERS list: FOREX
+and COMMODITIES can now each independently be served by ETORO OR
+MT_BRIDGE per user (Phase 2), so a single asset_class -> one-broker
+mapping can no longer say which broker(s) actually have open positions
+for a given user -- this loop has to check every broker's own open
+tickers regardless of which one is currently "preferred" for new BUYs.
+Every ticker's real asset_class was ALREADY read back off its own
+entry_order rather than trusted from the loop variable (see the
+FOLLOW-UP above this one), so this change doesn't affect what gets
+reported, only how brokers are chosen to check.
 """
 
 from datetime import datetime
@@ -60,12 +101,9 @@ from engines import saas_order_manager as journal
 
 from config import MAX_HOLD_DAYS_HARD
 
-_ASSET_CLASS_BROKER = {
-    "US_STOCKS": "ALPACA",
-    "CRYPTO": "BINANCE",
-    "FOREX": "ETORO",
-    "COMMODITIES": "ETORO",
-}
+# See module docstring's 2026-09-02 FOLLOW-UP for why this is now a flat
+# list rather than an asset_class -> broker dict.
+_BROKERS = ("ALPACA", "BINANCE", "ETORO", "MT_BRIDGE")
 
 
 def _get_current_price(ticker):
@@ -88,27 +126,34 @@ def _get_current_price(ticker):
         return None
 
 
-def _decide_exit_reason(entry_order, current_price):
+def _decide_exit_reason(entry_order, current_price, check_stop_take=True):
     """Returns a human-readable reason string if this position should be
     closed, or None if it should stay open. Pure decision logic, no
     broker/journal calls -- mirrors the engines-decide/caller-executes
-    separation position_lifecycle_engine.py already uses."""
-    stop_loss = entry_order.get("stop_loss")
-    take_profit = entry_order.get("take_profit")
+    separation position_lifecycle_engine.py already uses.
 
-    if stop_loss is not None:
-        try:
-            if current_price <= float(stop_loss):
-                return f"Stop-loss hit ({current_price:.4f} <= {float(stop_loss):.4f})"
-        except (TypeError, ValueError):
-            pass
+    check_stop_take=False (added 2026-09-02, Phase 3, used for MT_BRIDGE)
+    skips the stop-loss/take-profit comparison entirely, leaving only the
+    hard time-based exit -- see module docstring for why re-checking
+    price against stop/take is redundant (or worse) for a broker that
+    already enforces its own reliable, real, position-attached stop."""
+    if check_stop_take:
+        stop_loss = entry_order.get("stop_loss")
+        take_profit = entry_order.get("take_profit")
 
-    if take_profit is not None:
-        try:
-            if current_price >= float(take_profit):
-                return f"Take-profit hit ({current_price:.4f} >= {float(take_profit):.4f})"
-        except (TypeError, ValueError):
-            pass
+        if stop_loss is not None:
+            try:
+                if current_price <= float(stop_loss):
+                    return f"Stop-loss hit ({current_price:.4f} <= {float(stop_loss):.4f})"
+            except (TypeError, ValueError):
+                pass
+
+        if take_profit is not None:
+            try:
+                if current_price >= float(take_profit):
+                    return f"Take-profit hit ({current_price:.4f} >= {float(take_profit):.4f})"
+            except (TypeError, ValueError):
+                pass
 
     opened_at = entry_order.get("created_at")
     if opened_at:
@@ -143,16 +188,8 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
     individual ticker's failure.
     """
     results = []
-    processed_brokers = set()
 
-    for asset_class, broker in _ASSET_CLASS_BROKER.items():
-        if broker in processed_brokers:
-            # FOREX and COMMODITIES both map to ETORO -- without this
-            # guard the same open eToro tickers would be fetched and
-            # potentially closed twice per pass, once under each label.
-            continue
-        processed_brokers.add(broker)
-
+    for broker in _BROKERS:
         open_tickers = journal.list_open_tickers_for_user(user_id, broker)
 
         for ticker in open_tickers:
@@ -160,11 +197,10 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
             if entry_order is None:
                 continue  # shouldn't happen if list_open_tickers_for_user is consistent, but never crash over it
 
-            # eToro tickers span two asset classes under one broker --
-            # trust the order's own recorded asset_class for reporting,
-            # not the outer loop variable (which is only correct for the
-            # first of the two labels once deduped above).
-            asset_class = entry_order.get("asset_class", asset_class)
+            # ETORO/MT_BRIDGE tickers can each be either FOREX or
+            # COMMODITIES -- trust the order's own recorded asset_class
+            # for reporting, never guess it from the broker.
+            asset_class = entry_order.get("asset_class")
 
             current_price = _get_current_price(ticker)
             if current_price is None:
@@ -176,7 +212,12 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
                 })
                 continue
 
-            exit_reason = _decide_exit_reason(entry_order, current_price)
+            # See module docstring's 2026-09-02 FOLLOW-UP: MT_BRIDGE
+            # positions already have a real broker-side stop-loss/take-
+            # profit, so only the hard time-based exit applies here.
+            exit_reason = _decide_exit_reason(
+                entry_order, current_price, check_stop_take=(broker != "MT_BRIDGE")
+            )
             if exit_reason is None:
                 continue
 
@@ -236,7 +277,36 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
                     # No separate close price returned -- use the price
                     # already fetched above for the exit decision, same
                     # as the Binance branch.
-                else:
+                elif broker == "MT_BRIDGE":
+                    # Only ever reached for the hard time-based exit --
+                    # see module docstring/_decide_exit_reason() call
+                    # above. position_id is the MetaApi position id,
+                    # stored as broker_order_id once the BUY confirmed
+                    # filled (saas_decision_engine.py's MT_BRIDGE branch).
+                    position_id = entry_order.get("broker_order_id")
+                    if not position_id:
+                        results.append({
+                            "ticker": ticker,
+                            "asset_class": asset_class,
+                            "action": "error",
+                            "message": f"Exit triggered ({exit_reason}) but no confirmed "
+                                       f"MT4/5 position_id on record for this BUY -- "
+                                       f"skipped (this shouldn't happen: MT_BRIDGE BUYs "
+                                       f"only journal FILLED once a real position_id "
+                                       f"comes back, see mt_broker.execute_buy_by_usd_"
+                                       f"amount()'s docstring).",
+                        })
+                        continue
+                    is_confirmed_filled = True
+                    broker_order_id = str(position_id)
+                    factory.sell_mt_for_user(user_id, position_id)
+                    # No separate close price returned by MetaApi's
+                    # close_position() (same limitation as execute_buy_by_
+                    # usd_amount() -- see mt_broker.py's docstring) -- use
+                    # the price already fetched above, same "same source,
+                    # seconds apart" tradeoff as the ETORO/BINANCE
+                    # branches.
+                elif broker == "BINANCE":
                     # FIX 2026-08-27: `quantity` above comes from the
                     # ORIGINAL BUY order's journaled filled_quantity,
                     # which can drift from the wallet's real current
@@ -276,6 +346,18 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
                     # No separate fill price returned by sell_crypto_for_user
                     # -- use the price already fetched above for the exit
                     # decision, same source, seconds apart.
+                else:
+                    # Defensive only -- _BROKERS above is the sole source
+                    # of what this loop iterates, so this should be
+                    # unreachable in practice.
+                    results.append({
+                        "ticker": ticker,
+                        "asset_class": asset_class,
+                        "action": "error",
+                        "message": f"Exit triggered ({exit_reason}) but broker "
+                                   f"{broker!r} has no exit-execution branch here.",
+                    })
+                    continue
             except Exception as e:
                 results.append({
                     "ticker": ticker,

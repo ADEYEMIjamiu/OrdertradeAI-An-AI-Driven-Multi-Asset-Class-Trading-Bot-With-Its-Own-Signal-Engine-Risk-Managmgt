@@ -1141,6 +1141,26 @@ def buy_mt_for_user(user_id, ticker, usd_amount, stop_loss_price=None, take_prof
     )
 
 
+def sell_mt_for_user(user_id, position_id):
+    """
+    FOLLOW-UP 2026-09-02 (Phase 3): closes an existing MT4/5 position by
+    its MetaApi position_id. Thin wrapper around mt_broker.execute_sell_
+    close_sync() -- mirrors sell_etoro_for_user() above (position_id,
+    not ticker+quantity, since that's what MetaApi's close_position()
+    actually needs -- entry_order["broker_order_id"] is the position_id
+    stored once the BUY confirmed filled).
+
+    Used by engines/saas_exit_engine.py, but ONLY for the hard time-based
+    exit -- MT4/5's own broker-side stop-loss/take-profit (set at order
+    time, see mt_broker.execute_buy_by_usd_amount()) already covers
+    price-based exits, so this is never reached for those; see that
+    file's docstring for the full reasoning. A position closed by its
+    own broker-side stop before this is ever called is instead caught by
+    reconcile_user_mt_orders() (engines/saas_reconcile_engine.py).
+    """
+    return mt_broker.execute_sell_close_sync(user_id, position_id)
+
+
 def _get_alpaca_open_positions(user_id):
     """
     Reads straight from Alpaca's own get_all_positions() -- authoritative,

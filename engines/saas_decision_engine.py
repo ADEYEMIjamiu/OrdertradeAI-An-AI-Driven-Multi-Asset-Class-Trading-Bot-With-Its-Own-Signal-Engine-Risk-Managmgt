@@ -116,12 +116,36 @@ and are sized in real lots via account-leverage- and contract-size-aware
 math (mt_broker._compute_lot_size()) rather than eToro's simpler
 percentage-of-leverage approach -- MT accounts vary in leverage by
 broker/region/regulator, so this couldn't reuse a single ETORO_LEVERAGE-
-style constant. Same scope limits as eToro's original wiring: BUY-side
-only, no reconciliation pass yet, no exit-engine/trailing-stop coverage
-yet (Phase 3, not built here) -- an MT4/5 position opened by this
-function currently has NO automated stop-loss/take-profit enforcement
-beyond whatever broker-side stop_loss_price/take_profit_price was set at
-order time.
+style constant.
+
+FOLLOW-UP 2026-09-02 (Phase 3 of the MT4/MT5 bridge, same day): closed
+the two gaps Phase 2 deliberately left open -- MT4/5 positions now get
+exit protection AND reconciliation, mirroring what eToro already has,
+via a genuinely different mechanism than eToro's own:
+- MT4/5 already sets a REAL broker-side stop-loss/take-profit on every
+  position at order time (see mt_broker.execute_buy_by_usd_amount()) --
+  an actual MT5 stop order the broker enforces on its own, not an
+  application-level flag like eToro's own "trailing" flag (confirmed
+  unreliable, see etoro_broker.py's 2026-08-24 comment). So unlike
+  eToro, saas_exit_engine.py does NOT re-check price against stop/take
+  levels for MT_BRIDGE -- only the hard MAX_HOLD_DAYS_HARD time-based
+  exit applies (the one thing the broker has no concept of).
+- Because the broker can close a position entirely on its own (hitting
+  its own stop-loss/take-profit, or the user closing it by hand in their
+  MT4/5 terminal), this journal has no way to find out unless something
+  checks -- engines/saas_reconcile_engine.reconcile_user_mt_orders(),
+  called below BEFORE exit protection, closes that gap by confirming
+  every journal-open MT_BRIDGE ticker's position_id is still among this
+  user's live MetaApi positions, and journaling a synthetic SELL if not.
+  Also fixed in this pass: the MT_BRIDGE BUY branch below used to
+  journal filled_quantity as trade_amount / filled_price (copy-pasted
+  from the eToro branch, where that means dollars of margin) -- for
+  MT4/5 that's meaningless; mt_result["lot_size"] (the real, leverage-
+  and contract-size-aware lot size mt_broker already computed) is used
+  instead now.
+Still out of scope: no break-even ratchet or partial profit-taking for
+MT_BRIDGE (position_lifecycle_engine.py remains US_STOCKS/CRYPTO only,
+same as before this follow-up).
 
 FIX 2026-08-27: portfolio-level exposure cap (MAX_PORTFOLIO_EXPOSURE) is
 now enforced too -- see saas_broker_factory.get_user_exposure_percent()
@@ -335,22 +359,65 @@ def run_decision_loop_for_user(user_id, dry_run=True):
         c["broker"] for c in tenant.list_connected_brokers(user_id)
     }
 
-    # Exit protection runs first and for BOTH connected brokers
-    # regardless of which asset classes are currently enabled for new
-    # BUYs -- disabling future buying on an asset class shouldn't strand
-    # an already-open position without stop-loss/take-profit/time-exit
+    # FOLLOW-UP 2026-09-02 (Phase 3 of the MT4/MT5 bridge): MT4/5
+    # reconciliation runs BEFORE exit protection, not alongside Alpaca/
+    # eToro's reconciliation calls further down (which sit inside the
+    # per-asset-class BUY loop, after exit protection) -- deliberately
+    # different placement, because it closes a different KIND of gap.
+    # Alpaca/eToro reconciliation catches an order that was SUBMITTED
+    # but not yet confirmed FILLED; MT4/5 orders never have that problem
+    # (MetaApi market orders confirm filled synchronously). What MT4/5
+    # has instead: every BUY sets a REAL broker-side stop-loss/take-
+    # profit ON THE POSITION ITSELF (see mt_broker.execute_buy_by_usd_
+    # amount()), so the broker can close a position entirely on its own,
+    # with zero involvement from this codebase, the moment price hits
+    # either level. If that already happened, saas_exit_engine.py's own
+    # MT_BRIDGE handling (which does NOT re-check price against stop/
+    # take -- see that file's docstring for why re-checking would be
+    # redundant against an already-reliable broker-side stop) would only
+    # find out the position is gone by trying to close it and getting a
+    # broker error. Running reconcile_user_mt_orders() first means the
+    # journal is already back in sync with MetaApi's live position list
+    # by the time exit protection (and the per-asset-class position-cap/
+    # exposure math further below) ever looks at it.
+    if "MT_BRIDGE" in connected_brokers:
+        mt_reconcile_results = reconcile.reconcile_user_mt_orders(user_id)
+        for r in mt_reconcile_results:
+            results.append({
+                "ticker": r["ticker"],
+                "asset_class": None,
+                "action": "reconciled",
+                "message": r["message"],
+            })
+
+    # Exit protection runs first and for ALL connected brokers regardless
+    # of which asset classes are currently enabled for new BUYs --
+    # disabling future buying on an asset class shouldn't strand an
+    # already-open position without stop-loss/take-profit/time-exit
     # coverage. See saas_exit_engine.py for what this does and doesn't
     # cover (full-exit hard stop-loss/take-profit/hard-time-exit --
     # break-even ratchet and partial profit-taking now live separately
     # in engines/saas_position_lifecycle_engine.py, wired in below).
     # Same dry_run gating as the BUY side -- Preview never touches the
     # broker, Execute does.
-    if "ALPACA" in connected_brokers or "BINANCE" in connected_brokers or "ETORO" in connected_brokers:
+    if (
+        "ALPACA" in connected_brokers
+        or "BINANCE" in connected_brokers
+        or "ETORO" in connected_brokers
+        or "MT_BRIDGE" in connected_brokers
+    ):
         # FOLLOW-UP 2026-08-26: ETORO added to this guard now that
         # saas_exit_engine.py can close eToro positions (FOREX/
         # COMMODITIES) -- without it here, a user with only eToro
         # connected would never reach exit protection at all, no matter
         # what saas_exit_engine.py itself supports.
+        #
+        # FOLLOW-UP 2026-09-02 (Phase 3): MT_BRIDGE added too -- without
+        # it, a user with only an MT4/5 account connected would never
+        # reach the hard time-based exit saas_exit_engine.py now applies
+        # to MT_BRIDGE positions (see that file's docstring: price-based
+        # stop-loss/take-profit is already handled broker-side for MT4/5,
+        # but MAX_HOLD_DAYS_HARD is not something the broker knows about).
         exit_results = exit_engine.check_and_apply_exits_for_user(user_id, dry_run=dry_run)
         results.extend(exit_results)
 
@@ -691,7 +758,22 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                         broker_order_id = str(mt_result["position_id"])
                         if mt_result["executed_price"]:
                             filled_price = float(mt_result["executed_price"])
-                            filled_quantity = trade_amount / filled_price if filled_price > 0 else estimated_quantity
+                        # FIX 2026-09-02 (Phase 3, found while building exit
+                        # protection): this used to compute filled_quantity
+                        # as trade_amount / filled_price -- copy-pasted from
+                        # the eToro branch below, where "quantity" means
+                        # dollars of margin, not a real unit count. That
+                        # formula is meaningless for MT4/5: mt_result
+                        # already carries the REAL lot size mt_broker.
+                        # _compute_lot_size() computed (leverage- and
+                        # contract-size-aware -- see that function's
+                        # docstring), and journaling anything else means
+                        # this order's filled_quantity/remaining_quantity
+                        # (and therefore anything read back off it, like
+                        # saas_broker_factory._get_mt_bridge_open_positions()
+                        # or a future reconciliation pass) would show a
+                        # number with no relationship to the real position.
+                        filled_quantity = mt_result["lot_size"]
                 else:
                     # FOREX/COMMODITIES via eToro. buy_etoro_for_user()
                     # already polls for a confirmed fill internally (15s

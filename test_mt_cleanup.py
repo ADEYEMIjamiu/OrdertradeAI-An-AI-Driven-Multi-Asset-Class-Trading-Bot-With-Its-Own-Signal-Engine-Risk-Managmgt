@@ -28,7 +28,7 @@ _DB_NAME = "saas_platform.db"  # shared by tenant_engine.py and saas_order_manag
 
 async def _remove_metaapi_account():
     try:
-        account = await mt_broker._get_or_create_metaapi_account(_TEST_USER_ID)
+        api, account = await mt_broker._get_or_create_metaapi_account(_TEST_USER_ID)
     except Exception as e:
         print(f"   No MetaApi account to remove (or lookup failed): {e}")
         return
@@ -38,6 +38,14 @@ async def _remove_metaapi_account():
         print("   MetaApi account removed (undeployed + fully deleted).")
     except Exception as e:
         print(f"   Could not remove MetaApi account: {e}")
+    finally:
+        # FIX 2026-09-02 (task #238): _get_or_create_metaapi_account()
+        # now returns (api, account) specifically so callers can close
+        # the client -- see mt_broker.py's module docstring.
+        try:
+            await api.close()
+        except Exception:
+            pass
 
 
 def main():

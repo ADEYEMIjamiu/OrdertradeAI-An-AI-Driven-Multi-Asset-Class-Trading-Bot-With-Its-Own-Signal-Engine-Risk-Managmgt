@@ -76,16 +76,35 @@ USER's own MT login), METAAPI_TOKEN (read from the environment, see
 _get_api() below) is OrderTrade AI's OWN MetaApi platform token -- one
 token for the whole platform, used to provision every user's MT account
 on MetaApi's side. It must be added to .env once, and is never taken
-from user input. Also worth noting: this token's validity was set to
-3 months when generated on 2026-09-02 for testing -- pick the longest
-available validity (or set a renewal reminder) before this is relied on
-for live production users, since expiry would silently break every
-connected user's MT4/5 access at once.
+from user input. This token was regenerated 2026-09-02 (the original had
+been pasted in a chat transcript during development -- treat as
+compromised the moment that happens, regardless of how low the actual
+risk seems) -- pick the longest available validity when it's next
+rotated (or set a renewal reminder), since expiry would silently break
+every connected user's MT4/5 access at once.
+
+CONNECTION CLEANUP -- FIXED 2026-09-02 (task #238, found via
+test_mt_phase3.py's rapid-fire live test run: six calls in under 3
+minutes left "Unclosed client session" warnings and a background
+SubscriptionManager task crashing with a KeyError at process exit).
+Every function below that talks to MetaApi now goes through
+_mt_connection(), an async context manager that explicitly closes both
+the RPC connection and the MetaApi client it was opened from before
+returning -- confirmed-live methods (connection.close(), api.close()),
+not guessed (see inspect_close_methods.py). Without this, each of the
+SYNC WRAPPERS below (each spinning up and tearing down its OWN event
+loop -- see that section) would leave that call's aiohttp session(s) and
+background tasks dangling once the loop was gone, with nothing left to
+ever clean them up. This does NOT change the account-level deploy/
+undeploy behavior described in COST MODEL above -- only the RPC
+connection and client are closed per call, the account itself stays
+deployed exactly as before.
 """
 
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 
 from metaapi_cloud_sdk import MetaApi
 
@@ -163,13 +182,27 @@ async def save_mt_credentials(user_id, login, password, server, platform="mt5", 
 
 async def _get_or_create_metaapi_account(user_id):
     """
-    Returns the MetaApi MetatraderAccount object for this user, creating
-    it on MetaApi's side (and caching the returned id back into this
-    user's own encrypted credential row) the first time this is called.
-    Every later call reuses the cached metaapi_account_id -- this is
-    what avoids MetaApi's one-time "adding a trading account" fee being
+    Returns (api, account) -- the MetaApi client instance used AND the
+    MetatraderAccount object for this user, creating the account on
+    MetaApi's side (and caching the returned id back into this user's
+    own encrypted credential row) the first time this is called. Every
+    later call reuses the cached metaapi_account_id -- this is what
+    avoids MetaApi's one-time "adding a trading account" fee being
     charged again on every check, and avoids silently creating duplicate
     MetaApi accounts for the same MT login.
+
+    FIX 2026-09-02 (task #238, found via test_mt_phase3.py's rapid-fire
+    live test run): this used to return ONLY `account`, with `api`
+    (a fresh MetaApi(token=...) client built fresh on every single call
+    -- see _get_api()) going out of scope and never explicitly closed.
+    Confirmed live: six calls in under 3 minutes left "Unclosed client
+    session" warnings and a background SubscriptionManager task that
+    crashed with a KeyError trying to run after its owning event loop
+    (each of mt_broker.py's sync wrappers tears down its own -- see that
+    section's docstring) was already gone. `api` is returned now
+    specifically so callers can `await api.close()` when done -- see
+    _mt_connection() below, which does this (and connection.close())
+    automatically for every function in this file that opens one.
     """
     creds = tenant.get_broker_credentials(user_id, BROKER_CODE)
     if creds is None:
@@ -181,7 +214,7 @@ async def _get_or_create_metaapi_account(user_id):
     metaapi_account_id = extra.get("metaapi_account_id")
     if metaapi_account_id:
         try:
-            return await api.metatrader_account_api.get_account(metaapi_account_id)
+            return api, await api.metatrader_account_api.get_account(metaapi_account_id)
         except Exception:
             # Cached id is stale (e.g. removed on MetaApi's side out of
             # band) -- fall through and re-create rather than
@@ -214,7 +247,7 @@ async def _get_or_create_metaapi_account(user_id):
         api_key=creds["api_key"], api_secret=creds["api_secret"],
         extra=json.dumps(extra),
     )
-    return account
+    return api, account
 
 
 async def _deploy_and_connect(account):
@@ -240,6 +273,47 @@ async def _deploy_and_connect(account):
     return connection
 
 
+@asynccontextmanager
+async def _mt_connection(user_id):
+    """
+    Async context manager: yields a live RPC connection for this user's
+    MT4/5 account, guaranteeing BOTH connection.close() and api.close()
+    run afterward -- even if the code using the connection raises -- so
+    a single call's aiohttp session(s) and background subscription task
+    never outlive that call's own event loop (mt_broker.py's sync
+    wrappers each tear down their own via asyncio.run() -- see the
+    SYNC WRAPPERS section below). Added 2026-09-02 (task #238) after
+    test_mt_phase3.py's rapid-fire live run left "Unclosed client
+    session" warnings and a background SubscriptionManager task crashing
+    at process exit -- close() and close() are both real, confirmed-live
+    methods on the connection and MetaApi client respectively (see
+    inspect_close_methods.py), not guessed.
+
+    Does NOT undeploy the account itself -- see module docstring's COST
+    MODEL section for why staying deployed between calls is deliberate.
+    Only the RPC-level connection and client are closed here, which is
+    safe to do after every call and cheap to re-open next time (a fresh
+    RPC connection to an already-deployed, already-connected account is
+    fast -- it's the deploy/broker-connect step that's slow, see
+    _deploy_and_connect()'s wait_deployed()/wait_connected() calls,
+    neither of which is repeated once an account is already DEPLOYED/
+    CONNECTED).
+    """
+    api, account = await _get_or_create_metaapi_account(user_id)
+    connection = await _deploy_and_connect(account)
+    try:
+        yield connection
+    finally:
+        try:
+            await connection.close()
+        except Exception:
+            pass
+        try:
+            await api.close()
+        except Exception:
+            pass
+
+
 async def check_user_mt_connection(user_id):
     """
     Connects (deploying the account if needed -- see module docstring
@@ -250,9 +324,8 @@ async def check_user_mt_connection(user_id):
     pattern in Phase 2 without changing that shape.
     """
     try:
-        account = await _get_or_create_metaapi_account(user_id)
-        connection = await _deploy_and_connect(account)
-        info = await connection.get_account_information()
+        async with _mt_connection(user_id) as connection:
+            info = await connection.get_account_information()
         return {
             "connected": True,
             "account_status": "CONNECTED",
@@ -279,9 +352,8 @@ async def check_user_mt_connection(user_id):
 async def get_user_mt_positions(user_id):
     """Returns MetaApi's raw position list. Does not undeploy -- see
     module docstring's COST MODEL section."""
-    account = await _get_or_create_metaapi_account(user_id)
-    connection = await _deploy_and_connect(account)
-    return await connection.get_positions()
+    async with _mt_connection(user_id) as connection:
+        return await connection.get_positions()
 
 
 async def execute_buy(user_id, symbol, volume, stop_loss=None, take_profit=None):
@@ -293,24 +365,22 @@ async def execute_buy(user_id, symbol, volume, stop_loss=None, take_profit=None)
     module docstring); call this directly for manual/local testing only
     until Phase 2 lands.
     """
-    account = await _get_or_create_metaapi_account(user_id)
-    connection = await _deploy_and_connect(account)
-    return await connection.create_market_buy_order(
-        symbol=symbol,
-        volume=volume,
-        stop_loss=stop_loss,
-        take_profit=take_profit,
-        options={"comment": "OrderTradeAI"},
-    )
+    async with _mt_connection(user_id) as connection:
+        return await connection.create_market_buy_order(
+            symbol=symbol,
+            volume=volume,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            options={"comment": "OrderTradeAI"},
+        )
 
 
 async def execute_sell_close(user_id, position_id):
     """Fully closes an existing position by MetaApi position id.
     Same master-password requirement and Phase-1-standalone status as
     execute_buy() above."""
-    account = await _get_or_create_metaapi_account(user_id)
-    connection = await _deploy_and_connect(account)
-    return await connection.close_position(position_id=position_id)
+    async with _mt_connection(user_id) as connection:
+        return await connection.close_position(position_id=position_id)
 
 
 async def disconnect_user_mt_account(user_id):
@@ -320,11 +390,18 @@ async def disconnect_user_mt_account(user_id):
     account settings -- not after every trade or check (see module
     docstring's COST MODEL section for why). Best-effort: swallows
     errors from undeploy() itself so a flaky MetaApi call can't block a
-    user from disconnecting in our own UI.
+    user from disconnecting in our own UI. Closes the `api` client
+    afterward too (task #238) -- unlike the functions above, this
+    doesn't open an RPC connection at all, but the client itself still
+    needs closing.
     """
-    account = await _get_or_create_metaapi_account(user_id)
+    api, account = await _get_or_create_metaapi_account(user_id)
     try:
         await account.undeploy()
+    except Exception:
+        pass
+    try:
+        await api.close()
     except Exception:
         pass
 
@@ -481,24 +558,23 @@ async def execute_buy_by_usd_amount(user_id, ticker, usd_amount, stop_loss_price
     """
     symbol = resolve_mt_symbol(ticker)
 
-    account = await _get_or_create_metaapi_account(user_id)
-    connection = await _deploy_and_connect(account)
-    account_info = await connection.get_account_information()
+    async with _mt_connection(user_id) as connection:
+        account_info = await connection.get_account_information()
 
-    lot_size = await _compute_lot_size(connection, account_info, symbol, usd_amount)
-    if lot_size is None:
-        return None
+        lot_size = await _compute_lot_size(connection, account_info, symbol, usd_amount)
+        if lot_size is None:
+            return None
 
-    price_data = await connection.get_symbol_price(symbol)
-    quote_price = float(price_data.get("ask") or price_data.get("bid") or 0)
+        price_data = await connection.get_symbol_price(symbol)
+        quote_price = float(price_data.get("ask") or price_data.get("bid") or 0)
 
-    order = await connection.create_market_buy_order(
-        symbol=symbol,
-        volume=lot_size,
-        stop_loss=stop_loss_price,
-        take_profit=take_profit_price,
-        options={"comment": "OrderTradeAI"},
-    )
+        order = await connection.create_market_buy_order(
+            symbol=symbol,
+            volume=lot_size,
+            stop_loss=stop_loss_price,
+            take_profit=take_profit_price,
+            options={"comment": "OrderTradeAI"},
+        )
 
     position_id = order.get("positionId") if order.get("stringCode") == "TRADE_RETCODE_DONE" else None
 

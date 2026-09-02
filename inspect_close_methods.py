@@ -25,7 +25,7 @@ _TEST_USER_ID = "test_mt_user_debug"
 
 
 async def main():
-    account = await mt_broker._get_or_create_metaapi_account(_TEST_USER_ID)
+    api, account = await mt_broker._get_or_create_metaapi_account(_TEST_USER_ID)
     connection = await mt_broker._deploy_and_connect(account)
 
     keywords = ("close", "disconnect", "stop", "dispose", "shutdown")
@@ -33,12 +33,22 @@ async def main():
     print("=== connection methods mentioning close/disconnect/stop/dispose/shutdown ===")
     print(sorted(m for m in dir(connection) if any(k in m.lower() for k in keywords)))
 
-    api = mt_broker._get_api()
     print("\n=== MetaApi client (api) methods mentioning close/disconnect/stop/dispose/shutdown ===")
     print(sorted(m for m in dir(api) if any(k in m.lower() for k in keywords)))
 
     print("\n=== account methods mentioning close/disconnect/stop/dispose/undeploy ===")
     print(sorted(m for m in dir(account) if any(k in m.lower() for k in keywords + ("undeploy",))))
+
+    # FIX 2026-09-02 (task #238): close what we opened for this diagnostic
+    # itself, same as every real function in mt_broker.py now does.
+    try:
+        await connection.close()
+    except Exception:
+        pass
+    try:
+        await api.close()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

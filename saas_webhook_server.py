@@ -37,14 +37,23 @@ from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
+# Loaded explicitly here, and BEFORE importing telegram_notifier below
+# (not just relied on transitively via tenant_engine's own load_dotenv()
+# call) so both STRIPE_WEBHOOK_SECRET (this file's own
+# _webhook_secret()) and TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID
+# (telegram_notifier's module-level os.getenv() calls, evaluated once at
+# import time) are guaranteed available regardless of import order.
+# FIX 2026-09-14: telegram_notifier was originally imported above this
+# load_dotenv() call -- harmless for Stripe (this file's own
+# _webhook_secret() re-reads os.environ lazily on every call, after
+# load_dotenv() had already run by request time), but telegram_notifier
+# reads its two env vars once into module-level constants at import
+# time, so importing it before load_dotenv() ran would have silently
+# left both as None and every visit notification a permanent no-op.
+load_dotenv()
+
 import telegram_notifier
 from engines import tenant_engine as tenant
-
-# Loaded explicitly here (not just relied on transitively via
-# tenant_engine's own load_dotenv() call) so STRIPE_WEBHOOK_SECRET is
-# guaranteed available to this file's own _webhook_secret() regardless
-# of import order.
-load_dotenv()
 
 # stripe-python moved SignatureVerificationError from stripe.error.* to
 # a top-level stripe.* name in its v7 rewrite; requirements.txt

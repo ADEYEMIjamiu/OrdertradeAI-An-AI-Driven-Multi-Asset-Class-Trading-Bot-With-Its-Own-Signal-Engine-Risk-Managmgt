@@ -212,11 +212,25 @@ ETORO_LEVERAGE = 10
 # (an actual price level, not a percentage) is included -- confirmed live
 # 2026-08-03: "StopLossRate must be provided when Leverage is greater than
 # 1 or for SellShort transactions." buy() below computes this from the
-# current ask price using these percentages, mirroring config.py's
-# STOP_LOSS/TAKE_PROFIT (3%/5%) used elsewhere in this project for stocks
-# and crypto, so the real broker-enforced stop on the leveraged CFD lines
-# up with what the rest of the project already expects for this ticker.
-ETORO_STOP_LOSS_PCT = 0.03
+# current ask price using these percentages.
+#
+# FIX 2026-09-14: ETORO_STOP_LOSS_PCT originally mirrored config.py's
+# STOP_LOSS/TAKE_PROFIT (3%/5%) used elsewhere for stocks and crypto, but
+# those tickers trade unleveraged (leverage=1) while every forex/commodities
+# CFD here runs on ETORO_LEVERAGE (10x, see below). A 3% adverse move in
+# the underlying price is a 30% loss of the actual margin at 10x leverage,
+# not 3% -- confirmed live on a Silver position that moved 2.73% and lost
+# 27.34% of the $2,044.37 margin invested ($558.93). That's a far bigger
+# real-money risk-per-trade than the unleveraged stocks/crypto side ever
+# takes, and a 30-day sample of live demo trades came in at a 33% win rate,
+# below the ~37.5% this 3%/5% (30%/50% on margin) band needed just to break
+# even. Halved to 1.5% so the worst-case margin loss is ~15% instead of
+# ~30%; take-profit is left at 5% (50% on margin), which improves the
+# reward:risk ratio from 1:1.67 to 1:3.33 and drops the breakeven win rate
+# to ~23.1%. ETORO_TRAILING_STEP_PCT's ratchet distance is expressed as a
+# multiple of this constant, so it tightens automatically along with it --
+# no separate change needed there.
+ETORO_STOP_LOSS_PCT = 0.015
 ETORO_TAKE_PROFIT_PCT = 0.05
 
 # 2026-08-05: a user reviewing live positions noticed the obvious problem
@@ -323,11 +337,16 @@ def get_current_price(ticker: str) -> float:
     """
     instrument_id = _get_instrument_id(ticker)
 
+    # FIX 2026-09-10: was timeout=10 -- every other eToro API call in this
+    # file was bumped from 10s to 25s back in #51, but this one call was
+    # missed. Its SaaS mirror (saas_broker_factory.get_etoro_current_price_for_user)
+    # had the same gap and actually caused a live one-off trailing-lock
+    # failure on 2026-09-10; fixing both copies to match.
     response = requests.get(
         f"{API_BASE}/market-data/instruments/rates",
         params={"instrumentIds": instrument_id},
         headers=_headers(),
-        timeout=10,
+        timeout=25,
     )
     response.raise_for_status()
     data = response.json()

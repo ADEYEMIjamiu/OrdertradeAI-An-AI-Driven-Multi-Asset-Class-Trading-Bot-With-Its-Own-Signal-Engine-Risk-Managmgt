@@ -62,14 +62,52 @@ note) -- this paragraph was stale, describing a state that no longer
 matched the code below it.
 
 SAFETY -- read this before changing paper=True / set_sandbox_mode(True)
-below: both are hardcoded, not derived from user_settings or the stored
-credential's "environment" field. This is deliberate defense-in-depth --
-even if user_settings.allow_live_trading were ever flipped to true
-somewhere else in the codebase, these specific functions still
-physically cannot route an order to a real-money account, because the
-paper/testnet flag never comes from anywhere except this hardcoded
-constant. Changing that is a real-money decision and should never be an
-incidental side effect of an unrelated change.
+below: as of 2026-09-08, Alpaca (task #302), Binance (task #303), and
+eToro (task #304) are all wired to the same double-gate design -- see
+_alpaca_is_live(), _binance_is_live(), and _etoro_is_live() below. eToro's
+is_demo computation (used both directly and via the
+_etoro_execution_prefix()/_etoro_positions_prefix()/_etoro_portfolio_path()
+helpers) now routes through _etoro_is_live(), which requires BOTH
+creds["environment"] == "real" AND allow_live_trading, exactly like
+Alpaca/Binance -- the dormant gap flagged here previously (eToro checking
+creds["environment"] alone, with no Lock 1 check) is closed.
+
+MT4/5 (task #305, same day) is DIFFERENT from the three above and does
+NOT go through this file's is_live()/environment double-gate pattern at
+all -- see mt_broker.py's own module docstring LIVE TRADING GATE section
+for the full reasoning. Short version: MetaApi has no code-level sandbox
+to flip between (unlike paper=True/set_sandbox_mode(True)/a URL prefix
+choice) -- a connected MT4/5 account IS whatever the broker says it is.
+buy_mt_for_user()/sell_mt_for_user() below are thin pass-throughs with NO
+gate of their own; the actual Lock 1 check lives inside mt_broker.py's
+execute_buy_by_usd_amount()/execute_sell_close(), verified fresh from
+MetaApi's own account_information.type on every single call, not from
+any stored/user-chosen flag. Found while implementing #305: before this
+fix, ANY user with a connected real-money MT4/5 account had it tradeable
+through the AI decision loop with NO Lock 1 check at all (not dormant
+like eToro's gap -- live and reachable, though a production DB check
+before the fix confirmed zero users had one connected, so nothing was
+actually exposed).
+
+All three brokers above are a DOUBLE gate, computed by
+_alpaca_is_live()/_binance_is_live()/_etoro_is_live() below, and consulted by every call
+that builds a client for that broker in this file -- never duplicate
+this check inline elsewhere, always call the one function, so there is
+exactly one place this logic can drift. Real execution requires BOTH:
+(1) user_settings.allow_live_trading is True (Lock 1, flipped only via
+engines/tenant_engine.py's set_live_trading_status(), see that
+function's docstring) AND (2) this specific credential's stored
+environment is "live" (Lock 2, chosen per-broker at connect time in
+saas_app.py's render_broker_connections(), only offered when Lock 1 is
+already on). Either gate alone is not enough -- a user who saves live
+credentials and then reverts Lock 1 back to demo must NOT keep trading
+live; both is_live() functions re-check Lock 1 on every call rather than
+trusting a stale UI state, so that revert takes effect immediately,
+before the very next order. Any error while reading user_settings
+(missing row, DB error) fails CLOSED to paper -- see
+_user_has_live_trading_enabled()'s docstring. MT4/5's own Lock 1 check
+(in mt_broker.py) follows the identical fail-closed contract even though
+it isn't one of these three functions.
 
 NOT included: any kill-switch check. The single-owner bot's
 EXECUTION_KILL_SWITCH (config.py) is intentionally not wired in here --
@@ -85,12 +123,14 @@ import uuid
 
 import ccxt
 import requests
+from requests.adapters import HTTPAdapter
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
 from engines import tenant_engine as tenant
 from engines import saas_order_manager as journal
+from engines.broker_error_messages import friendly_broker_error_message, broker_error_status
 from etoro_broker import (
     resolve_project_ticker,
     _is_forex_or_commodity_ticker,
@@ -101,12 +141,110 @@ from etoro_broker import (
 )
 import mt_broker
 
+# FIX 2026-09-02 (post-launch-audit): alpaca-py's RESTClient never sets a
+# requests timeout itself -- confirmed via direct read of the installed
+# SDK (alpaca/common/rest.py): _request()/_one_request() build the
+# **opts dict passed to self._session.request(...) with only headers/
+# allow_redirects/params/json, no "timeout" key, and RESTClient.__init__
+# has no timeout parameter to set one either. That means every Alpaca
+# call in this file (Test Connection AND live order placement) inherits
+# `requests`' own default of NO timeout at all -- a stalled connection
+# can hang indefinitely, worse than the bounded-but-too-generous timeout
+# gap just fixed in mt_broker.py (task #238), since this one has no
+# bound whatsoever. eToro's checks already pass an explicit `timeout=`
+# to requests.get(); Binance's ccxt client defaults to 10s. Since
+# alpaca-py doesn't expose a constructor param for this, the fix is a
+# custom HTTPAdapter mounted on the client's own `_session` (a plain
+# requests.Session, confirmed a real, accessible attribute on
+# RESTClient) that injects a default timeout on every request through
+# that session unless the caller explicitly passes one of their own.
+_ALPACA_REQUEST_TIMEOUT_SECONDS = 15
+
+
+class _TimeoutHTTPAdapter(HTTPAdapter):
+    def __init__(self, *args, timeout=None, **kwargs):
+        self._default_timeout = timeout
+        super().__init__(*args, **kwargs)
+
+    def send(self, request, **kwargs):
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self._default_timeout
+        return super().send(request, **kwargs)
+
+
+def _with_request_timeout(client, timeout_seconds=_ALPACA_REQUEST_TIMEOUT_SECONDS):
+    """Mounts a default request timeout onto an alpaca-py client's
+    underlying requests.Session -- see _ALPACA_REQUEST_TIMEOUT_SECONDS
+    above for why this is necessary. Every TradingClient(...) built in
+    this file should be wrapped with this."""
+    adapter = _TimeoutHTTPAdapter(timeout=timeout_seconds)
+    client._session.mount("https://", adapter)
+    client._session.mount("http://", adapter)
+    return client
+
+
+# FIX 2026-09-03 (post-launch-audit #257): check_user_alpaca_connection()/
+# check_user_binance_connection()/check_user_etoro_connection() (and
+# mt_broker.py's check_user_mt_connection_sync(), same contract) used to
+# put str(e) -- the raw alpaca-py/ccxt/requests exception text -- straight
+# into the "error" field, which saas_app.py then interpolates directly
+# into st.error(...) for the user to read verbatim. That leaks internal
+# details (raw HTTP status text, account/API internals) and is confusing
+# for non-technical users ("APIError: {"code":40110000,"message":"access
+# key verification failed"}" instead of a plain "check your API key").
+# friendly_broker_error_message() (engines/broker_error_messages.py --
+# its own tiny module so mt_broker.py can use the same classifier
+# without a circular import, since this file already imports mt_broker)
+# classifies the raw exception text into one of a few common, broker-
+# agnostic buckets and returns a clean message for the UI. The raw
+# exception is still printed server-side (captured by journalctl) so
+# nothing is lost for debugging -- it's just no longer shown to the end
+# user.
+
+
+def _user_has_live_trading_enabled(user_id):
+    """
+    Lock 1 of the two-lock live-trading design -- reads
+    user_settings.allow_live_trading fresh on every call (never cached),
+    so a revert-to-demo (engines/tenant_engine.py's
+    set_live_trading_status()) takes effect on the very next broker call,
+    not just the next time some other cache happens to refresh.
+
+    Fails CLOSED (returns False) on any error -- a missing user_settings
+    row, a DB hiccup, anything -- because False here means "trade this
+    user's Alpaca connection as paper," which is the safe default; the
+    alternative (letting an exception propagate) would either crash a
+    legitimate paper-mode caller or, worse, risk some future refactor
+    treating a caught exception as "assume True." Always fail toward
+    paper, never toward live.
+    """
+    try:
+        settings = tenant.get_user_settings(user_id)
+        return bool(settings and settings.get("allow_live_trading"))
+    except Exception:
+        return False
+
+
+def _alpaca_is_live(user_id, creds):
+    """
+    THE single source of truth for whether a given Alpaca call should hit
+    this user's real account. See the module docstring's SAFETY section
+    above for the full reasoning -- both gates below are required, and
+    creds["environment"] must be exactly "live" (not "paper", not None,
+    not any other value) for the second one to pass. Every Alpaca client
+    built in this file MUST route through this function; never inline
+    `creds.get("environment") == "live"` anywhere else.
+    """
+    return creds.get("environment") == "live" and _user_has_live_trading_enabled(user_id)
+
 
 def check_user_alpaca_connection(user_id):
     """
     Builds a fresh Alpaca TradingClient from this user's OWN stored
-    paper-trading credentials and validates it with a real account call.
-    Mirrors broker.check_broker_connection()'s return shape.
+    credentials and validates it with a real account call. Paper vs live
+    is decided by _alpaca_is_live() (see module docstring SAFETY section)
+    -- NOT hardcoded, as of task #302. Mirrors broker.check_broker_
+    connection()'s return shape.
     """
     creds = tenant.get_broker_credentials(user_id, "ALPACA")
     if creds is None:
@@ -116,15 +254,16 @@ def check_user_alpaca_connection(user_id):
         }
 
     try:
-        client = TradingClient(
+        client = _with_request_timeout(TradingClient(
             creds["api_key"],
             creds["api_secret"],
-            paper=True,  # this platform only supports paper trading at launch
-        )
+            paper=not _alpaca_is_live(user_id, creds),
+        ))
         account = client.get_account()
 
         return {
             "connected": True,
+            "status": "connected",
             "account_status": str(account.status),
             "trading_blocked": bool(account.trading_blocked),
             "buying_power": float(account.buying_power),
@@ -135,20 +274,41 @@ def check_user_alpaca_connection(user_id):
     except Exception as e:
         return {
             "connected": False,
+            # FIX 2026-09-03 (#258): "unavailable" (network/timeout/rate-
+            # limit -- probably transient, not a bad key) vs "failed"
+            # (auth/balance/unknown -- a real problem). See
+            # engines/broker_error_messages.broker_error_status()'s
+            # docstring for why this distinction exists and matters at
+            # saas_app.py's credential-save flow.
+            "status": broker_error_status(e),
             "account_status": None,
             "trading_blocked": True,
             "buying_power": 0.0,
             "cash": 0.0,
             "equity": 0.0,
-            "error": str(e),
+            "error": friendly_broker_error_message("Alpaca", e),
         }
+
+
+def _binance_is_live(user_id, creds):
+    """
+    Binance's equivalent of _alpaca_is_live() above -- see that
+    function's docstring and the module SAFETY section for the full
+    two-lock reasoning, which applies identically here. Task #303
+    (2026-09-08): Binance is now the second broker wired to this
+    double-gate; set_sandbox_mode(True)/(False) is decided by this
+    function's return value, never hardcoded, never inlined elsewhere.
+    """
+    return creds.get("environment") == "live" and _user_has_live_trading_enabled(user_id)
 
 
 def check_user_binance_connection(user_id):
     """
-    Builds a fresh ccxt Binance TESTNET exchange instance from this
-    user's OWN stored testnet credentials. Mirrors
-    binance_broker.check_broker_connection()'s return shape.
+    Builds a fresh ccxt Binance exchange instance from this user's OWN
+    stored credentials. Testnet vs live (mainnet) is decided by
+    _binance_is_live() (see module docstring SAFETY section) -- NOT
+    hardcoded, as of task #303. Mirrors binance_broker.check_broker_
+    connection()'s return shape.
     """
     creds = tenant.get_broker_credentials(user_id, "BINANCE")
     if creds is None:
@@ -163,22 +323,42 @@ def check_user_binance_connection(user_id):
             "secret": creds["api_secret"],
             "enableRateLimit": True,
         })
-        exchange.set_sandbox_mode(True)  # testnet only, same as binance_broker.py
+        exchange.set_sandbox_mode(not _binance_is_live(user_id, creds))
 
         balance = exchange.fetch_balance()
         usdt = balance.get("USDT", {}).get("free", 0)
 
         return {
             "connected": True,
+            "status": "connected",
             "cash": float(usdt),
             "error": None,
         }
     except Exception as e:
         return {
             "connected": False,
+            "status": broker_error_status(e),  # see #258 note above check_user_alpaca_connection()
             "cash": 0.0,
-            "error": str(e),
+            "error": friendly_broker_error_message("Binance", e),
         }
+
+
+def _etoro_is_live(user_id, creds):
+    """
+    eToro's equivalent of _alpaca_is_live()/_binance_is_live() above --
+    see the module SAFETY section for the full two-lock reasoning, which
+    applies identically here. Task #304 (2026-09-08) CLOSES the gap that
+    section flagged: every eToro function below used to compute
+    is_demo = creds["environment"] != "real" directly, with NO check of
+    user_settings.allow_live_trading at all -- meaning if anything ever
+    set environment="real" for an eToro credential, orders would go to
+    the real account regardless of Lock 1. Nothing in saas_app.py's UI
+    has ever offered that choice, so this was dormant, not actually
+    exploited -- but it was still a live landmine, not a safe-by-design
+    gap. Every is_demo computation in this file's eToro section now
+    routes through this function instead of checking creds directly.
+    """
+    return creds.get("environment") == "real" and _user_has_live_trading_enabled(user_id)
 
 
 def check_user_etoro_connection(user_id):
@@ -187,7 +367,9 @@ def check_user_etoro_connection(user_id):
     stored API key / user key headers (mirrors etoro_broker.py's
     _headers()/_fetch_client_portfolio() pattern) -- does not touch
     etoro_broker.py's global module state at all. Mirrors
-    etoro_broker.check_broker_connection()'s return shape.
+    etoro_broker.check_broker_connection()'s return shape. Real vs demo
+    is decided by _etoro_is_live() (see module docstring SAFETY section)
+    -- NOT by creds["environment"] alone, as of task #304.
     """
     creds = tenant.get_broker_credentials(user_id, "ETORO")
     if creds is None:
@@ -196,7 +378,7 @@ def check_user_etoro_connection(user_id):
             "error": "No eToro credentials saved for this user.",
         }
 
-    is_demo = creds["environment"] != "real"
+    is_demo = not _etoro_is_live(user_id, creds)
     portfolio_path = "trading/info/demo/portfolio" if is_demo else "trading/info/portfolio"
     api_base = "https://public-api.etoro.com/api/v1"
 
@@ -218,6 +400,7 @@ def check_user_etoro_connection(user_id):
 
         return {
             "connected": True,
+            "status": "connected",
             "account_status": "DEMO" if is_demo else "REAL",
             "cash": credit,
             "equity": credit + unrealized_pnl,
@@ -226,10 +409,11 @@ def check_user_etoro_connection(user_id):
     except Exception as e:
         return {
             "connected": False,
+            "status": broker_error_status(e),  # see #258 note above check_user_alpaca_connection()
             "account_status": None,
             "cash": 0.0,
             "equity": 0.0,
-            "error": str(e),
+            "error": friendly_broker_error_message("eToro", e),
         }
 
 
@@ -447,7 +631,7 @@ def _get_etoro_exposure_percent(user_id):
     if creds is None:
         return 0.0
 
-    is_demo = creds["environment"] != "real"
+    is_demo = not _etoro_is_live(user_id, creds)
     portfolio_path = "trading/info/demo/portfolio" if is_demo else "trading/info/portfolio"
     api_base = "https://public-api.etoro.com/api/v1"
     headers = {
@@ -483,13 +667,35 @@ def _get_etoro_exposure_percent(user_id):
 # ============================================================
 
 def _require_alpaca_client(user_id):
+    """
+    Used by every order-placing/order-status/position-reading Alpaca call
+    in this file (buy_stock_for_user(), sell_stock_for_user(),
+    get_alpaca_order_status_for_user(), _get_alpaca_open_positions()).
+    paper is decided by _alpaca_is_live() -- see module docstring SAFETY
+    section -- so a live BUY/SELL only ever reaches Alpaca's real
+    endpoint when both Lock 1 (account-level allow_live_trading) and
+    Lock 2 (this credential's stored environment) agree, re-checked fresh
+    on every single call, not just at connect time.
+    """
     creds = tenant.get_broker_credentials(user_id, "ALPACA")
     if creds is None:
         raise ValueError("No Alpaca credentials saved for this user.")
-    return TradingClient(creds["api_key"], creds["api_secret"], paper=True)
+    return _with_request_timeout(TradingClient(
+        creds["api_key"], creds["api_secret"], paper=not _alpaca_is_live(user_id, creds)
+    ))
 
 
 def _require_binance_exchange(user_id):
+    """
+    Used by every order-placing/order-status/balance-reading Binance call
+    in this file (buy_crypto_for_user(), sell_crypto_for_user(),
+    get_binance_order_by_client_id_for_user(), get_user_crypto_held_qty(),
+    _get_binance_open_positions(), _get_binance_exposure_percent()).
+    Sandbox mode is decided by _binance_is_live() -- see module docstring
+    SAFETY section -- so a live BUY/SELL only ever reaches Binance's real
+    mainnet endpoint when both Lock 1 and Lock 2 agree, re-checked fresh
+    on every single call.
+    """
     creds = tenant.get_broker_credentials(user_id, "BINANCE")
     if creds is None:
         raise ValueError("No Binance credentials saved for this user.")
@@ -498,7 +704,7 @@ def _require_binance_exchange(user_id):
         "secret": creds["api_secret"],
         "enableRateLimit": True,
     })
-    exchange.set_sandbox_mode(True)
+    exchange.set_sandbox_mode(not _binance_is_live(user_id, creds))
     return exchange
 
 
@@ -573,11 +779,29 @@ def sell_stock_for_user(user_id, symbol, qty):
     return client.submit_order(order_data=order)
 
 
-def buy_crypto_for_user(user_id, ticker, usd_amount):
+def buy_crypto_for_user(user_id, ticker, usd_amount, client_order_id=None):
     """
     Per-user Binance testnet market BUY, sized by dollar amount. Mirrors
     binance_broker.py's buy_crypto(), against THIS user's own testnet
     account. Returns (order, price, quantity) same as the original.
+
+    FIX 2026-09-02 (post-launch-audit CRITICAL finding): accepts an
+    optional client_order_id now, forwarded to Binance as
+    newClientOrderId (confirmed live via the installed ccxt SDK's
+    binance.py: create_order() honors 'newClientOrderId' in params, same
+    idiom Binance's own API supports for exactly this purpose). If this
+    call raises -- e.g. a network timeout or dropped connection -- AFTER
+    Binance actually executed the order, the caller has NO order id from
+    the lost response to check later... unless it generated one itself
+    BEFORE calling this, which is exactly what saas_decision_engine.py's
+    CRYPTO branch now does. See get_binance_order_by_client_id_for_user()
+    below and saas_reconcile_engine.py's reconcile_user_crypto_orders()
+    for how that id is used afterward to find out definitively whether
+    the order happened. Without a caller-supplied id, a lost response
+    would leave literally no way to correlate back to a real order at
+    all -- this was the actual root cause of "no crypto reconciliation"
+    (a SUBMITTED-but-response-lost order previously had nothing to key
+    a follow-up lookup on).
     """
     exchange = _require_binance_exchange(user_id)
     symbol = _to_binance_symbol(ticker)
@@ -586,8 +810,37 @@ def buy_crypto_for_user(user_id, ticker, usd_amount):
     price = ticker_data["last"]
     quantity = usd_amount / price
 
-    order = exchange.create_market_buy_order(symbol, quantity)
+    params = {"newClientOrderId": client_order_id} if client_order_id else {}
+    order = exchange.create_market_buy_order(symbol, quantity, params=params)
     return order, price, quantity
+
+
+def get_binance_order_by_client_id_for_user(user_id, ticker, client_order_id):
+    """
+    Looks up a previously-placed Binance order by the CLIENT-generated
+    id passed to buy_crypto_for_user() above -- confirmed live via the
+    installed ccxt SDK's binance.py: fetch_order() looks up by
+    'origClientOrderId' in params when present, ignoring the `id`
+    positional argument entirely in that case (so passing id=None here
+    is safe and intentional, not an oversight).
+
+    This is the ONLY reliable way to find out what actually happened to
+    an order whose original create_market_buy_order() response was lost
+    to a network error -- see reconcile_user_crypto_orders() in
+    saas_reconcile_engine.py, the sole caller.
+
+    Raises ccxt.OrderNotFound specifically (not caught here -- callers
+    should catch it themselves) when Binance has never seen this client
+    order id at all -- i.e. the ORIGINAL buy_crypto_for_user() call
+    failed before Binance ever received/processed it, a DEFINITIVE
+    "this never happened" signal the caller can act on immediately
+    rather than waiting/guessing. Any OTHER exception (network/auth/
+    etc.) means the lookup itself failed -- genuinely unknown, not a
+    negative result -- and should be retried on a future pass instead.
+    """
+    exchange = _require_binance_exchange(user_id)
+    symbol = _to_binance_symbol(ticker)
+    return exchange.fetch_order(None, symbol, params={"origClientOrderId": client_order_id})
 
 
 def sell_crypto_for_user(user_id, ticker, quantity):
@@ -671,18 +924,24 @@ def _etoro_headers_for_user(creds):
     }
 
 
-def _etoro_execution_prefix(creds):
-    is_demo = creds["environment"] != "real"
+def _etoro_execution_prefix(user_id, creds):
+    """Real vs demo decided by _etoro_is_live() -- see module docstring
+    SAFETY section -- NOT by creds["environment"] alone, as of task #304."""
+    is_demo = not _etoro_is_live(user_id, creds)
     return "trading/execution/demo" if is_demo else "trading/execution"
 
 
-def _etoro_positions_prefix(creds):
-    is_demo = creds["environment"] != "real"
+def _etoro_positions_prefix(user_id, creds):
+    """Real vs demo decided by _etoro_is_live() -- see module docstring
+    SAFETY section -- NOT by creds["environment"] alone, as of task #304."""
+    is_demo = not _etoro_is_live(user_id, creds)
     return "trading/demo" if is_demo else "trading/real"
 
 
-def _etoro_portfolio_path(creds):
-    is_demo = creds["environment"] != "real"
+def _etoro_portfolio_path(user_id, creds):
+    """Real vs demo decided by _etoro_is_live() -- see module docstring
+    SAFETY section -- NOT by creds["environment"] alone, as of task #304."""
+    is_demo = not _etoro_is_live(user_id, creds)
     return "trading/info/demo/portfolio" if is_demo else "trading/info/portfolio"
 
 
@@ -730,7 +989,18 @@ def _get_etoro_instrument_id_for_user(user_id, creds, ticker):
 def get_etoro_current_price_for_user(user_id, ticker):
     """Current ask price for a ticker, via this user's own eToro
     credentials. Mirrors etoro_broker.get_current_price() -- used below
-    to compute stopLossRate/takeProfitRate for leveraged orders."""
+    to compute stopLossRate/takeProfitRate for leveraged orders.
+
+    FIX 2026-09-10: was timeout=10 -- every other eToro API call in this
+    file (and in etoro_broker.py) was bumped from 10s to 25s back when
+    #51 diagnosed eToro's rates endpoint occasionally taking longer than
+    10s to respond, but this one call was missed. It's what
+    saas_etoro_trailing_engine.py calls to price a new trailing-stop
+    level, so a slow response here was silently skipping that day's
+    ratchet-up instead of erroring loudly -- caught live 2026-09-10 (a
+    single SILVER "Read timed out (read timeout=10)" in the scheduler
+    log). Matched to the same 25s used everywhere else.
+    """
     creds = _require_etoro_creds(user_id)
     instrument_id = _get_etoro_instrument_id_for_user(user_id, creds, ticker)
 
@@ -738,7 +1008,7 @@ def get_etoro_current_price_for_user(user_id, ticker):
         f"{ETORO_API_BASE}/market-data/instruments/rates",
         params={"instrumentIds": instrument_id},
         headers=_etoro_headers_for_user(creds),
-        timeout=10,
+        timeout=25,
     )
     response.raise_for_status()
     rates = response.json().get("rates", [])
@@ -767,7 +1037,7 @@ def _set_etoro_trailing_stop_for_user(user_id, creds, position_id, stop_loss_rat
         payload["takeProfitRate"] = take_profit_rate
 
     response = requests.patch(
-        f"{ETORO_EXECUTION_BASE_V2}/{_etoro_positions_prefix(creds)}/positions/{position_id}",
+        f"{ETORO_EXECUTION_BASE_V2}/{_etoro_positions_prefix(user_id, creds)}/positions/{position_id}",
         headers=_etoro_headers_for_user(creds),
         json=payload,
         timeout=25,
@@ -817,7 +1087,7 @@ def buy_etoro_for_user(user_id, ticker, usd_amount):
         order_payload["takeProfitRate"] = round(current_price * (1 + ETORO_TAKE_PROFIT_PCT), 5)
 
     response = requests.post(
-        f"{ETORO_EXECUTION_BASE_V2}/{_etoro_execution_prefix(creds)}/orders",
+        f"{ETORO_EXECUTION_BASE_V2}/{_etoro_execution_prefix(user_id, creds)}/orders",
         headers=_etoro_headers_for_user(creds),
         json=order_payload,
         timeout=25,
@@ -832,7 +1102,7 @@ def buy_etoro_for_user(user_id, ticker, usd_amount):
     poll_attempts = 15 if is_leveraged_cfd else 5
     for _ in range(poll_attempts):
         portfolio_response = requests.get(
-            f"{ETORO_API_BASE}/{_etoro_portfolio_path(creds)}",
+            f"{ETORO_API_BASE}/{_etoro_portfolio_path(user_id, creds)}",
             headers=_etoro_headers_for_user(creds),
             timeout=25,
         )
@@ -896,7 +1166,7 @@ def sell_etoro_for_user(user_id, position_id):
     creds = _require_etoro_creds(user_id)
 
     portfolio_response = requests.get(
-        f"{ETORO_API_BASE}/{_etoro_portfolio_path(creds)}",
+        f"{ETORO_API_BASE}/{_etoro_portfolio_path(user_id, creds)}",
         headers=_etoro_headers_for_user(creds),
         timeout=25,
     )
@@ -910,7 +1180,7 @@ def sell_etoro_for_user(user_id, position_id):
         raise ValueError(f"No open eToro position found with position_id {position_id}.")
 
     response = requests.post(
-        f"{ETORO_API_BASE}/{_etoro_execution_prefix(creds)}/market-close-orders/positions/{position_id}",
+        f"{ETORO_API_BASE}/{_etoro_execution_prefix(user_id, creds)}/market-close-orders/positions/{position_id}",
         headers=_etoro_headers_for_user(creds),
         json={"instrumentId": position["instrumentID"]},
         timeout=25,
@@ -944,7 +1214,7 @@ def find_etoro_position_by_ticker_for_user(user_id, ticker):
         return None
 
     response = requests.get(
-        f"{ETORO_API_BASE}/{_etoro_portfolio_path(creds)}",
+        f"{ETORO_API_BASE}/{_etoro_portfolio_path(user_id, creds)}",
         headers=_etoro_headers_for_user(creds),
         timeout=25,
     )
@@ -978,7 +1248,7 @@ def get_user_etoro_positions(user_id):
     creds = _require_etoro_creds(user_id)
 
     response = requests.get(
-        f"{ETORO_API_BASE}/{_etoro_portfolio_path(creds)}",
+        f"{ETORO_API_BASE}/{_etoro_portfolio_path(user_id, creds)}",
         headers=_etoro_headers_for_user(creds),
         timeout=25,
     )
@@ -1023,7 +1293,7 @@ def set_etoro_fixed_stop_loss_for_user(user_id, position_id, stop_loss_rate, tak
         payload["takeProfitRate"] = take_profit_rate
 
     response = requests.patch(
-        f"{ETORO_EXECUTION_BASE_V2}/{_etoro_positions_prefix(creds)}/positions/{position_id}",
+        f"{ETORO_EXECUTION_BASE_V2}/{_etoro_positions_prefix(user_id, creds)}/positions/{position_id}",
         headers=_etoro_headers_for_user(creds),
         json=payload,
         timeout=25,
@@ -1066,6 +1336,61 @@ def get_user_open_positions(user_id, broker):
     return []
 
 
+def get_user_open_positions_or_error(user_id, broker):
+    """
+    FIX 2026-09-03 (post-launch-audit #263: "broker fetch failures fail
+    silently in My Positions"): get_user_open_positions() above (and
+    every _get_*_open_positions() helper it dispatches to) deliberately
+    never raises -- on a genuine fetch failure (expired/revoked
+    credentials, the broker's API being down, a network error) it just
+    returns [], the EXACT same shape as "you really do have zero open
+    positions right now". That never-raise contract is correct and
+    load-bearing for this function's other callers -- engines/saas_exit_
+    engine.py's exit-protection sweep (line ~275) and engines/saas_admin_
+    engine.py's aggregate-exposure view both need "one broker's fetch
+    hiccuped" to fail toward an empty list, not crash or skip a whole
+    user -- so get_user_open_positions() itself is deliberately left
+    untouched by this fix.
+
+    But saas_app.py's "My Positions" display is exactly the case where
+    that ambiguity is a real problem: a user whose Alpaca API key just
+    expired would see a blank "No open positions right now" card --
+    indistinguishable from genuinely being flat -- with nothing telling
+    them their broker connection actually needs attention. If they've
+    forgotten they're holding something, that silence is actively
+    misleading, not just unhelpful.
+
+    Returns (positions, error). error is None whenever the result can be
+    trusted: either real positions came back (which only happens if the
+    broker call actually succeeded), or -- for the empty-list case --  an
+    explicit check_user_broker_connection() call confirms the broker
+    really is reachable and genuinely has nothing open. error is a
+    clean, user-safe string (built by check_user_broker_connection() via
+    engines/broker_error_messages.py, same classifier #257/#258 already
+    wired through every checker) only in the one ambiguous case: an
+    empty list AND the broker is not actually reachable right now.
+
+    The connectivity check only runs when the position list came back
+    empty -- not on every call -- so a user who already has positions
+    (the common case) doesn't pay for a second round-trip to the broker
+    on every My Positions render.
+    """
+    positions = get_user_open_positions(user_id, broker)
+    if positions:
+        return positions, None
+
+    check = check_user_broker_connection(user_id, broker)
+    if check.get("connected"):
+        return positions, None  # genuinely zero positions
+    if check.get("status") == "deploying":
+        # MT4/5 first-connect can legitimately take minutes (task #238)
+        # -- not a failure, just not ready yet. Don't alarm the user
+        # over something already expected and already surfaced by the
+        # Broker Connections section above this one.
+        return positions, None
+    return positions, check.get("error") or f"Could not verify your {broker.title()} connection."
+
+
 def _get_mt_bridge_open_positions(user_id):
     """
     Reads straight from MetaApi's own get_positions() -- authoritative
@@ -1076,6 +1401,18 @@ def _get_mt_bridge_open_positions(user_id):
     pnl comes straight from MetaApi's own "profit" field -- unlike eToro,
     MetaApi already computes this correctly account-currency-converted,
     no leverage-ambiguity caveat needed here.
+
+    FIX 2026-09-14 (My Positions "Total Invested" showing $272K instead
+    of real committed capital): "quantity" here is lots (see comment
+    below) -- open_price * lots is not a dollar amount at all, but
+    saas_app.py's render_open_positions() was multiplying them together
+    anyway for its Total Invested summary metric, producing a wildly
+    inflated notional-looking number. The only real USD figure for an
+    MT4/5 position is what mt_broker._compute_lot_size() sized it from
+    at entry time, which saas_decision_engine.py already journals as
+    this order's trade_amount (see that file's buy_mt_for_user() call
+    site) -- pulled here via the same entry_order lookup already needed
+    for stop_loss/take_profit, so no extra query.
     """
     try:
         positions = mt_broker.get_user_mt_positions_sync(user_id)
@@ -1093,6 +1430,10 @@ def _get_mt_bridge_open_positions(user_id):
             if open_price > 0 and current_price:
                 pnl_pct = round((current_price - open_price) / open_price * 100, 2)
 
+            invested_amount = None
+            if entry_order and entry_order.get("trade_amount") is not None:
+                invested_amount = round(float(entry_order["trade_amount"]), 2)
+
             result.append({
                 "ticker": ticker,
                 "quantity": float(p.get("volume") or 0),  # lots, not shares/margin
@@ -1100,6 +1441,7 @@ def _get_mt_bridge_open_positions(user_id):
                 "current_price": current_price,
                 "unrealized_pnl": round(float(p.get("profit") or 0), 2),
                 "unrealized_pnl_pct": pnl_pct,
+                "invested_amount": invested_amount,  # real USD committed at entry, see FIX above
                 "stop_loss": entry_order.get("stop_loss") if entry_order else None,
                 "take_profit": entry_order.get("take_profit") if entry_order else None,
             })
@@ -1180,13 +1522,21 @@ def _get_alpaca_open_positions(user_id):
     for p in positions:
         try:
             entry_order = journal.get_most_recent_filled_buy_for_user(user_id, p.symbol, "ALPACA")
+            qty = float(p.qty)
+            avg_entry = round(float(p.avg_entry_price), 2)
             result.append({
                 "ticker": p.symbol,
-                "quantity": float(p.qty),
-                "entry_price": round(float(p.avg_entry_price), 2),
+                "quantity": qty,
+                "entry_price": avg_entry,
                 "current_price": round(float(p.current_price), 2),
                 "unrealized_pnl": round(float(p.unrealized_pl), 2),
                 "unrealized_pnl_pct": round(float(p.unrealized_plpc) * 100, 2),
+                # Real share count * real entry price -- unlike eToro/MT4-5,
+                # "quantity" here genuinely is shares, so this is a true
+                # cost basis. See _get_etoro_open_positions()'s FIX 2026-09-14
+                # comment for why this field has to be computed differently
+                # per broker rather than uniformly in saas_app.py.
+                "invested_amount": round(qty * avg_entry, 2),
                 "stop_loss": entry_order.get("stop_loss") if entry_order else None,
                 "take_profit": entry_order.get("take_profit") if entry_order else None,
             })
@@ -1239,6 +1589,9 @@ def _get_binance_open_positions(user_id):
                 "current_price": round(current_price, 4),
                 "unrealized_pnl": pnl,
                 "unrealized_pnl_pct": pnl_pct,
+                # Real unit count * real entry price -- same reasoning as
+                # _get_alpaca_open_positions()'s invested_amount above.
+                "invested_amount": round(real_qty * entry_price, 2) if entry_price > 0 else None,
                 "stop_loss": entry_order.get("stop_loss"),
                 "take_profit": entry_order.get("take_profit"),
             })
@@ -1258,6 +1611,20 @@ def _get_etoro_open_positions(user_id):
     charges aren't visible here). unrealized_pnl_pct (simple price change)
     IS shown, since that's honest regardless of leverage. Exact $ P&L for
     eToro should be checked in the eToro app itself.
+
+    FIX 2026-09-14 (My Positions "Total Invested" showing $272K instead
+    of real committed capital): saas_app.py's render_open_positions()
+    was computing its Total Invested summary metric as entry_price *
+    quantity for every broker uniformly. That's correct for Alpaca/
+    Binance (real share/unit counts) but wrong here, since -- per the
+    paragraph above -- "quantity" for eToro already IS the dollar
+    amount invested (find_etoro_position_by_ticker_for_user() maps it
+    straight from eToro's own "amount" field). Multiplying it by
+    entry_price again turned a real ~$1-2K margin position into a
+    leveraged-notional-looking six-figure number. Exposing it here as
+    its own invested_amount field (equal to quantity, not re-derived)
+    lets saas_app.py sum the right thing without needing to know this
+    broker-specific quirk itself.
     """
     try:
         tickers = journal.list_open_tickers_for_user(user_id, "ETORO")
@@ -1290,6 +1657,7 @@ def _get_etoro_open_positions(user_id):
                 "current_price": round(current_price, 5) if current_price else None,
                 "unrealized_pnl": None,
                 "unrealized_pnl_pct": pnl_pct,
+                "invested_amount": round(amount, 2) if amount else None,  # see FIX above -- amount IS the dollar figure
                 "stop_loss": entry_order.get("stop_loss") if entry_order else None,
                 "take_profit": entry_order.get("take_profit") if entry_order else None,
             })

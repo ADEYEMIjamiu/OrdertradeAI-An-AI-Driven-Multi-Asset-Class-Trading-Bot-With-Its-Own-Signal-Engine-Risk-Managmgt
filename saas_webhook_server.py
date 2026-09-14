@@ -28,13 +28,16 @@ docstring for why.
 """
 
 import os
+import time
 
+import requests
 import stripe
 from dotenv import load_dotenv
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
+import telegram_notifier
 from engines import tenant_engine as tenant
 
 # Loaded explicitly here (not just relied on transitively via
@@ -122,5 +125,111 @@ async def stripe_webhook(request):
     return PlainTextResponse("ok")
 
 
-routes = [Route("/webhooks/stripe", stripe_webhook, methods=["POST"])]
+# FEATURE 2026-09-14: personal-use visit notifications for
+# ordertradeai.com, requested so the owner can see (in the same
+# Telegram chat that already gets trade-fill alerts) when someone
+# actually visits the site and roughly where from -- a simple pulse
+# check on traffic/growth without needing to log into Google Analytics.
+#
+# Deliberately fires from landing/index.html's loadGA() rather than
+# unconditionally on every page load -- that function only ever runs
+# after a visitor grants cookie consent (see that file's own comments),
+# so this stays behind the exact same gate the site's cookie banner
+# already promises visitors ("we use Google Analytics... only after
+# you accept"). Sending a location-derived Telegram alert for every
+# visitor regardless of consent would go further than what's disclosed
+# there. If the consent gate is ever relaxed, this should move with it.
+#
+# In-memory-only debounce and dedup -- no database table for this,
+# since it's a personal notification, not billing/auth data that must
+# survive a restart. Losing state on a service restart just means a
+# possible one-off duplicate ping, not anything that matters.
+_last_notified_by_ip = {}
+_VISIT_DEBOUNCE_SECONDS = 30 * 60
+
+# Common crawler/monitoring substrings -- not exhaustive, just enough
+# to filter the noisiest, most common bots out of a personal traffic
+# pulse-check so it stays meaningful rather than mostly search-engine
+# indexing hits.
+_BOT_USER_AGENT_SUBSTRINGS = (
+    "bot", "spider", "crawl", "slurp", "curl", "wget", "python-requests",
+    "facebookexternalhit", "pingdom", "uptimerobot", "headlesschrome",
+)
+
+
+def _client_ip(request):
+    # nginx's /track/visit location explicitly sets X-Forwarded-For to
+    # $remote_addr (see deploy/nginx-ordertradeai-com.conf) since none
+    # of this app's other routes needed the real visitor IP before now
+    # -- request.client.host alone would just be nginx's own loopback
+    # address (127.0.0.1), not the actual visitor.
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _geolocate(ip):
+    """
+    Best-effort city/country/region lookup via ip-api.com's free tier
+    (no API key, ~45 requests/minute -- comfortably enough for a
+    personal-traffic notification, not a high-volume analytics
+    pipeline). Returns None on any failure or for private/local IPs
+    (ip-api.com itself reports "status": "fail" for those, e.g. testing
+    against 127.0.0.1) rather than raising -- a broken or slow
+    geolocation lookup must never be the reason a visitor's own request
+    to the site hangs or errors.
+    """
+    try:
+        response = requests.get(
+            f"http://ip-api.com/json/{ip}",
+            params={"fields": "status,country,regionName,city,query"},
+            timeout=3,
+        )
+        data = response.json()
+        if data.get("status") != "success":
+            return None
+        city = data.get("city") or ""
+        region = data.get("regionName") or ""
+        country = data.get("country") or ""
+        parts = [p for p in (city, region, country) if p]
+        return ", ".join(parts) if parts else None
+    except Exception:
+        return None
+
+
+async def track_visit(request):
+    ip = _client_ip(request)
+    user_agent = request.headers.get("user-agent", "").lower()
+
+    if any(marker in user_agent for marker in _BOT_USER_AGENT_SUBSTRINGS):
+        return PlainTextResponse("ok")
+
+    now = time.monotonic()
+    last = _last_notified_by_ip.get(ip)
+    if last is not None and (now - last) < _VISIT_DEBOUNCE_SECONDS:
+        return PlainTextResponse("ok")
+    _last_notified_by_ip[ip] = now
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    page = str(body.get("page") or "/")[:200]  # cap length -- client-supplied
+
+    location = _geolocate(ip)
+    location_text = location or f"unknown location ({ip})"
+
+    telegram_notifier.send_telegram_message(
+        f"\U0001F440 Site visit: {page}\n"
+        f"From: {location_text}"
+    )
+
+    return PlainTextResponse("ok")
+
+
+routes = [
+    Route("/webhooks/stripe", stripe_webhook, methods=["POST"]),
+    Route("/track/visit", track_visit, methods=["POST"]),
+]
 app = Starlette(routes=routes)

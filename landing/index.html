@@ -23,7 +23,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>OrderTrade AI: AI trade signals for your own broker accounts</title>
-<meta name="description" content="Connect your own Alpaca, Binance or eToro account. OrderTrade AI scores signals across stocks, crypto, forex and commodities, then shows you exactly what it would trade before anything executes." />
+<meta name="description" content="Connect your own Alpaca, Binance, eToro or MT4/5 account. OrderTrade AI scores signals across stocks, crypto, forex and commodities, then shows you exactly what it would trade before anything executes." />
 <link rel="canonical" href="https://ordertradeai.com/" />
 
 <!-- Favicon -- SVG first (crisp at any size, modern browsers), PNG/
@@ -43,13 +43,13 @@
 <meta property="og:url" content="https://ordertradeai.com/" />
 <meta property="og:site_name" content="OrderTrade AI" />
 <meta property="og:title" content="OrderTrade AI: AI trade signals for your own broker accounts" />
-<meta property="og:description" content="Connect your own Alpaca, Binance or eToro account. OrderTrade AI scores signals across stocks, crypto, forex and commodities, then shows you exactly what it would trade before anything executes." />
+<meta property="og:description" content="Connect your own Alpaca, Binance, eToro or MT4/5 account. OrderTrade AI scores signals across stocks, crypto, forex and commodities, then shows you exactly what it would trade before anything executes." />
 <meta property="og:image" content="https://ordertradeai.com/og-image.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="OrderTrade AI: AI trade signals for your own broker accounts" />
-<meta name="twitter:description" content="Connect your own Alpaca, Binance or eToro account. Preview every signal before anything executes." />
+<meta name="twitter:description" content="Connect your own Alpaca, Binance, eToro or MT4/5 account. Preview every signal before anything executes." />
 <meta name="twitter:image" content="https://ordertradeai.com/og-image.png" />
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -66,7 +66,7 @@
   "name": "OrderTrade AI",
   "applicationCategory": "FinanceApplication",
   "operatingSystem": "Web",
-  "description": "Connect your own Alpaca, Binance or eToro account. OrderTrade AI scores signals across stocks, crypto, forex and commodities, then shows you exactly what it would trade before anything executes.",
+  "description": "Connect your own Alpaca, Binance, eToro or MT4/5 account. OrderTrade AI scores signals across stocks, crypto, forex and commodities, then shows you exactly what it would trade before anything executes.",
   "url": "https://ordertradeai.com/",
   "offers": {
     "@type": "Offer",
@@ -138,6 +138,12 @@
   .nav-actions{display:flex; align-items:center; gap:22px;}
   .nav-signin{font-size:14px; color:var(--text-dim); text-decoration:none; white-space:nowrap;}
   .nav-signin:hover{color:var(--text);}
+  .ota-lang-select{
+    background:var(--bg-raised); color:var(--text-dim); border:1px solid var(--border);
+    border-radius:var(--radius-sm); font-family:"IBM Plex Sans"; font-size:13px;
+    padding:5px 6px; cursor:pointer;
+  }
+  .ota-lang-select:hover{color:var(--text); border-color:var(--accent-dim);}
   /* Fixed at 375px wide: "OrderTrade AI" + "Sign in" + "Start free
      trial" don't all fit on one 64px-tall row without help. nav-signin
      was missing white-space:nowrap above, so "Sign in" wrapped onto a
@@ -149,6 +155,7 @@
     .nav-actions{gap:12px;}
     .brand{font-size:13px;}
     .btn-primary{padding:9px 14px; font-size:13px;}
+    .ota-lang-select{font-size:12px; padding:4px 3px;}
   }
   .btn{
     display:inline-flex; align-items:center; justify-content:center;
@@ -168,10 +175,22 @@
     display:inline-block; font-family:"IBM Plex Mono"; font-size:12.5px;
     color:var(--text-dim); border:1px solid var(--border); border-radius:var(--radius-sm);
     padding:5px 10px; margin-bottom:22px;
+    overflow:hidden; white-space:nowrap; width:320px; max-width:80vw; vertical-align:middle;
+  }
+  .eyebrow-track{
+    display:inline-block;
+    animation:eyebrow-scroll 12s linear infinite;
+  }
+  @keyframes eyebrow-scroll{
+    0%{ transform:translateX(100%); }
+    100%{ transform:translateX(-100%); }
+  }
+  @media (prefers-reduced-motion: reduce){
+    .eyebrow-track{ animation:none; }
   }
   h1{
     font-size:clamp(34px, 5vw, 54px); line-height:1.1; letter-spacing:-0.02em;
-    font-weight:700; margin:0 0 20px; max-width:640px;
+    font-weight:700; margin:0 0 20px; max-width:820px;
   }
   .hero p.sub{
     font-size:18px; color:var(--text-dim); max-width:52ch; line-height:1.55; margin:0 0 30px;
@@ -222,6 +241,121 @@
   .step-num{font-family:"IBM Plex Mono"; font-size:13px; color:var(--text-faint); padding-top:3px;}
   .step h3{font-size:18px; margin:0 0 8px; font-weight:600;}
   .step p{color:var(--text-dim); font-size:15px; line-height:1.6; margin:0; max-width:62ch;}
+
+  /* ---------- Broker-connect animated demo ---------- */
+  .bd-wrap{margin-top:38px; padding-top:32px; border-top:1px solid var(--border-soft);}
+  .bd-caption{font-size:11.5px; color:var(--text-faint); letter-spacing:0.08em; margin-bottom:14px;}
+  .bd-panel{
+    position:relative; max-width:420px; background:var(--bg-alt);
+    border:1px solid var(--border); border-radius:var(--radius); overflow:hidden;
+  }
+  .bd-head{
+    display:flex; align-items:center; gap:10px; padding:14px 16px;
+    font-size:14px; color:var(--text); cursor:default; user-select:none;
+    border-bottom:1px solid transparent;
+  }
+  .bd-panel.open .bd-head{border-bottom-color:var(--border-soft);}
+  .bd-caret{display:inline-block; font-size:11px; color:var(--text-faint); transition:transform .3s ease;}
+  .bd-panel.open .bd-caret{transform:rotate(90deg);}
+  .bd-head-label{flex:1;}
+  .bd-head-status{font-family:"IBM Plex Mono"; font-size:11.5px; color:var(--text-faint);}
+  .bd-panel.connected .bd-head-status{color:var(--green);}
+  .bd-body{
+    max-height:0; overflow:hidden; padding:0 16px;
+    transition:max-height .4s ease, padding .4s ease;
+  }
+  .bd-panel.open .bd-body{max-height:280px; padding:14px 16px 18px;}
+  .bd-label{display:block; font-size:12.5px; color:var(--text-dim); margin:0 0 6px;}
+  .bd-input{
+    height:34px; border:1px solid var(--border); border-radius:var(--radius-sm);
+    background:var(--bg); margin-bottom:14px; padding:0 10px;
+    display:flex; align-items:center; font-family:"IBM Plex Mono"; font-size:13px;
+    color:var(--text); letter-spacing:1px; transition:border-color .2s ease;
+  }
+  .bd-input.focused{border-color:var(--accent);}
+  .bd-save-btn{
+    height:34px; padding:0 18px; background:var(--accent); color:#04141c;
+    border:none; border-radius:var(--radius-sm); font-family:"IBM Plex Sans";
+    font-size:13.5px; font-weight:600; cursor:default; transition:transform .12s ease, opacity .12s ease;
+  }
+  .bd-save-btn.pressed{transform:scale(0.96); opacity:0.85;}
+  .bd-spinner, .bd-success{
+    display:none; margin-top:12px; font-size:13px; font-family:"IBM Plex Mono";
+  }
+  .bd-spinner{color:var(--text-dim);}
+  .bd-spinner.show{display:block;}
+  .bd-success{color:var(--green);}
+  .bd-success.show{display:block;}
+  .bd-cursor{
+    position:absolute; width:14px; height:14px; opacity:0; pointer-events:none;
+    transition:left .55s cubic-bezier(.4,0,.2,1), top .55s cubic-bezier(.4,0,.2,1), opacity .25s ease;
+    z-index:5;
+  }
+  .bd-cursor::before{
+    content:""; position:absolute; inset:0;
+    background:var(--text);
+    clip-path:polygon(0 0, 0 70%, 25% 55%, 42% 100%, 55% 92%, 38% 52%, 70% 50%);
+  }
+  .bd-cursor.visible{opacity:1;}
+  .bd-cursor.click::after{
+    content:""; position:absolute; top:-6px; left:-6px; width:26px; height:26px;
+    border:2px solid var(--accent); border-radius:50%;
+    animation:bd-ripple .45s ease-out;
+  }
+  @keyframes bd-ripple{
+    0%{transform:scale(0.3); opacity:0.9;}
+    100%{transform:scale(1.4); opacity:0;}
+  }
+
+  /* ---------- Asset-pick + preview + execute animated demo ---------- */
+  .td-panel{
+    position:relative; max-width:460px; background:var(--bg-alt);
+    border:1px solid var(--border); border-radius:var(--radius); overflow:hidden;
+    padding:18px 18px 20px;
+  }
+  .td-section{margin-bottom:18px;}
+  .td-section:last-child{margin-bottom:0;}
+  .td-chips{display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 14px;}
+  .td-chip{
+    height:30px; padding:0 14px; border:1px solid var(--border); border-radius:16px;
+    background:var(--bg); color:var(--text-dim); font-family:"IBM Plex Sans"; font-size:13px;
+    cursor:default; transition:background .2s ease, border-color .2s ease, color .2s ease;
+  }
+  .td-chip.active{background:var(--accent-dim); border-color:var(--accent); color:var(--text);}
+  .td-results{max-height:0; overflow:hidden; transition:max-height .4s ease; margin-top:4px;}
+  .td-results.show{max-height:160px;}
+  .td-result-row{
+    display:grid; grid-template-columns:64px 1fr 50px 44px 28px; align-items:center; gap:8px;
+    font-family:"IBM Plex Mono"; font-size:12.5px; color:var(--text); padding:7px 0;
+    border-top:1px solid var(--border-soft); opacity:0; transform:translateY(4px);
+    transition:opacity .35s ease, transform .35s ease;
+  }
+  .td-result-row:first-child{border-top:none;}
+  .td-result-row.show{opacity:1; transform:translateY(0);}
+  .td-asset{color:var(--text-dim); font-family:"IBM Plex Sans"; font-size:12px;}
+  .td-signal.up{color:var(--green);}
+  .td-conf{color:var(--text-dim);}
+  .td-warn{
+    display:none; margin:12px 0; font-size:12.5px; color:var(--text-dim);
+    background:var(--bg); border:1px solid var(--border-soft); border-radius:var(--radius-sm);
+    padding:10px 12px;
+  }
+  .td-warn.show{display:block;}
+  .td-confirm-row{
+    display:flex; align-items:center; gap:10px; margin:0 0 14px; font-size:12.5px; color:var(--text-dim);
+    opacity:0; max-height:0; overflow:hidden; transition:opacity .3s ease;
+  }
+  .td-confirm-row.show{opacity:1; max-height:40px;}
+  .td-checkbox{
+    width:16px; height:16px; border:1px solid var(--border); border-radius:3px; flex-shrink:0;
+    position:relative; transition:border-color .2s ease, background .2s ease;
+  }
+  .td-checkbox.checked{background:var(--accent); border-color:var(--accent);}
+  .td-checkbox.checked::after{
+    content:""; position:absolute; left:4px; top:1px; width:5px; height:9px;
+    border-right:2px solid #04141c; border-bottom:2px solid #04141c; transform:rotate(40deg);
+  }
+  .bd-save-btn.disabled{opacity:0.4;}
 
   /* ---------- Asset class grid: 1 + 3 asymmetric ---------- */
   .asset-grid{display:grid; grid-template-columns:1.3fr 1fr 1fr 1fr; gap:1px; background:var(--border-soft); border:1px solid var(--border-soft);}
@@ -328,20 +462,34 @@
   <div class="nav-inner">
     <div class="brand"><span class="brand-mark">OT</span>OrderTrade AI</div>
     <div class="nav-actions">
-      <a class="nav-signin" href="/app" onclick="window.otaTrack && otaTrack('sign_in_click')">Sign in</a>
-      <a class="btn btn-primary" href="/app" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
+      <select id="ota-lang-select" class="ota-lang-select" aria-label="Language" onchange="window.otaSetLanguage && otaSetLanguage(this.value)">
+        <option value="en">English</option>
+        <option value="es">Español</option>
+        <option value="pt">Português</option>
+        <option value="fr">Français</option>
+        <option value="de">Deutsch</option>
+        <option value="zh">中文</option>
+        <option value="id">Bahasa Indonesia</option>
+        <option value="ms">Bahasa Melayu</option>
+        <option value="zh-TW">繁體中文</option>
+        <option value="th">ไทย</option>
+        <option value="ja">日本語</option>
+        <option value="ko">한국어</option>
+      </select>
+      <a class="nav-signin" href="/app" data-i18n="nav.sign_in" onclick="window.otaTrack && otaTrack('sign_in_click')">Sign in</a>
+      <a class="btn btn-primary" href="/app" data-i18n="nav.start_trial" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
     </div>
   </div>
 </header>
 
 <section class="hero">
   <div class="wrap">
-    <span class="eyebrow">Paper and demo trading only during early access</span>
-    <h1>AI signals for the broker account you already have.</h1>
-    <p class="sub">Connect your own Alpaca, Binance or eToro account. Preview every signal before anything executes, then place the trade yourself.</p>
+    <span class="eyebrow"><span class="eyebrow-track" data-i18n="hero.eyebrow">Demo trading by default. Go live when you're ready.</span></span>
+    <h1 data-i18n="hero.h1">AI signals for the broker account you already have.</h1>
+    <p class="sub" data-i18n="hero.sub">Connect your own Alpaca, Binance, eToro or MT4/5 account. Preview every signal before anything executes, then place the trade yourself.</p>
     <div class="hero-ctas">
-      <a class="btn btn-primary btn-lg" href="/app" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
-      <a class="btn btn-ghost btn-lg" href="/app" onclick="window.otaTrack && otaTrack('sign_in_click')">Sign in</a>
+      <a class="btn btn-primary btn-lg" href="/app" data-i18n="nav.start_trial" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
+      <a class="btn btn-ghost btn-lg" href="/app" data-i18n="nav.sign_in" onclick="window.otaTrack && otaTrack('sign_in_click')">Sign in</a>
     </div>
   </div>
 </section>
@@ -349,29 +497,29 @@
 <section class="preview">
   <div class="wrap">
     <div class="preview-head">
-      <h2>AI Decision Engine, illustrative preview</h2>
-      <span class="preview-note">Actual signals depend on live market data and your connected brokers.</span>
+      <h2 data-i18n="preview.title">AI Decision Engine, illustrative preview</h2>
+      <span class="preview-note" data-i18n="preview.note">Actual signals depend on live market data and your connected brokers.</span>
     </div>
     <div class="panel">
       <table class="signals">
         <thead>
-          <tr><th>Ticker</th><th>Asset class</th><th>Signal</th><th>Confidence</th><th>Risk / reward</th><th>Grade</th></tr>
+          <tr><th data-i18n="preview.col_ticker">Ticker</th><th data-i18n="preview.col_asset_class">Asset class</th><th data-i18n="preview.col_signal">Signal</th><th data-i18n="preview.col_confidence">Confidence</th><th data-i18n="preview.col_risk_reward">Risk / reward</th><th data-i18n="preview.col_grade">Grade</th></tr>
         </thead>
         <tbody>
           <tr>
-            <td>NVDA</td><td>US stocks</td><td class="up">Buy</td><td>82%</td><td>1 : 2.4</td>
+            <td>NVDA</td><td data-i18n="preview.asset_us_stocks">US stocks</td><td class="up" data-i18n="preview.signal_buy">Buy</td><td>82%</td><td>1 : 2.4</td>
             <td><span class="grade grade-a">A</span></td>
           </tr>
           <tr>
-            <td>SOL-USD</td><td>Crypto</td><td class="up">Buy</td><td>71%</td><td>1 : 1.8</td>
+            <td>SOL-USD</td><td data-i18n="preview.asset_crypto">Crypto</td><td class="up" data-i18n="preview.signal_buy">Buy</td><td>71%</td><td>1 : 1.8</td>
             <td><span class="grade grade-b">B</span></td>
           </tr>
           <tr>
-            <td>EUR/USD</td><td>Forex</td><td class="down">Wait</td><td>54%</td><td>1 : 1.1</td>
+            <td>EUR/USD</td><td data-i18n="preview.asset_forex">Forex</td><td class="down" data-i18n="preview.signal_wait">Wait</td><td>54%</td><td>1 : 1.1</td>
             <td><span class="grade grade-c">C</span></td>
           </tr>
           <tr>
-            <td>XAU/USD</td><td>Commodities</td><td class="up">Buy</td><td>76%</td><td>1 : 2.1</td>
+            <td>XAU/USD</td><td data-i18n="preview.asset_commodities">Commodities</td><td class="up" data-i18n="preview.signal_buy">Buy</td><td>76%</td><td>1 : 2.1</td>
             <td><span class="grade grade-a">A</span></td>
           </tr>
         </tbody>
@@ -382,58 +530,92 @@
 
 <section>
   <div class="wrap">
-    <h2 class="section-title">How it works</h2>
-    <p class="section-sub">Three steps between connecting an account and reviewing your first signal.</p>
+    <h2 class="section-title" data-i18n="how.title">How it works</h2>
+    <p class="section-sub" data-i18n="how.sub">Three steps between connecting an account and reviewing your first signal.</p>
     <div class="steps">
       <div class="step">
         <div class="step-num mono">01</div>
         <div>
-          <h3>Connect your own broker</h3>
-          <p>Link Alpaca, Binance or eToro with your own API keys. They are encrypted at rest and only ever decrypted to act on your own account. OrderTrade AI never pools or holds anyone's funds.</p>
+          <h3 data-i18n="how.step1_h">Connect your own broker</h3>
+          <p data-i18n="how.step1_p">Link Alpaca, Binance, eToro or MT4/5 with your own API keys. They are encrypted at rest and only ever decrypted to act on your own account. OrderTrade AI never pools or holds anyone's funds.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-num mono">02</div>
         <div>
-          <h3>The AI scores opportunities</h3>
-          <p>The signal engine reads market data across your enabled asset classes and produces a graded, ranked list, sized against your real connected-account balance.</p>
+          <h3 data-i18n="how.step2_h">The AI scores opportunities</h3>
+          <p data-i18n="how.step2_p">The signal engine reads market data across your enabled asset classes and produces a graded, ranked list, sized against your real connected-account balance.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-num mono">03</div>
         <div>
-          <h3>You review, then execute</h3>
-          <p>Preview shows exactly what would be bought and why. Nothing is placed until you check the confirmation box and click Execute yourself.</p>
+          <h3 data-i18n="how.step3_h">You review, then execute</h3>
+          <p data-i18n="how.step3_p">Preview shows exactly what would be bought and why. Nothing is placed until you check the confirmation box and click Execute yourself.</p>
         </div>
       </div>
     </div>
-  </div>
-</section>
 
-<section>
-  <div class="wrap">
-    <h2 class="section-title">One dashboard, four asset classes</h2>
-    <p class="section-sub">Each asset class runs through the same signal engine, with its own position caps and broker connection.</p>
-    <div class="asset-grid">
-      <div class="asset-card">
-        <div class="tag">Stocks</div>
-        <h3>US equities via Alpaca</h3>
-        <p>Paper trading account. Full order history and stop-loss, take-profit and trailing-exit coverage.</p>
+    <div class="bd-wrap">
+      <div class="bd-caption mono" data-i18n="how.demo_caption">LIVE PREVIEW: CONNECTING A BROKER</div>
+      <div class="bd-panel" id="otaBrokerDemo">
+        <div class="bd-head" id="bdHead">
+          <span class="bd-caret" id="bdCaret">&#9656;</span>
+          <span class="bd-head-label" data-i18n="how.demo_broker_label">Alpaca (US Stocks, Paper)</span>
+          <span class="bd-head-status" id="bdHeadStatus" data-i18n="how.demo_not_connected">Not connected</span>
+        </div>
+        <div class="bd-body" id="bdBody">
+          <label class="bd-label" data-i18n="how.demo_key_label">API Key</label>
+          <div class="bd-input" id="bdKeyInput"></div>
+          <label class="bd-label" data-i18n="how.demo_secret_label">API Secret</label>
+          <div class="bd-input" id="bdSecretInput"></div>
+          <button class="bd-save-btn" id="bdSaveBtn" type="button" data-i18n="how.demo_save">Save</button>
+          <div class="bd-spinner" id="bdSpinner" data-i18n="how.demo_verifying">Verifying Alpaca connection...</div>
+          <div class="bd-success" id="bdSuccess" data-i18n="how.demo_success">Alpaca (US Stocks, Paper) connected.</div>
+        </div>
+        <div class="bd-cursor" id="bdCursor"></div>
       </div>
-      <div class="asset-card">
-        <div class="tag">Crypto</div>
-        <h3>Binance testnet</h3>
-        <p>Wallet-balance-based position sizing, not just this dashboard's own trade log.</p>
-      </div>
-      <div class="asset-card">
-        <div class="tag">Forex</div>
-        <h3>eToro demo</h3>
-        <p>Leverage and stop-loss rate handled per broker rules for currency pairs.</p>
-      </div>
-      <div class="asset-card">
-        <div class="tag">Commodities</div>
-        <h3>eToro demo</h3>
-        <p>Gold, oil and other CFD instruments alongside your forex positions.</p>
+    </div>
+
+    <div class="bd-wrap">
+      <div class="bd-caption mono" data-i18n="how.demo2_caption">LIVE PREVIEW: PICK ASSETS, PREVIEW, AND EXECUTE</div>
+      <div class="td-panel" id="otaTradeDemo">
+        <div class="td-section">
+          <label class="bd-label" data-i18n="how.demo2_assets_label">Which markets do you want signals for?</label>
+          <div class="td-chips">
+            <button class="td-chip" id="tdChipStocks" type="button" data-i18n="how.demo2_chip_stocks">US Stocks</button>
+            <button class="td-chip" id="tdChipCrypto" type="button" data-i18n="how.demo2_chip_crypto">Crypto</button>
+            <button class="td-chip" id="tdChipForex" type="button" data-i18n="how.demo2_chip_forex">Forex</button>
+            <button class="td-chip" id="tdChipCommodities" type="button" data-i18n="how.demo2_chip_commodities">Commodities</button>
+          </div>
+          <button class="bd-save-btn" id="tdSaveBtn" type="button" data-i18n="how.demo2_save">Save settings</button>
+          <div class="bd-success" id="tdSavedMsg" data-i18n="how.demo2_saved">Settings saved.</div>
+        </div>
+        <div class="td-section">
+          <button class="bd-save-btn" id="tdPreviewBtn" type="button" data-i18n="how.demo2_preview_button">Preview AI</button>
+          <div class="bd-spinner" id="tdScanSpinner" data-i18n="how.demo2_scanning">Scanning market data...</div>
+          <div class="td-results" id="tdResults">
+            <div class="td-result-row" id="tdRow1">
+              <span class="td-ticker">NVDA</span><span class="td-asset" data-i18n="preview.asset_us_stocks">US stocks</span>
+              <span class="td-signal up" data-i18n="preview.signal_buy">Buy</span><span class="td-conf">82%</span>
+              <span class="grade grade-a">A</span>
+            </div>
+            <div class="td-result-row" id="tdRow2">
+              <span class="td-ticker">SOL-USD</span><span class="td-asset" data-i18n="preview.asset_crypto">Crypto</span>
+              <span class="td-signal up" data-i18n="preview.signal_buy">Buy</span><span class="td-conf">71%</span>
+              <span class="grade grade-b">B</span>
+            </div>
+          </div>
+          <div class="td-warn" id="tdWarn" data-i18n="how.demo2_warn">2 trades ready. Nothing executes until you confirm.</div>
+          <div class="td-confirm-row" id="tdConfirmRow">
+            <span class="td-checkbox" id="tdCheckbox"></span>
+            <span data-i18n="how.demo2_confirm_label">I understand and want to place these trades</span>
+          </div>
+          <button class="bd-save-btn disabled" id="tdExecuteBtn" type="button" data-i18n="how.demo2_execute_button">Execute</button>
+          <div class="bd-spinner" id="tdPlacingSpinner" data-i18n="how.demo2_placing">Placing orders...</div>
+          <div class="bd-success" id="tdExecutedMsg" data-i18n="how.demo2_executed">2 orders placed on your connected accounts.</div>
+        </div>
+        <div class="bd-cursor" id="tdCursor"></div>
       </div>
     </div>
   </div>
@@ -441,28 +623,57 @@
 
 <section>
   <div class="wrap">
-    <h2 class="section-title">Risk management runs in the background</h2>
-    <p class="section-sub">Protection that applies once a position is open, not just at entry.</p>
+    <h2 class="section-title" data-i18n="assets.title" style="max-width:none;">One dashboard, four asset classes</h2>
+    <p class="section-sub" data-i18n="assets.sub" style="max-width:none;">Each asset class runs through the same signal engine, with its own position caps and broker connection.</p>
+    <div class="asset-grid">
+      <div class="asset-card">
+        <div class="tag" data-i18n="assets.stocks_tag">Stocks</div>
+        <h3 data-i18n="assets.stocks_h">US equities via Alpaca</h3>
+        <p data-i18n="assets.stocks_p">Paper trading account. Full order history and stop-loss, take-profit and trailing-exit coverage.</p>
+      </div>
+      <div class="asset-card">
+        <div class="tag" data-i18n="assets.crypto_tag">Crypto</div>
+        <h3 data-i18n="assets.crypto_h">Binance testnet</h3>
+        <p data-i18n="assets.crypto_p">Wallet-balance-based position sizing, not just this dashboard's own trade log.</p>
+      </div>
+      <div class="asset-card">
+        <div class="tag" data-i18n="assets.forex_tag">Forex</div>
+        <h3 data-i18n="assets.forex_h">eToro demo, MT4/5</h3>
+        <p data-i18n="assets.forex_p">Leverage and stop-loss rate handled per broker rules for currency pairs.</p>
+      </div>
+      <div class="asset-card">
+        <div class="tag" data-i18n="assets.commodities_tag">Commodities</div>
+        <h3 data-i18n="assets.commodities_h">eToro demo, MT4/5</h3>
+        <p data-i18n="assets.commodities_p">Gold, oil and other CFD instruments alongside your forex positions.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2 class="section-title" data-i18n="risk.title" style="max-width:390px;">Risk management runs in the background</h2>
+    <p class="section-sub" data-i18n="risk.sub">Protection that applies once a position is open, not just at entry.</p>
     <div class="risk-list">
       <div class="risk-row">
-        <h4>Stop-loss and take-profit</h4>
-        <p>Set from real price structure at trade time, not a fixed percentage guess.</p>
+        <h4 data-i18n="risk.row1_h">Stop-loss and take-profit</h4>
+        <p data-i18n="risk.row1_p">Set from real price structure at trade time, not a fixed percentage guess.</p>
       </div>
       <div class="risk-row">
-        <h4>Trailing-profit lock and break-even ratchet</h4>
-        <p>Gives back less of an open gain as a position moves in your favor, with partial profit-taking along the way.</p>
+        <h4 data-i18n="risk.row2_h">Trailing-profit lock and break-even ratchet</h4>
+        <p data-i18n="risk.row2_p">Gives back less of an open gain as a position moves in your favor, with partial profit-taking along the way.</p>
       </div>
       <div class="risk-row">
-        <h4>Hard time-based exit</h4>
-        <p>Positions held past a set number of days are closed regardless of current profit or loss.</p>
+        <h4 data-i18n="risk.row3_h">Hard time-based exit</h4>
+        <p data-i18n="risk.row3_p">Positions held past a set number of days are closed regardless of current profit or loss.</p>
       </div>
       <div class="risk-row">
-        <h4>Portfolio-level exposure cap</h4>
-        <p>A ceiling on how much of your account can be at risk at once, checked before every new trade.</p>
+        <h4 data-i18n="risk.row4_h">Portfolio-level exposure cap</h4>
+        <p data-i18n="risk.row4_p">A ceiling on how much of your account can be at risk at once, checked before every new trade.</p>
       </div>
       <div class="risk-row">
-        <h4>Kill switch</h4>
-        <p>One control stops all automated activity across every connected broker immediately.</p>
+        <h4 data-i18n="risk.row5_h">Kill switch</h4>
+        <p data-i18n="risk.row5_p">One control stops all automated activity across every connected broker immediately.</p>
       </div>
     </div>
   </div>
@@ -471,21 +682,21 @@
 <section class="custody">
   <div class="wrap custody-inner">
     <div>
-      <h2 class="section-title">Your money stays in your own broker account</h2>
-      <p class="section-sub" style="margin-bottom:0;">OrderTrade AI is a signal and execution layer, not a custodian.</p>
+      <h2 class="section-title" data-i18n="custody.title">Your money stays in your own broker account</h2>
+      <p class="section-sub" style="margin-bottom:0;" data-i18n="custody.sub">OrderTrade AI is a signal and execution layer, not a custodian.</p>
     </div>
     <div class="custody-points">
       <div>
-        <strong>We never hold or pool funds</strong>
-        <p>Every trade is placed directly on your own Alpaca, Binance or eToro account using your own API keys.</p>
+        <strong data-i18n="custody.point1_h">We never hold or pool funds</strong>
+        <p data-i18n="custody.point1_p">Every trade is placed directly on your own Alpaca, Binance, eToro or MT4/5 account using your own API keys.</p>
       </div>
       <div>
-        <strong>Paper and demo only, for now</strong>
-        <p>Early access runs exclusively on paper and demo broker environments. There is no control anywhere in the product to switch this on for live trading.</p>
+        <strong data-i18n="custody.point2_h">Demo first, live when you're ready</strong>
+        <p data-i18n="custody.point2_p">Every account starts in paper/demo mode with no real money at risk. When you're ready, you can opt in to live trading for any connected broker through a dedicated confirmation flow in your account settings.</p>
       </div>
       <div>
-        <strong>Encrypted credential storage</strong>
-        <p>Broker API keys are encrypted at rest and decrypted only at the moment a request is made on your own account.</p>
+        <strong data-i18n="custody.point3_h">Encrypted credential storage</strong>
+        <p data-i18n="custody.point3_p">Broker API keys are encrypted at rest and decrypted only at the moment a request is made on your own account.</p>
       </div>
     </div>
   </div>
@@ -494,23 +705,23 @@
 <section id="pricing">
   <div class="wrap">
     <div style="text-align:center; margin-bottom:44px;">
-      <h2 class="section-title" style="margin-left:auto; margin-right:auto;">Pricing</h2>
-      <p class="section-sub" style="margin-left:auto; margin-right:auto;">One plan. Every asset class and every risk-management feature included.</p>
+      <h2 class="section-title" style="margin-left:auto; margin-right:auto;" data-i18n="pricing.title">Pricing</h2>
+      <p class="section-sub" style="margin-left:auto; margin-right:auto;" data-i18n="pricing.sub">One plan. Every asset class and every risk-management feature included.</p>
     </div>
     <div class="pricing-wrap">
       <div class="price-card">
         <div class="plan-name">OrderTrade AI</div>
-        <div class="price-amount"><span class="num mono">$39</span><span class="per">/ month</span></div>
-        <p class="trial-note">7 day free trial, cancel anytime before it ends and you will not be charged.</p>
+        <div class="price-amount"><span class="num mono">$39</span><span class="per" data-i18n="pricing.per_month">/ month</span></div>
+        <p class="trial-note" data-i18n="pricing.trial_note">14 day free trial, cancel anytime before it ends and you will not be charged.</p>
         <ul class="price-features">
-          <li>Stocks, crypto, forex and commodities signals</li>
-          <li>Stop-loss, take-profit and trailing-exit protection</li>
-          <li>Portfolio-level exposure cap and kill switch</li>
-          <li>Bring your own broker, your funds never leave your account</li>
-          <li>Manage or cancel your billing at any time</li>
+          <li data-i18n="pricing.feature1">Stocks, crypto, forex and commodities signals</li>
+          <li data-i18n="pricing.feature2">Stop-loss, take-profit and trailing-exit protection</li>
+          <li data-i18n="pricing.feature3">Portfolio-level exposure cap and kill switch</li>
+          <li data-i18n="pricing.feature4">Bring your own broker, your funds never leave your account</li>
+          <li data-i18n="pricing.feature5">Manage or cancel your billing at any time</li>
         </ul>
-        <a class="btn btn-primary" href="/app" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
-        <p class="price-fine">Billed monthly through Stripe. No long-term contract.</p>
+        <a class="btn btn-primary" href="/app" data-i18n="nav.start_trial" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
+        <p class="price-fine" data-i18n="pricing.fine">Billed monthly through Stripe. No long-term contract.</p>
       </div>
     </div>
   </div>
@@ -518,29 +729,29 @@
 
 <section id="faq">
   <div class="wrap">
-    <span class="section-label mono">FAQ</span>
-    <h2 class="section-title">Frequently asked questions</h2>
-    <p class="section-sub">The questions that come up before connecting a broker.</p>
+    <span class="section-label mono" data-i18n="faq.label">FAQ</span>
+    <h2 class="section-title" data-i18n="faq.title">Frequently asked questions</h2>
+    <p class="section-sub" data-i18n="faq.sub">The questions that come up before connecting a broker.</p>
     <div class="faq-list">
       <details class="faq-item">
-        <summary>Is this financial advice?</summary>
-        <p>No. OrderTrade AI shows you graded signals and the reasoning behind them -- you decide whether to act on any of it. It isn't a registered investment adviser, and nothing here is a recommendation to buy or sell any specific security, coin, or instrument. Trading involves risk, including of loss.</p>
+        <summary data-i18n="faq.q1">Is this financial advice?</summary>
+        <p data-i18n="faq.a1">No. OrderTrade AI shows you graded signals and the reasoning behind them, and you decide whether to act on any of it. It isn't a registered investment adviser, and nothing here is a recommendation to buy or sell any specific security, coin, or instrument. Trading involves risk, including of loss.</p>
       </details>
       <details class="faq-item">
-        <summary>Why is it limited to paper and demo trading right now?</summary>
-        <p>Early access is deliberately paper/demo-only across every connected broker -- there is no control anywhere in the product that switches this on for live trading. It lets you see exactly how the signal engine and risk management behave with your real account balance and settings, without real money on the line, while the product is still new.</p>
+        <summary data-i18n="faq.q2">Can I trade with real money, or is it demo only?</summary>
+        <p data-i18n="faq.a2">Every account starts in demo mode, with no real money at risk. When you're ready, you can enable live trading from your account settings: read the risk disclosure, confirm you understand a bug or broker outage could cause a real loss, and opt in broker by broker. It's a deliberate decision you make, not something that happens by default.</p>
       </details>
       <details class="faq-item">
-        <summary>Which brokers do I need?</summary>
-        <p>Alpaca for US stocks (paper), Binance for crypto (testnet), and eToro for forex and commodities (demo). Connect whichever ones match the asset classes you want signals for -- you don't need all three, and you can add more later from your dashboard.</p>
+        <summary data-i18n="faq.q3">Which brokers do I need?</summary>
+        <p data-i18n="faq.a3">Alpaca for US stocks, Binance for crypto, and eToro or MT4/5 for forex and commodities. Everything starts in demo or paper mode, with live trading available once you opt in. Connect whichever ones match the asset classes you want signals for. You don't need all four, and you can add more later from your dashboard.</p>
       </details>
       <details class="faq-item">
-        <summary>Do you ever hold or touch my money?</summary>
-        <p>No. Every trade is placed directly on your own connected broker account using your own API keys, which are encrypted at rest. OrderTrade AI is a signal and execution layer, not a custodian -- see "Your money stays in your own broker account" above.</p>
+        <summary data-i18n="faq.q4">Do you ever hold or touch my money?</summary>
+        <p data-i18n="faq.a4">No. Every trade is placed directly on your own connected broker account using your own API keys, which are encrypted at rest. OrderTrade AI is a signal and execution layer, not a custodian; see "Your money stays in your own broker account" above.</p>
       </details>
       <details class="faq-item">
-        <summary>What happens after the 7-day free trial?</summary>
-        <p>If you don't cancel before the trial ends, billing continues at $39/month through Stripe. You can manage or cancel your subscription at any time from your account settings -- no long-term contract, and canceling during the trial means you're never charged.</p>
+        <summary data-i18n="faq.q5">What happens after the 14-day free trial?</summary>
+        <p data-i18n="faq.a5">If you don't cancel before the trial ends, billing continues at $39/month through Stripe. You can manage or cancel your subscription at any time from your account settings. There's no long-term contract, and canceling during the trial means you're never charged.</p>
       </details>
     </div>
   </div>
@@ -556,15 +767,15 @@
       "name": "Is this financial advice?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "No. OrderTrade AI shows you graded signals and the reasoning behind them -- you decide whether to act on any of it. It isn't a registered investment adviser, and nothing here is a recommendation to buy or sell any specific security, coin, or instrument. Trading involves risk, including of loss."
+        "text": "No. OrderTrade AI shows you graded signals and the reasoning behind them, and you decide whether to act on any of it. It isn't a registered investment adviser, and nothing here is a recommendation to buy or sell any specific security, coin, or instrument. Trading involves risk, including of loss."
       }
     },
     {
       "@type": "Question",
-      "name": "Why is it limited to paper and demo trading right now?",
+      "name": "Can I trade with real money, or is it demo only?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Early access is deliberately paper/demo-only across every connected broker -- there is no control anywhere in the product that switches this on for live trading. It lets you see exactly how the signal engine and risk management behave with your real account balance and settings, without real money on the line, while the product is still new."
+        "text": "Every account starts in demo mode, with no real money at risk. When you're ready, you can enable live trading from your account settings: read the risk disclosure, confirm you understand a bug or broker outage could cause a real loss, and opt in broker by broker. It's a deliberate decision you make, not something that happens by default."
       }
     },
     {
@@ -572,7 +783,7 @@
       "name": "Which brokers do I need?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Alpaca for US stocks (paper), Binance for crypto (testnet), and eToro for forex and commodities (demo). Connect whichever ones match the asset classes you want signals for -- you don't need all three, and you can add more later from your dashboard."
+        "text": "Alpaca for US stocks, Binance for crypto, and eToro or MT4/5 for forex and commodities. Everything starts in demo or paper mode, with live trading available once you opt in. Connect whichever ones match the asset classes you want signals for. You don't need all four, and you can add more later from your dashboard."
       }
     },
     {
@@ -585,10 +796,10 @@
     },
     {
       "@type": "Question",
-      "name": "What happens after the 7-day free trial?",
+      "name": "What happens after the 14-day free trial?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "If you don't cancel before the trial ends, billing continues at $39/month through Stripe. You can manage or cancel your subscription at any time from your account settings -- no long-term contract, and canceling during the trial means you're never charged."
+        "text": "If you don't cancel before the trial ends, billing continues at $39/month through Stripe. You can manage or cancel your subscription at any time from your account settings. There's no long-term contract, and canceling during the trial means you're never charged."
       }
     }
   ]
@@ -597,30 +808,31 @@
 
 <section class="final-cta" style="border-bottom:none;">
   <div class="wrap">
-    <h2>Connect a broker and see your first signal.</h2>
-    <p>Paper and demo trading, so there is nothing at risk while you try it.</p>
-    <a class="btn btn-primary btn-lg" href="/app" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
+    <h2 data-i18n="final.title">Connect a broker and see your first signal.</h2>
+    <p data-i18n="final.sub">Paper and demo trading, so there is nothing at risk while you try it.</p>
+    <a class="btn btn-primary btn-lg" href="/app" data-i18n="nav.start_trial" onclick="window.otaTrack && otaTrack('start_trial_click')">Start free trial</a>
   </div>
 </section>
 
 <footer>
   <div class="wrap footer-inner">
-    <div class="footer-copy">© 2026 OrderTrade AI. A Speedit Digital Technology product.</div>
+    <div class="footer-copy" data-i18n="footer.copyright">© 2026 OrderTrade AI. A Speedit Digital Technology product.</div>
     <div class="footer-links">
-      <a href="#faq">FAQ</a>
-      <a href="/app?page=terms">Terms of Service</a>
-      <a href="/app?page=privacy">Privacy Policy</a>
-      <a href="#" onclick="window.otaShowPreferences && otaShowPreferences(); return false;">Cookie preferences</a>
-      <a href="/app" onclick="window.otaTrack && otaTrack('sign_in_click')">Sign in</a>
+      <a href="#faq" data-i18n="faq.label">FAQ</a>
+      <a href="/app?page=terms" data-i18n="footer.terms">Terms of Service</a>
+      <a href="/app?page=privacy" data-i18n="footer.privacy">Privacy Policy</a>
+      <a href="#" data-i18n="footer.cookie_prefs" onclick="window.otaShowPreferences && otaShowPreferences(); return false;">Cookie preferences</a>
+      <a href="mailto:support@ordertradeai.com" data-i18n="footer.contact">Contact</a>
+      <a href="/app" data-i18n="nav.sign_in" onclick="window.otaTrack && otaTrack('sign_in_click')">Sign in</a>
     </div>
   </div>
 </footer>
 
 <div id="cookie-banner">
-  <p>We use Google Analytics to see how visitors use this page -- only after you accept. No advertising cookies, and you can change your mind any time. See our <a href="/app?page=privacy">Privacy Policy</a>.</p>
+  <p data-i18n-html="cookie.text_html">We use Google Analytics to see how visitors use this page, only after you accept. No advertising cookies, and you can change your mind any time. See our <a href="/app?page=privacy">Privacy Policy</a>.</p>
   <div class="cookie-actions">
-    <a class="btn btn-ghost" href="#" onclick="otaConsent('denied'); return false;">Reject</a>
-    <a class="btn btn-primary" href="#" onclick="otaConsent('granted'); return false;">Accept</a>
+    <a class="btn btn-ghost" href="#" data-i18n="cookie.reject" onclick="otaConsent('denied'); return false;">Reject</a>
+    <a class="btn btn-primary" href="#" data-i18n="cookie.accept" onclick="otaConsent('granted'); return false;">Accept</a>
   </div>
 </div>
 
@@ -654,6 +866,29 @@
       window.gtag = function () { dataLayer.push(arguments); };
       gtag("js", new Date());
       gtag("config", GA_MEASUREMENT_ID, { anonymize_ip: true });
+      notifyVisit();
+    }
+
+    // Personal-use "someone's on the site" Telegram ping -- deliberately
+    // called only from inside loadGA(), which itself only ever runs
+    // after consent (see this file's own comment above loadGA and the
+    // cookie banner text below). First-party request only, to this
+    // same domain's /track/visit -- no third-party endpoint, no PII
+    // beyond the visitor's own IP (used server-side for a one-time
+    // city/country lookup, not stored). sendBeacon is fire-and-forget
+    // and won't delay or block the page in any way; falls back to a
+    // keepalive fetch for the rare browser without sendBeacon support.
+    function notifyVisit() {
+      try {
+        var payload = JSON.stringify({ page: window.location.pathname });
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon("/track/visit", new Blob([payload], { type: "application/json" }));
+        } else if (window.fetch) {
+          fetch("/track/visit", { method: "POST", body: payload, keepalive: true });
+        }
+      } catch (e) {
+        // Never let a notification failure affect the visitor's page.
+      }
     }
 
     // Exposed globally so the CTA buttons below can fire a lightweight
@@ -711,6 +946,1837 @@
       });
     }
   })();
+</script>
+
+<!-- Multi-language support (i18n). Client-side only: swaps textContent on
+     every [data-i18n]/[data-i18n-html] element per the OTA_I18N table
+     below. Ticker symbols, dollar amounts, the OrderTrade AI brand name
+     and "Speedit Digital Technology" are intentionally left untranslated
+     everywhere, same as on the /app dashboard (see engines/saas_i18n.py).
+     Meta tags, Open Graph/Twitter tags and the JSON-LD structured data in
+     <head> are also intentionally NOT translated here -- they are only
+     read by crawlers/share previews at the initial HTTP response, before
+     this script runs, so translating them client-side would have no
+     effect; doing that properly would need separate localized URLs
+     (hreflang), which is out of scope for this pass. -->
+<script>
+(function () {
+  var OTA_I18N = {
+en: {
+"nav.sign_in":"Sign in",
+"nav.start_trial":"Start free trial",
+"hero.eyebrow":"Demo trading by default. Go live when you're ready.",
+"hero.h1":"AI signals for the broker account you already have.",
+"hero.sub":"Connect your own Alpaca, Binance, eToro or MT4/5 account. Preview every signal before anything executes, then place the trade yourself.",
+"preview.title":"AI Decision Engine, illustrative preview",
+"preview.note":"Actual signals depend on live market data and your connected brokers.",
+"preview.col_ticker":"Ticker",
+"preview.col_asset_class":"Asset class",
+"preview.col_signal":"Signal",
+"preview.col_confidence":"Confidence",
+"preview.col_risk_reward":"Risk / reward",
+"preview.col_grade":"Grade",
+"preview.asset_us_stocks":"US stocks",
+"preview.asset_crypto":"Crypto",
+"preview.asset_forex":"Forex",
+"preview.asset_commodities":"Commodities",
+"preview.signal_buy":"Buy",
+"preview.signal_wait":"Wait",
+"how.title":"How it works",
+"how.sub":"Three steps between connecting an account and reviewing your first signal.",
+"how.step1_h":"Connect your own broker",
+"how.step1_p":"Link Alpaca, Binance, eToro or MT4/5 with your own API keys. They are encrypted at rest and only ever decrypted to act on your own account. OrderTrade AI never pools or holds anyone's funds.",
+"how.step2_h":"The AI scores opportunities",
+"how.step2_p":"The signal engine reads market data across your enabled asset classes and produces a graded, ranked list, sized against your real connected-account balance.",
+"how.step3_h":"You review, then execute",
+"how.step3_p":"Preview shows exactly what would be bought and why. Nothing is placed until you check the confirmation box and click Execute yourself.",
+"how.demo_caption":"LIVE PREVIEW: CONNECTING A BROKER",
+"how.demo_broker_label":"Alpaca (US Stocks, Paper)",
+"how.demo_not_connected":"Not connected",
+"how.demo_connected":"Connected",
+"how.demo_key_label":"API Key",
+"how.demo_secret_label":"API Secret",
+"how.demo_save":"Save",
+"how.demo_verifying":"Verifying Alpaca connection...",
+"how.demo_success":"Alpaca (US Stocks, Paper) connected.",
+"how.demo2_caption":"LIVE PREVIEW: PICK ASSETS, PREVIEW, AND EXECUTE",
+"how.demo2_assets_label":"Which markets do you want signals for?",
+"how.demo2_chip_stocks":"US Stocks",
+"how.demo2_chip_crypto":"Crypto",
+"how.demo2_chip_forex":"Forex",
+"how.demo2_chip_commodities":"Commodities",
+"how.demo2_save":"Save settings",
+"how.demo2_saved":"Settings saved.",
+"how.demo2_preview_button":"Preview AI",
+"how.demo2_scanning":"Scanning market data...",
+"how.demo2_warn":"2 trades ready. Nothing executes until you confirm.",
+"how.demo2_confirm_label":"I understand and want to place these trades",
+"how.demo2_execute_button":"Execute",
+"how.demo2_placing":"Placing orders...",
+"how.demo2_executed":"2 orders placed on your connected accounts.",
+"assets.title":"One dashboard, four asset classes",
+"assets.sub":"Each asset class runs through the same signal engine, with its own position caps and broker connection.",
+"assets.stocks_tag":"Stocks",
+"assets.stocks_h":"US equities via Alpaca",
+"assets.stocks_p":"Paper trading account. Full order history and stop-loss, take-profit and trailing-exit coverage.",
+"assets.crypto_tag":"Crypto",
+"assets.crypto_h":"Binance testnet",
+"assets.crypto_p":"Wallet-balance-based position sizing, not just this dashboard's own trade log.",
+"assets.forex_tag":"Forex",
+"assets.forex_h":"eToro demo, MT4/5",
+"assets.forex_p":"Leverage and stop-loss rate handled per broker rules for currency pairs.",
+"assets.commodities_tag":"Commodities",
+"assets.commodities_h":"eToro demo, MT4/5",
+"assets.commodities_p":"Gold, oil and other CFD instruments alongside your forex positions.",
+"risk.title":"Risk management runs in the background",
+"risk.sub":"Protection that applies once a position is open, not just at entry.",
+"risk.row1_h":"Stop-loss and take-profit",
+"risk.row1_p":"Set from real price structure at trade time, not a fixed percentage guess.",
+"risk.row2_h":"Trailing-profit lock and break-even ratchet",
+"risk.row2_p":"Gives back less of an open gain as a position moves in your favor, with partial profit-taking along the way.",
+"risk.row3_h":"Hard time-based exit",
+"risk.row3_p":"Positions held past a set number of days are closed regardless of current profit or loss.",
+"risk.row4_h":"Portfolio-level exposure cap",
+"risk.row4_p":"A ceiling on how much of your account can be at risk at once, checked before every new trade.",
+"risk.row5_h":"Kill switch",
+"risk.row5_p":"One control stops all automated activity across every connected broker immediately.",
+"custody.title":"Your money stays in your own broker account",
+"custody.sub":"OrderTrade AI is a signal and execution layer, not a custodian.",
+"custody.point1_h":"We never hold or pool funds",
+"custody.point1_p":"Every trade is placed directly on your own Alpaca, Binance, eToro or MT4/5 account using your own API keys.",
+"custody.point2_h":"Demo first, live when you're ready",
+"custody.point2_p":"Every account starts in paper/demo mode with no real money at risk. When you're ready, you can opt in to live trading for any connected broker through a dedicated confirmation flow in your account settings.",
+"custody.point3_h":"Encrypted credential storage",
+"custody.point3_p":"Broker API keys are encrypted at rest and decrypted only at the moment a request is made on your own account.",
+"pricing.title":"Pricing",
+"pricing.sub":"One plan. Every asset class and every risk-management feature included.",
+"pricing.per_month":"/ month",
+"pricing.trial_note":"14 day free trial, cancel anytime before it ends and you will not be charged.",
+"pricing.feature1":"Stocks, crypto, forex and commodities signals",
+"pricing.feature2":"Stop-loss, take-profit and trailing-exit protection",
+"pricing.feature3":"Portfolio-level exposure cap and kill switch",
+"pricing.feature4":"Bring your own broker, your funds never leave your account",
+"pricing.feature5":"Manage or cancel your billing at any time",
+"pricing.fine":"Billed monthly through Stripe. No long-term contract.",
+"faq.label":"FAQ",
+"faq.title":"Frequently asked questions",
+"faq.sub":"The questions that come up before connecting a broker.",
+"faq.q1":"Is this financial advice?",
+"faq.a1":"No. OrderTrade AI shows you graded signals and the reasoning behind them, and you decide whether to act on any of it. It isn't a registered investment adviser, and nothing here is a recommendation to buy or sell any specific security, coin, or instrument. Trading involves risk, including of loss.",
+"faq.q2":"Can I trade with real money, or is it demo only?",
+"faq.a2":"Every account starts in demo mode, with no real money at risk. When you're ready, you can enable live trading from your account settings: read the risk disclosure, confirm you understand a bug or broker outage could cause a real loss, and opt in broker by broker. It's a deliberate decision you make, not something that happens by default.",
+"faq.q3":"Which brokers do I need?",
+"faq.a3":"Alpaca for US stocks, Binance for crypto, and eToro or MT4/5 for forex and commodities. Everything starts in demo or paper mode, with live trading available once you opt in. Connect whichever ones match the asset classes you want signals for. You don't need all four, and you can add more later from your dashboard.",
+"faq.q4":"Do you ever hold or touch my money?",
+"faq.a4":"No. Every trade is placed directly on your own connected broker account using your own API keys, which are encrypted at rest. OrderTrade AI is a signal and execution layer, not a custodian; see \"Your money stays in your own broker account\" above.",
+"faq.q5":"What happens after the 14-day free trial?",
+"faq.a5":"If you don't cancel before the trial ends, billing continues at $39/month through Stripe. You can manage or cancel your subscription at any time from your account settings. There's no long-term contract, and canceling during the trial means you're never charged.",
+"final.title":"Connect a broker and see your first signal.",
+"final.sub":"Paper and demo trading, so there is nothing at risk while you try it.",
+"footer.copyright":"© 2026 OrderTrade AI. A Speedit Digital Technology product.",
+"footer.terms":"Terms of Service",
+"footer.privacy":"Privacy Policy",
+"footer.cookie_prefs":"Cookie preferences",
+"footer.contact":"Contact",
+"cookie.text_html":"We use Google Analytics to see how visitors use this page, only after you accept. No advertising cookies, and you can change your mind any time. See our <a href=\"/app?page=privacy\">Privacy Policy</a>.",
+"cookie.reject":"Reject",
+"cookie.accept":"Accept"
+},
+es: {
+"nav.sign_in":"Iniciar sesión",
+"nav.start_trial":"Comenzar prueba gratuita",
+"hero.eyebrow":"Trading demo por defecto. Pasa a en vivo cuando estés listo.",
+"hero.h1":"Señales de IA para la cuenta de bróker que ya tienes.",
+"hero.sub":"Conecta tu propia cuenta de Alpaca, Binance, eToro o MT4/5. Previsualiza cada señal antes de que se ejecute algo, y luego realiza la operación tú mismo.",
+"preview.title":"Motor de Decisión de IA, vista previa ilustrativa",
+"preview.note":"Las señales reales dependen de los datos de mercado en vivo y de tus brókers conectados.",
+"preview.col_ticker":"Ticker",
+"preview.col_asset_class":"Clase de activo",
+"preview.col_signal":"Señal",
+"preview.col_confidence":"Confianza",
+"preview.col_risk_reward":"Riesgo / recompensa",
+"preview.col_grade":"Calificación",
+"preview.asset_us_stocks":"Acciones de EE. UU.",
+"preview.asset_crypto":"Cripto",
+"preview.asset_forex":"Forex",
+"preview.asset_commodities":"Materias primas",
+"preview.signal_buy":"Comprar",
+"preview.signal_wait":"Esperar",
+"how.title":"Cómo funciona",
+"how.sub":"Tres pasos entre conectar una cuenta y revisar tu primera señal.",
+"how.step1_h":"Conecta tu propio bróker",
+"how.step1_p":"Vincula Alpaca, Binance, eToro o MT4/5 con tus propias claves de API. Se cifran en reposo y solo se descifran para actuar en tu propia cuenta. OrderTrade AI nunca agrupa ni retiene los fondos de nadie.",
+"how.step2_h":"La IA califica las oportunidades",
+"how.step2_p":"El motor de señales analiza los datos de mercado en tus clases de activos habilitadas y genera una lista clasificada y calificada, dimensionada según el saldo real de tu cuenta conectada.",
+"how.step3_h":"Tú revisas y luego ejecutas",
+"how.step3_p":"La vista previa muestra exactamente qué se compraría y por qué. No se coloca nada hasta que marcas la casilla de confirmación y haces clic en Ejecutar tú mismo.",
+"how.demo_caption":"VISTA PREVIA EN VIVO: CONECTANDO UN BROKER",
+"how.demo_broker_label":"Alpaca (Acciones de EE. UU., Simulado)",
+"how.demo_not_connected":"No conectado",
+"how.demo_connected":"Conectado",
+"how.demo_key_label":"Clave de API",
+"how.demo_secret_label":"Secreto de API",
+"how.demo_save":"Guardar",
+"how.demo_verifying":"Verificando conexión con Alpaca...",
+"how.demo_success":"Alpaca (Acciones de EE. UU., Simulado) conectado.",
+"how.demo2_caption":"VISTA PREVIA EN VIVO: ELEGIR ACTIVOS, PREVISUALIZAR Y EJECUTAR",
+"how.demo2_assets_label":"¿Para qué mercados quieres señales?",
+"how.demo2_chip_stocks":"Acciones de EE. UU.",
+"how.demo2_chip_crypto":"Cripto",
+"how.demo2_chip_forex":"Forex",
+"how.demo2_chip_commodities":"Materias primas",
+"how.demo2_save":"Guardar ajustes",
+"how.demo2_saved":"Ajustes guardados.",
+"how.demo2_preview_button":"Previsualizar IA",
+"how.demo2_scanning":"Analizando datos del mercado...",
+"how.demo2_warn":"2 operaciones listas. No se ejecuta nada hasta que confirmes.",
+"how.demo2_confirm_label":"Entiendo y quiero realizar estas operaciones",
+"how.demo2_execute_button":"Ejecutar",
+"how.demo2_placing":"Colocando órdenes...",
+"how.demo2_executed":"2 órdenes colocadas en tus cuentas conectadas.",
+"assets.title":"Un panel, cuatro clases de activos",
+"assets.sub":"Cada clase de activo pasa por el mismo motor de señales, con sus propios límites de posición y conexión de bróker.",
+"assets.stocks_tag":"Acciones",
+"assets.stocks_h":"Acciones de EE. UU. vía Alpaca",
+"assets.stocks_p":"Cuenta de operativa simulada (paper). Historial de órdenes completo y cobertura de stop-loss, take-profit y salida con trailing-stop.",
+"assets.crypto_tag":"Cripto",
+"assets.crypto_h":"Binance testnet",
+"assets.crypto_p":"Dimensionamiento de posición basado en el saldo real de la billetera, no solo en el registro de operaciones de este panel.",
+"assets.forex_tag":"Forex",
+"assets.forex_h":"Demo de eToro, MT4/5",
+"assets.forex_p":"El apalancamiento y la tasa de stop-loss se gestionan según las reglas del bróker para pares de divisas.",
+"assets.commodities_tag":"Materias primas",
+"assets.commodities_h":"Demo de eToro, MT4/5",
+"assets.commodities_p":"Oro, petróleo y otros instrumentos CFD junto a tus posiciones de forex.",
+"risk.title":"La gestión de riesgo funciona en segundo plano",
+"risk.sub":"Protección que se aplica una vez que una posición está abierta, no solo al entrar.",
+"risk.row1_h":"Stop-loss y take-profit",
+"risk.row1_p":"Se fijan a partir de la estructura real del precio en el momento de la operación, no de un porcentaje fijo estimado.",
+"risk.row2_h":"Bloqueo de ganancias con trailing-stop y ajuste a punto de equilibrio",
+"risk.row2_p":"Cede menos de una ganancia abierta a medida que la posición se mueve a tu favor, con toma de ganancias parcial en el camino.",
+"risk.row3_h":"Salida forzada por tiempo",
+"risk.row3_p":"Las posiciones mantenidas más allá de un número determinado de días se cierran sin importar la ganancia o pérdida actual.",
+"risk.row4_h":"Límite de exposición a nivel de cartera",
+"risk.row4_p":"Un tope sobre cuánto de tu cuenta puede estar en riesgo a la vez, verificado antes de cada nueva operación.",
+"risk.row5_h":"Interruptor de emergencia",
+"risk.row5_p":"Un solo control detiene toda la actividad automatizada en todos los brókers conectados de inmediato.",
+"custody.title":"Tu dinero permanece en tu propia cuenta de bróker",
+"custody.sub":"OrderTrade AI es una capa de señales y ejecución, no un custodio.",
+"custody.point1_h":"Nunca retenemos ni agrupamos fondos",
+"custody.point1_p":"Cada operación se coloca directamente en tu propia cuenta de Alpaca, Binance, eToro o MT4/5 usando tus propias claves de API.",
+"custody.point2_h":"Demo primero, en vivo cuando estés listo",
+"custody.point2_p":"Toda cuenta comienza en modo paper/demo, sin dinero real en juego. Cuando estés listo, puedes activar el trading en vivo para cualquier bróker conectado mediante un flujo de confirmación dedicado en la configuración de tu cuenta.",
+"custody.point3_h":"Almacenamiento cifrado de credenciales",
+"custody.point3_p":"Las claves de API del bróker se cifran en reposo y solo se descifran en el momento en que se realiza una solicitud en tu propia cuenta.",
+"pricing.title":"Precios",
+"pricing.sub":"Un solo plan. Todas las clases de activos y todas las funciones de gestión de riesgo incluidas.",
+"pricing.per_month":"/ mes",
+"pricing.trial_note":"Prueba gratuita de 14 días, cancela en cualquier momento antes de que termine y no se te cobrará.",
+"pricing.feature1":"Señales de acciones, cripto, forex y materias primas",
+"pricing.feature2":"Protección de stop-loss, take-profit y salida con trailing-stop",
+"pricing.feature3":"Límite de exposición a nivel de cartera e interruptor de emergencia",
+"pricing.feature4":"Usa tu propio bróker, tus fondos nunca salen de tu cuenta",
+"pricing.feature5":"Gestiona o cancela tu facturación en cualquier momento",
+"pricing.fine":"Facturado mensualmente a través de Stripe. Sin contrato a largo plazo.",
+"faq.label":"PREGUNTAS FRECUENTES",
+"faq.title":"Preguntas frecuentes",
+"faq.sub":"Las preguntas que surgen antes de conectar un bróker.",
+"faq.q1":"¿Es esto asesoramiento financiero?",
+"faq.a1":"No. OrderTrade AI te muestra señales calificadas y el razonamiento detrás de ellas, y tú decides si actúas o no. No es un asesor de inversiones registrado, y nada aquí es una recomendación para comprar o vender ningún valor, moneda o instrumento específico. Operar implica riesgo, incluido el de pérdida.",
+"faq.q2":"¿Puedo operar con dinero real, o es solo demo?",
+"faq.a2":"Toda cuenta comienza en modo demo, sin dinero real en juego. Cuando estés listo, puedes activar el trading en vivo desde la configuración de tu cuenta: lees el aviso de riesgo, confirmas que entiendes que un error o una interrupción del bróker podría causar una pérdida real, y lo activas bróker por bróker. Es una decisión deliberada que tomas tú, no algo que ocurre por defecto.",
+"faq.q3":"¿Qué brókers necesito?",
+"faq.a3":"Alpaca para acciones de EE. UU., Binance para cripto, y eToro o MT4/5 para forex y materias primas. Todo comienza en modo demo o simulado, con trading en vivo disponible si lo activas. Conecta los que correspondan a las clases de activos para las que quieres señales. No necesitas los cuatro, y puedes agregar más después desde tu panel.",
+"faq.q4":"¿Alguna vez retienen o tocan mi dinero?",
+"faq.a4":"No. Cada operación se coloca directamente en tu propia cuenta de bróker conectada usando tus propias claves de API, que se cifran en reposo. OrderTrade AI es una capa de señales y ejecución, no un custodio; consulta \"Tu dinero permanece en tu propia cuenta de bróker\" más arriba.",
+"faq.q5":"¿Qué sucede después de la prueba gratuita de 14 días?",
+"faq.a5":"Si no cancelas antes de que termine la prueba, la facturación continúa a $39/mes a través de Stripe. Puedes gestionar o cancelar tu suscripción en cualquier momento desde la configuración de tu cuenta. No hay contrato a largo plazo, y cancelar durante la prueba significa que nunca se te cobrará.",
+"final.title":"Conecta un bróker y ve tu primera señal.",
+"final.sub":"Operativa simulada y demo, así que no hay nada en riesgo mientras la pruebas.",
+"footer.copyright":"© 2026 OrderTrade AI. Un producto de Speedit Digital Technology.",
+"footer.terms":"Términos de Servicio",
+"footer.privacy":"Política de Privacidad",
+"footer.cookie_prefs":"Preferencias de cookies",
+"footer.contact":"Contacto",
+"cookie.text_html":"Usamos Google Analytics para ver cómo los visitantes usan esta página, solo después de que lo aceptes. Sin cookies publicitarias, y puedes cambiar de opinión en cualquier momento. Consulta nuestra <a href=\"/app?page=privacy\">Política de Privacidad</a>.",
+"cookie.reject":"Rechazar",
+"cookie.accept":"Aceptar"
+},
+pt: {
+"nav.sign_in":"Entrar",
+"nav.start_trial":"Iniciar teste gratuito",
+"hero.eyebrow":"Negociação demo por padrão. Vá ao vivo quando estiver pronto.",
+"hero.h1":"Sinais de IA para a conta de corretora que você já tem.",
+"hero.sub":"Conecte sua própria conta Alpaca, Binance, eToro ou MT4/5. Visualize cada sinal antes que qualquer coisa seja executada e depois faça a operação você mesmo.",
+"preview.title":"Motor de Decisão de IA, pré-visualização ilustrativa",
+"preview.note":"Os sinais reais dependem de dados de mercado ao vivo e das corretoras conectadas.",
+"preview.col_ticker":"Ticker",
+"preview.col_asset_class":"Classe de ativo",
+"preview.col_signal":"Sinal",
+"preview.col_confidence":"Confiança",
+"preview.col_risk_reward":"Risco / retorno",
+"preview.col_grade":"Nota",
+"preview.asset_us_stocks":"Ações dos EUA",
+"preview.asset_crypto":"Cripto",
+"preview.asset_forex":"Forex",
+"preview.asset_commodities":"Commodities",
+"preview.signal_buy":"Comprar",
+"preview.signal_wait":"Aguardar",
+"how.title":"Como funciona",
+"how.sub":"Três etapas entre conectar uma conta e revisar seu primeiro sinal.",
+"how.step1_h":"Conecte sua própria corretora",
+"how.step1_p":"Vincule Alpaca, Binance, eToro ou MT4/5 com suas próprias chaves de API. Elas são criptografadas em repouso e só são descriptografadas para agir na sua própria conta. A OrderTrade AI nunca reúne nem retém fundos de ninguém.",
+"how.step2_h":"A IA avalia as oportunidades",
+"how.step2_p":"O motor de sinais analisa dados de mercado nas classes de ativos habilitadas e gera uma lista classificada e avaliada, dimensionada de acordo com o saldo real da sua conta conectada.",
+"how.step3_h":"Você revisa e depois executa",
+"how.step3_p":"A pré-visualização mostra exatamente o que seria comprado e por quê. Nada é executado até que você marque a caixa de confirmação e clique em Executar.",
+"how.demo_caption":"PRÉVIA AO VIVO: CONECTANDO UMA CORRETORA",
+"how.demo_broker_label":"Alpaca (Ações dos EUA, Simulado)",
+"how.demo_not_connected":"Não conectado",
+"how.demo_connected":"Conectado",
+"how.demo_key_label":"Chave de API",
+"how.demo_secret_label":"Segredo de API",
+"how.demo_save":"Salvar",
+"how.demo_verifying":"Verificando conexão com a Alpaca...",
+"how.demo_success":"Alpaca (Ações dos EUA, Simulado) conectada.",
+"how.demo2_caption":"PRÉVIA AO VIVO: ESCOLHER ATIVOS, VISUALIZAR E EXECUTAR",
+"how.demo2_assets_label":"Para quais mercados você quer sinais?",
+"how.demo2_chip_stocks":"Ações dos EUA",
+"how.demo2_chip_crypto":"Cripto",
+"how.demo2_chip_forex":"Forex",
+"how.demo2_chip_commodities":"Commodities",
+"how.demo2_save":"Salvar configurações",
+"how.demo2_saved":"Configurações salvas.",
+"how.demo2_preview_button":"Visualizar IA",
+"how.demo2_scanning":"Analisando dados do mercado...",
+"how.demo2_warn":"2 operações prontas. Nada é executado até você confirmar.",
+"how.demo2_confirm_label":"Entendo e quero realizar essas operações",
+"how.demo2_execute_button":"Executar",
+"how.demo2_placing":"Enviando ordens...",
+"how.demo2_executed":"2 ordens enviadas para suas contas conectadas.",
+"assets.title":"Um painel, quatro classes de ativos",
+"assets.sub":"Cada classe de ativo passa pelo mesmo motor de sinais, com seus próprios limites de posição e conexão de corretora.",
+"assets.stocks_tag":"Ações",
+"assets.stocks_h":"Ações dos EUA via Alpaca",
+"assets.stocks_p":"Conta de negociação simulada (paper). Histórico completo de ordens e cobertura de stop-loss, take-profit e saída com trailing stop.",
+"assets.crypto_tag":"Cripto",
+"assets.crypto_h":"Binance testnet",
+"assets.crypto_p":"Dimensionamento de posição com base no saldo real da carteira, não apenas no histórico de operações deste painel.",
+"assets.forex_tag":"Forex",
+"assets.forex_h":"Demo da eToro, MT4/5",
+"assets.forex_p":"Alavancagem e taxa de stop-loss tratadas conforme as regras da corretora para pares de moedas.",
+"assets.commodities_tag":"Commodities",
+"assets.commodities_h":"Demo da eToro, MT4/5",
+"assets.commodities_p":"Ouro, petróleo e outros instrumentos CFD junto com suas posições de forex.",
+"risk.title":"A gestão de risco funciona em segundo plano",
+"risk.sub":"Proteção aplicada assim que uma posição é aberta, não apenas na entrada.",
+"risk.row1_h":"Stop-loss e take-profit",
+"risk.row1_p":"Definidos a partir da estrutura real de preço no momento da operação, não de um percentual fixo estimado.",
+"risk.row2_h":"Trava de lucro com trailing stop e ajuste para o ponto de equilíbrio",
+"risk.row2_p":"Devolve menos de um ganho aberto conforme a posição se move a seu favor, com realização parcial de lucros ao longo do caminho.",
+"risk.row3_h":"Saída forçada por tempo",
+"risk.row3_p":"Posições mantidas além de um número definido de dias são fechadas independentemente do lucro ou prejuízo atual.",
+"risk.row4_h":"Limite de exposição em nível de carteira",
+"risk.row4_p":"Um teto para quanto da sua conta pode estar em risco de uma só vez, verificado antes de cada nova operação.",
+"risk.row5_h":"Botão de emergência",
+"risk.row5_p":"Um único controle interrompe imediatamente toda a atividade automatizada em todas as corretoras conectadas.",
+"custody.title":"Seu dinheiro permanece na sua própria conta de corretora",
+"custody.sub":"A OrderTrade AI é uma camada de sinais e execução, não uma custodiante.",
+"custody.point1_h":"Nunca retemos nem reunimos fundos",
+"custody.point1_p":"Cada operação é feita diretamente na sua própria conta Alpaca, Binance, eToro ou MT4/5, usando suas próprias chaves de API.",
+"custody.point2_h":"Demo primeiro, ao vivo quando estiver pronto",
+"custody.point2_p":"Toda conta começa no modo simulado/demo, sem dinheiro real em risco. Quando estiver pronto, você pode ativar a negociação ao vivo para qualquer corretora conectada por meio de um fluxo de confirmação dedicado nas configurações da sua conta.",
+"custody.point3_h":"Armazenamento criptografado de credenciais",
+"custody.point3_p":"As chaves de API da corretora são criptografadas em repouso e só são descriptografadas no momento em que uma solicitação é feita na sua própria conta.",
+"pricing.title":"Preços",
+"pricing.sub":"Um único plano. Todas as classes de ativos e todos os recursos de gestão de risco incluídos.",
+"pricing.per_month":"/ mês",
+"pricing.trial_note":"Teste gratuito de 14 dias, cancele a qualquer momento antes que ele termine e você não será cobrado.",
+"pricing.feature1":"Sinais de ações, cripto, forex e commodities",
+"pricing.feature2":"Proteção de stop-loss, take-profit e saída com trailing stop",
+"pricing.feature3":"Limite de exposição em nível de carteira e botão de emergência",
+"pricing.feature4":"Use sua própria corretora, seus fundos nunca saem da sua conta",
+"pricing.feature5":"Gerencie ou cancele sua cobrança a qualquer momento",
+"pricing.fine":"Cobrado mensalmente via Stripe. Sem contrato de longo prazo.",
+"faq.label":"PERGUNTAS FREQUENTES",
+"faq.title":"Perguntas frequentes",
+"faq.sub":"As perguntas que surgem antes de conectar uma corretora.",
+"faq.q1":"Isso é aconselhamento financeiro?",
+"faq.a1":"Não. A OrderTrade AI mostra sinais classificados e o raciocínio por trás deles, e você decide se vai agir com base neles. Não é uma consultoria de investimentos registrada, e nada aqui é uma recomendação para comprar ou vender qualquer título, moeda ou instrumento específico. Negociar envolve risco, inclusive de perda.",
+"faq.q2":"Posso negociar com dinheiro real, ou é só demo?",
+"faq.a2":"Toda conta começa no modo demo, sem dinheiro real em risco. Quando estiver pronto, você pode ativar a negociação ao vivo nas configurações da sua conta: leia o aviso de risco, confirme que entende que um bug ou uma interrupção da corretora pode causar uma perda real, e ative corretora por corretora. É uma decisão deliberada que você toma, não algo que acontece por padrão.",
+"faq.q3":"De quais corretoras eu preciso?",
+"faq.a3":"Alpaca para ações dos EUA, Binance para cripto, e eToro ou MT4/5 para forex e commodities. Tudo começa no modo demo ou simulado, com negociação ao vivo disponível caso você ative. Conecte as que correspondem às classes de ativos para as quais você quer sinais. Você não precisa das quatro, e pode adicionar mais depois pelo seu painel.",
+"faq.q4":"Vocês chegam a reter ou tocar no meu dinheiro?",
+"faq.a4":"Não. Cada operação é feita diretamente na sua própria conta de corretora conectada, usando suas próprias chaves de API, que são criptografadas em repouso. A OrderTrade AI é uma camada de sinais e execução, não uma custodiante; veja \"Seu dinheiro permanece na sua própria conta de corretora\" acima.",
+"faq.q5":"O que acontece depois do teste gratuito de 14 dias?",
+"faq.a5":"Se você não cancelar antes do fim do teste, a cobrança continua em $39/mês via Stripe. Você pode gerenciar ou cancelar sua assinatura a qualquer momento nas configurações da sua conta. Não há contrato de longo prazo, e cancelar durante o teste significa que você nunca será cobrado.",
+"final.title":"Conecte uma corretora e veja seu primeiro sinal.",
+"final.sub":"Negociação simulada e demo, então não há nada em risco enquanto você experimenta.",
+"footer.copyright":"© 2026 OrderTrade AI. Um produto da Speedit Digital Technology.",
+"footer.terms":"Termos de Serviço",
+"footer.privacy":"Política de Privacidade",
+"footer.cookie_prefs":"Preferências de cookies",
+"footer.contact":"Contato",
+"cookie.text_html":"Usamos o Google Analytics para ver como os visitantes usam esta página, somente depois que você aceitar. Sem cookies de publicidade, e você pode mudar de ideia a qualquer momento. Veja nossa <a href=\"/app?page=privacy\">Política de Privacidade</a>.",
+"cookie.reject":"Rejeitar",
+"cookie.accept":"Aceitar"
+},
+fr: {
+"nav.sign_in":"Se connecter",
+"nav.start_trial":"Commencer l'essai gratuit",
+"hero.eyebrow":"Trading démo par défaut. Passez en réel quand vous êtes prêt.",
+"hero.h1":"Des signaux d'IA pour le compte de courtage que vous avez déjà.",
+"hero.sub":"Connectez votre propre compte Alpaca, Binance, eToro ou MT4/5. Prévisualisez chaque signal avant toute exécution, puis passez l'ordre vous-même.",
+"preview.title":"Moteur de décision IA, aperçu illustratif",
+"preview.note":"Les signaux réels dépendent des données de marché en direct et de vos courtiers connectés.",
+"preview.col_ticker":"Symbole",
+"preview.col_asset_class":"Classe d'actif",
+"preview.col_signal":"Signal",
+"preview.col_confidence":"Confiance",
+"preview.col_risk_reward":"Risque / rendement",
+"preview.col_grade":"Note",
+"preview.asset_us_stocks":"Actions américaines",
+"preview.asset_crypto":"Crypto",
+"preview.asset_forex":"Forex",
+"preview.asset_commodities":"Matières premières",
+"preview.signal_buy":"Acheter",
+"preview.signal_wait":"Attendre",
+"how.title":"Comment ça marche",
+"how.sub":"Trois étapes entre la connexion d'un compte et l'examen de votre premier signal.",
+"how.step1_h":"Connectez votre propre courtier",
+"how.step1_p":"Reliez Alpaca, Binance, eToro ou MT4/5 avec vos propres clés API. Elles sont chiffrées au repos et déchiffrées uniquement pour agir sur votre propre compte. OrderTrade AI ne mutualise ni ne détient jamais les fonds de qui que ce soit.",
+"how.step2_h":"L'IA note les opportunités",
+"how.step2_p":"Le moteur de signaux analyse les données de marché sur vos classes d'actifs activées et produit une liste classée et notée, dimensionnée selon le solde réel de votre compte connecté.",
+"how.step3_h":"Vous vérifiez, puis vous exécutez",
+"how.step3_p":"L'aperçu montre exactement ce qui serait acheté et pourquoi. Rien n'est passé tant que vous n'avez pas coché la case de confirmation et cliqué vous-même sur Exécuter.",
+"how.demo_caption":"APERÇU EN DIRECT : CONNEXION D'UN COURTIER",
+"how.demo_broker_label":"Alpaca (Actions américaines, simulé)",
+"how.demo_not_connected":"Non connecté",
+"how.demo_connected":"Connecté",
+"how.demo_key_label":"Clé API",
+"how.demo_secret_label":"Secret API",
+"how.demo_save":"Enregistrer",
+"how.demo_verifying":"Vérification de la connexion à Alpaca...",
+"how.demo_success":"Alpaca (Actions américaines, simulé) connecté.",
+"how.demo2_caption":"APERÇU EN DIRECT : CHOISIR LES ACTIFS, PRÉVISUALISER ET EXÉCUTER",
+"how.demo2_assets_label":"Pour quels marchés voulez-vous des signaux ?",
+"how.demo2_chip_stocks":"Actions américaines",
+"how.demo2_chip_crypto":"Crypto",
+"how.demo2_chip_forex":"Forex",
+"how.demo2_chip_commodities":"Matières premières",
+"how.demo2_save":"Enregistrer les paramètres",
+"how.demo2_saved":"Paramètres enregistrés.",
+"how.demo2_preview_button":"Prévisualiser l'IA",
+"how.demo2_scanning":"Analyse des données de marché...",
+"how.demo2_warn":"2 opérations prêtes. Rien n'est exécuté tant que vous n'avez pas confirmé.",
+"how.demo2_confirm_label":"Je comprends et je veux passer ces ordres",
+"how.demo2_execute_button":"Exécuter",
+"how.demo2_placing":"Envoi des ordres...",
+"how.demo2_executed":"2 ordres envoyés sur vos comptes connectés.",
+"assets.title":"Un tableau de bord, quatre classes d'actifs",
+"assets.sub":"Chaque classe d'actif passe par le même moteur de signaux, avec ses propres limites de position et sa propre connexion de courtier.",
+"assets.stocks_tag":"Actions",
+"assets.stocks_h":"Actions américaines via Alpaca",
+"assets.stocks_p":"Compte de trading simulé (paper). Historique complet des ordres et couverture stop-loss, take-profit et sortie en trailing stop.",
+"assets.crypto_tag":"Crypto",
+"assets.crypto_h":"Testnet Binance",
+"assets.crypto_p":"Dimensionnement des positions basé sur le solde réel du portefeuille, pas seulement sur le journal des opérations de ce tableau de bord.",
+"assets.forex_tag":"Forex",
+"assets.forex_h":"Démo eToro, MT4/5",
+"assets.forex_p":"Effet de levier et taux de stop-loss gérés selon les règles du courtier pour les paires de devises.",
+"assets.commodities_tag":"Matières premières",
+"assets.commodities_h":"Démo eToro, MT4/5",
+"assets.commodities_p":"Or, pétrole et autres instruments CFD aux côtés de vos positions de change.",
+"risk.title":"La gestion des risques fonctionne en arrière-plan",
+"risk.sub":"Une protection qui s'applique une fois la position ouverte, pas seulement à l'entrée.",
+"risk.row1_h":"Stop-loss et take-profit",
+"risk.row1_p":"Définis à partir de la structure de prix réelle au moment de l'opération, et non d'un pourcentage fixe estimé.",
+"risk.row2_h":"Verrouillage des gains en trailing stop et ajustement au seuil de rentabilité",
+"risk.row2_p":"Restitue moins d'un gain ouvert à mesure que la position évolue en votre faveur, avec prise de bénéfices partielle en cours de route.",
+"risk.row3_h":"Sortie forcée basée sur le temps",
+"risk.row3_p":"Les positions détenues au-delà d'un nombre de jours défini sont clôturées quel que soit le profit ou la perte actuels.",
+"risk.row4_h":"Plafond d'exposition au niveau du portefeuille",
+"risk.row4_p":"Un plafond sur la part de votre compte pouvant être exposée à la fois, vérifié avant chaque nouvelle opération.",
+"risk.row5_h":"Interrupteur d'arrêt d'urgence",
+"risk.row5_p":"Une seule commande arrête immédiatement toute activité automatisée sur tous les courtiers connectés.",
+"custody.title":"Votre argent reste sur votre propre compte de courtage",
+"custody.sub":"OrderTrade AI est une couche de signaux et d'exécution, pas un dépositaire.",
+"custody.point1_h":"Nous ne détenons ni ne mutualisons jamais les fonds",
+"custody.point1_p":"Chaque opération est passée directement sur votre propre compte Alpaca, Binance, eToro ou MT4/5 à l'aide de vos propres clés API.",
+"custody.point2_h":"Démo d'abord, réel quand vous êtes prêt",
+"custody.point2_p":"Chaque compte démarre en mode simulé/démo, sans argent réel en jeu. Quand vous êtes prêt, vous pouvez activer le trading réel pour n'importe quel courtier connecté via un flux de confirmation dédié dans les paramètres de votre compte.",
+"custody.point3_h":"Stockage chiffré des identifiants",
+"custody.point3_p":"Les clés API du courtier sont chiffrées au repos et déchiffrées uniquement au moment où une requête est effectuée sur votre propre compte.",
+"pricing.title":"Tarifs",
+"pricing.sub":"Un seul plan. Toutes les classes d'actifs et toutes les fonctionnalités de gestion des risques incluses.",
+"pricing.per_month":"/ mois",
+"pricing.trial_note":"Essai gratuit de 14 jours, annulez à tout moment avant son terme et vous ne serez pas facturé.",
+"pricing.feature1":"Signaux actions, crypto, forex et matières premières",
+"pricing.feature2":"Protection stop-loss, take-profit et sortie en trailing stop",
+"pricing.feature3":"Plafond d'exposition au niveau du portefeuille et interrupteur d'arrêt d'urgence",
+"pricing.feature4":"Utilisez votre propre courtier, vos fonds ne quittent jamais votre compte",
+"pricing.feature5":"Gérez ou annulez votre facturation à tout moment",
+"pricing.fine":"Facturé mensuellement via Stripe. Sans engagement à long terme.",
+"faq.label":"FAQ",
+"faq.title":"Questions fréquentes",
+"faq.sub":"Les questions qui reviennent avant de connecter un courtier.",
+"faq.q1":"Est-ce un conseil financier ?",
+"faq.a1":"Non. OrderTrade AI vous montre des signaux notés et le raisonnement qui les sous-tend, et c'est à vous de décider d'agir ou non. Ce n'est pas un conseiller en investissement agréé, et rien ici ne constitue une recommandation d'achat ou de vente d'un titre, d'une crypto-monnaie ou d'un instrument particulier. Le trading comporte des risques, y compris de perte.",
+"faq.q2":"Puis-je trader avec de l'argent réel, ou est-ce uniquement de la démo ?",
+"faq.a2":"Chaque compte démarre en mode démo, sans argent réel en jeu. Quand vous êtes prêt, vous pouvez activer le trading réel depuis les paramètres de votre compte : lisez l'avertissement de risque, confirmez que vous comprenez qu'un bug ou une panne du courtier pourrait causer une perte réelle, et activez-le courtier par courtier. C'est une décision délibérée que vous prenez, pas quelque chose qui se produit par défaut.",
+"faq.q3":"De quels courtiers ai-je besoin ?",
+"faq.a3":"Alpaca pour les actions américaines, Binance pour la crypto, et eToro ou MT4/5 pour le forex et les matières premières. Tout commence en mode démo ou simulé, avec le trading en direct disponible si vous l'activez. Connectez ceux qui correspondent aux classes d'actifs pour lesquelles vous voulez des signaux. Vous n'avez pas besoin des quatre, et vous pouvez en ajouter d'autres plus tard depuis votre tableau de bord.",
+"faq.q4":"Détenez-vous ou touchez-vous jamais mon argent ?",
+"faq.a4":"Non. Chaque opération est passée directement sur votre propre compte de courtage connecté à l'aide de vos propres clés API, qui sont chiffrées au repos. OrderTrade AI est une couche de signaux et d'exécution, pas un dépositaire ; voir « Votre argent reste sur votre propre compte de courtage » ci-dessus.",
+"faq.q5":"Que se passe-t-il après l'essai gratuit de 14 jours ?",
+"faq.a5":"Si vous n'annulez pas avant la fin de l'essai, la facturation se poursuit à 39 $/mois via Stripe. Vous pouvez gérer ou annuler votre abonnement à tout moment depuis les paramètres de votre compte. Il n'y a pas d'engagement à long terme, et annuler pendant l'essai signifie que vous ne serez jamais facturé.",
+"final.title":"Connectez un courtier et découvrez votre premier signal.",
+"final.sub":"Trading simulé et démo, donc rien n'est en jeu pendant que vous essayez.",
+"footer.copyright":"© 2026 OrderTrade AI. Un produit Speedit Digital Technology.",
+"footer.terms":"Conditions d'utilisation",
+"footer.privacy":"Politique de confidentialité",
+"footer.cookie_prefs":"Préférences relatives aux cookies",
+"footer.contact":"Contact",
+"cookie.text_html":"Nous utilisons Google Analytics pour voir comment les visiteurs utilisent cette page, uniquement après votre accord. Aucun cookie publicitaire, et vous pouvez changer d'avis à tout moment. Consultez notre <a href=\"/app?page=privacy\">Politique de confidentialité</a>.",
+"cookie.reject":"Refuser",
+"cookie.accept":"Accepter"
+},
+de: {
+"nav.sign_in":"Anmelden",
+"nav.start_trial":"Kostenlose Testphase starten",
+"hero.eyebrow":"Standardmäßig Demo-Trading. Live gehen, wenn Sie bereit sind.",
+"hero.h1":"KI-Signale für das Broker-Konto, das Sie bereits haben.",
+"hero.sub":"Verbinden Sie Ihr eigenes Alpaca-, Binance-, eToro- oder MT4/5-Konto. Sehen Sie sich jedes Signal an, bevor etwas ausgeführt wird, und platzieren Sie den Trade selbst.",
+"preview.title":"KI-Entscheidungsmodul, illustrative Vorschau",
+"preview.note":"Tatsächliche Signale hängen von Echtzeit-Marktdaten und Ihren verbundenen Brokern ab.",
+"preview.col_ticker":"Ticker",
+"preview.col_asset_class":"Anlageklasse",
+"preview.col_signal":"Signal",
+"preview.col_confidence":"Konfidenz",
+"preview.col_risk_reward":"Risiko / Ertrag",
+"preview.col_grade":"Bewertung",
+"preview.asset_us_stocks":"US-Aktien",
+"preview.asset_crypto":"Krypto",
+"preview.asset_forex":"Forex",
+"preview.asset_commodities":"Rohstoffe",
+"preview.signal_buy":"Kaufen",
+"preview.signal_wait":"Abwarten",
+"how.title":"So funktioniert es",
+"how.sub":"Drei Schritte zwischen dem Verbinden eines Kontos und der Überprüfung Ihres ersten Signals.",
+"how.step1_h":"Verbinden Sie Ihren eigenen Broker",
+"how.step1_p":"Verknüpfen Sie Alpaca, Binance, eToro oder MT4/5 mit Ihren eigenen API-Schlüsseln. Diese werden verschlüsselt gespeichert und nur entschlüsselt, um in Ihrem eigenen Konto zu handeln. OrderTrade AI bündelt oder verwahrt niemals die Gelder von irgendjemandem.",
+"how.step2_h":"Die KI bewertet Chancen",
+"how.step2_p":"Die Signal-Engine liest Marktdaten über Ihre aktivierten Anlageklassen und erstellt eine bewertete, gerankte Liste, dimensioniert nach dem tatsächlichen Guthaben Ihres verbundenen Kontos.",
+"how.step3_h":"Sie prüfen, dann führen Sie aus",
+"how.step3_p":"Die Vorschau zeigt genau, was gekauft würde und warum. Nichts wird platziert, bis Sie das Bestätigungskästchen anhaken und selbst auf Ausführen klicken.",
+"how.demo_caption":"LIVE-VORSCHAU: BROKER VERBINDEN",
+"how.demo_broker_label":"Alpaca (US-Aktien, Paper)",
+"how.demo_not_connected":"Nicht verbunden",
+"how.demo_connected":"Verbunden",
+"how.demo_key_label":"API-Schlüssel",
+"how.demo_secret_label":"API-Secret",
+"how.demo_save":"Speichern",
+"how.demo_verifying":"Alpaca-Verbindung wird überprüft...",
+"how.demo_success":"Alpaca (US-Aktien, Paper) verbunden.",
+"how.demo2_caption":"LIVE-VORSCHAU: ANLAGEKLASSEN WÄHLEN, VORSCHAU UND AUSFÜHREN",
+"how.demo2_assets_label":"Für welche Märkte möchten Sie Signale?",
+"how.demo2_chip_stocks":"US-Aktien",
+"how.demo2_chip_crypto":"Krypto",
+"how.demo2_chip_forex":"Forex",
+"how.demo2_chip_commodities":"Rohstoffe",
+"how.demo2_save":"Einstellungen speichern",
+"how.demo2_saved":"Einstellungen gespeichert.",
+"how.demo2_preview_button":"KI-Vorschau",
+"how.demo2_scanning":"Marktdaten werden analysiert...",
+"how.demo2_warn":"2 Trades bereit. Nichts wird ausgeführt, bis Sie bestätigen.",
+"how.demo2_confirm_label":"Ich verstehe und möchte diese Trades platzieren",
+"how.demo2_execute_button":"Ausführen",
+"how.demo2_placing":"Orders werden platziert...",
+"how.demo2_executed":"2 Orders auf Ihren verbundenen Konten platziert.",
+"assets.title":"Ein Dashboard, vier Anlageklassen",
+"assets.sub":"Jede Anlageklasse läuft durch dieselbe Signal-Engine, mit eigenen Positionsgrenzen und Broker-Verbindung.",
+"assets.stocks_tag":"Aktien",
+"assets.stocks_h":"US-Aktien über Alpaca",
+"assets.stocks_p":"Paper-Trading-Konto. Vollständiger Orderverlauf sowie Stop-Loss-, Take-Profit- und Trailing-Exit-Abdeckung.",
+"assets.crypto_tag":"Krypto",
+"assets.crypto_h":"Binance Testnet",
+"assets.crypto_p":"Positionsgrößenbestimmung basierend auf dem tatsächlichen Wallet-Guthaben, nicht nur dem eigenen Trade-Log dieses Dashboards.",
+"assets.forex_tag":"Forex",
+"assets.forex_h":"eToro-Demo, MT4/5",
+"assets.forex_p":"Hebel und Stop-Loss-Rate werden gemäß den Broker-Regeln für Währungspaare gehandhabt.",
+"assets.commodities_tag":"Rohstoffe",
+"assets.commodities_h":"eToro-Demo, MT4/5",
+"assets.commodities_p":"Gold, Öl und andere CFD-Instrumente neben Ihren Forex-Positionen.",
+"risk.title":"Das Risikomanagement läuft im Hintergrund",
+"risk.sub":"Schutz, der gilt, sobald eine Position offen ist, nicht nur beim Einstieg.",
+"risk.row1_h":"Stop-Loss und Take-Profit",
+"risk.row1_p":"Werden aus der tatsächlichen Preisstruktur zum Handelszeitpunkt festgelegt, nicht aus einer festen Prozent-Schätzung.",
+"risk.row2_h":"Trailing-Profit-Lock und Break-Even-Ratchet",
+"risk.row2_p":"Gibt weniger von einem offenen Gewinn zurück, wenn sich eine Position zu Ihren Gunsten entwickelt, mit teilweiser Gewinnmitnahme auf dem Weg dorthin.",
+"risk.row3_h":"Harter zeitbasierter Ausstieg",
+"risk.row3_p":"Positionen, die länger als eine festgelegte Anzahl von Tagen gehalten werden, werden unabhängig vom aktuellen Gewinn oder Verlust geschlossen.",
+"risk.row4_h":"Obergrenze für das Engagement auf Portfolioebene",
+"risk.row4_p":"Eine Obergrenze dafür, wie viel Ihres Kontos gleichzeitig einem Risiko ausgesetzt sein darf, geprüft vor jedem neuen Trade.",
+"risk.row5_h":"Notausschalter",
+"risk.row5_p":"Ein einziger Schalter stoppt sofort jede automatisierte Aktivität über alle verbundenen Broker hinweg.",
+"custody.title":"Ihr Geld bleibt auf Ihrem eigenen Broker-Konto",
+"custody.sub":"OrderTrade AI ist eine Signal- und Ausführungsebene, kein Verwahrer.",
+"custody.point1_h":"Wir verwahren oder bündeln niemals Gelder",
+"custody.point1_p":"Jeder Trade wird direkt auf Ihrem eigenen Alpaca-, Binance-, eToro- oder MT4/5-Konto mit Ihren eigenen API-Schlüsseln platziert.",
+"custody.point2_h":"Erst Demo, live wenn Sie bereit sind",
+"custody.point2_p":"Jedes Konto startet im Paper-/Demo-Modus, ohne echtes Geld im Risiko. Wenn Sie bereit sind, können Sie den Live-Handel für jeden verbundenen Broker über einen eigenen Bestätigungsablauf in Ihren Kontoeinstellungen aktivieren.",
+"custody.point3_h":"Verschlüsselte Speicherung von Zugangsdaten",
+"custody.point3_p":"Broker-API-Schlüssel werden verschlüsselt gespeichert und nur in dem Moment entschlüsselt, in dem eine Anfrage für Ihr eigenes Konto gestellt wird.",
+"pricing.title":"Preise",
+"pricing.sub":"Ein Plan. Alle Anlageklassen und alle Risikomanagement-Funktionen inklusive.",
+"pricing.per_month":"/ Monat",
+"pricing.trial_note":"14 Tage kostenlose Testphase, jederzeit vor Ablauf kündbar, dann wird Ihnen nichts berechnet.",
+"pricing.feature1":"Signale für Aktien, Krypto, Forex und Rohstoffe",
+"pricing.feature2":"Stop-Loss-, Take-Profit- und Trailing-Exit-Schutz",
+"pricing.feature3":"Engagement-Obergrenze auf Portfolioebene und Notausschalter",
+"pricing.feature4":"Nutzen Sie Ihren eigenen Broker, Ihre Gelder verlassen nie Ihr Konto",
+"pricing.feature5":"Verwalten oder kündigen Sie Ihre Abrechnung jederzeit",
+"pricing.fine":"Monatliche Abrechnung über Stripe. Keine langfristige Vertragsbindung.",
+"faq.label":"FAQ",
+"faq.title":"Häufig gestellte Fragen",
+"faq.sub":"Die Fragen, die vor dem Verbinden eines Brokers aufkommen.",
+"faq.q1":"Ist das eine Finanzberatung?",
+"faq.a1":"Nein. OrderTrade AI zeigt Ihnen bewertete Signale und die Begründung dahinter, und Sie entscheiden, ob Sie danach handeln. Es handelt sich nicht um einen registrierten Anlageberater, und nichts hier ist eine Empfehlung, ein bestimmtes Wertpapier, eine Kryptowährung oder ein Instrument zu kaufen oder zu verkaufen. Trading ist mit Risiken verbunden, einschließlich Verlustrisiko.",
+"faq.q2":"Kann ich mit echtem Geld handeln, oder ist es nur Demo?",
+"faq.a2":"Jedes Konto startet im Demo-Modus, ohne echtes Geld im Risiko. Wenn Sie bereit sind, können Sie den Live-Handel in Ihren Kontoeinstellungen aktivieren: Lesen Sie den Risikohinweis, bestätigen Sie, dass Ihnen bewusst ist, dass ein Fehler oder ein Broker-Ausfall zu einem echten Verlust führen kann, und aktivieren Sie es Broker für Broker. Es ist eine bewusste Entscheidung, die Sie selbst treffen, kein Standardverhalten.",
+"faq.q3":"Welche Broker brauche ich?",
+"faq.a3":"Alpaca für US-Aktien, Binance für Krypto, und eToro oder MT4/5 für Forex und Rohstoffe. Alles startet im Demo- oder Paper-Modus, Live-Trading ist verfügbar, sobald Sie es aktivieren. Verbinden Sie diejenigen, die zu den Anlageklassen passen, für die Sie Signale möchten. Sie brauchen nicht alle vier und können später weitere über Ihr Dashboard hinzufügen.",
+"faq.q4":"Verwahren oder berühren Sie jemals mein Geld?",
+"faq.a4":"Nein. Jeder Trade wird direkt auf Ihrem eigenen verbundenen Broker-Konto mit Ihren eigenen API-Schlüsseln platziert, die verschlüsselt gespeichert werden. OrderTrade AI ist eine Signal- und Ausführungsebene, kein Verwahrer; siehe „Ihr Geld bleibt auf Ihrem eigenen Broker-Konto“ oben.",
+"faq.q5":"Was passiert nach der 14-tägigen kostenlosen Testphase?",
+"faq.a5":"Wenn Sie nicht vor Ablauf der Testphase kündigen, läuft die Abrechnung mit 39 $/Monat über Stripe weiter. Sie können Ihr Abonnement jederzeit in Ihren Kontoeinstellungen verwalten oder kündigen. Es gibt keine langfristige Vertragsbindung, und eine Kündigung während der Testphase bedeutet, dass Ihnen nie etwas berechnet wird.",
+"final.title":"Verbinden Sie einen Broker und sehen Sie Ihr erstes Signal.",
+"final.sub":"Paper- und Demo-Trading, sodass beim Ausprobieren nichts auf dem Spiel steht.",
+"footer.copyright":"© 2026 OrderTrade AI. Ein Produkt von Speedit Digital Technology.",
+"footer.terms":"Nutzungsbedingungen",
+"footer.privacy":"Datenschutzerklärung",
+"footer.cookie_prefs":"Cookie-Einstellungen",
+"footer.contact":"Kontakt",
+"cookie.text_html":"Wir verwenden Google Analytics, um zu sehen, wie Besucher diese Seite nutzen, aber nur nachdem Sie zugestimmt haben. Keine Werbe-Cookies, und Sie können Ihre Meinung jederzeit ändern. Siehe unsere <a href=\"/app?page=privacy\">Datenschutzerklärung</a>.",
+"cookie.reject":"Ablehnen",
+"cookie.accept":"Akzeptieren"
+},
+zh: {
+"nav.sign_in":"登录",
+"nav.start_trial":"开始免费试用",
+"hero.eyebrow":"默认模拟交易。准备好后切换实盘。",
+"hero.h1":"为您已有的券商账户提供 AI 交易信号。",
+"hero.sub":"连接您自己的 Alpaca、Binance、eToro 或 MT4/5 账户。在任何操作执行前预览每一条信号,然后由您自己下单。",
+"preview.title":"AI 决策引擎,示意预览",
+"preview.note":"实际信号取决于实时市场数据和您已连接的券商。",
+"preview.col_ticker":"代码",
+"preview.col_asset_class":"资产类别",
+"preview.col_signal":"信号",
+"preview.col_confidence":"置信度",
+"preview.col_risk_reward":"风险/收益比",
+"preview.col_grade":"评级",
+"preview.asset_us_stocks":"美股",
+"preview.asset_crypto":"加密货币",
+"preview.asset_forex":"外汇",
+"preview.asset_commodities":"大宗商品",
+"preview.signal_buy":"买入",
+"preview.signal_wait":"观望",
+"how.title":"使用方式",
+"how.sub":"从连接账户到查看第一条信号,只需三步。",
+"how.step1_h":"连接您自己的券商",
+"how.step1_p":"使用您自己的 API 密钥关联 Alpaca、Binance、eToro 或 MT4/5。密钥在静态存储时会被加密,仅在对您自己的账户执行操作时才会解密。OrderTrade AI 绝不会汇集或持有任何人的资金。",
+"how.step2_h":"AI 为机会评分",
+"how.step2_p":"信号引擎会读取您已启用资产类别的市场数据,生成一份分级排序的列表,并根据您所连接账户的真实余额确定仓位大小。",
+"how.step3_h":"您审核,然后执行",
+"how.step3_p":"预览会准确显示将要买入的内容及原因。在您勾选确认框并亲自点击执行之前,不会下达任何订单。",
+"how.demo_caption":"实时预览:连接经纪商",
+"how.demo_broker_label":"Alpaca(美股,模拟盘)",
+"how.demo_not_connected":"未连接",
+"how.demo_connected":"已连接",
+"how.demo_key_label":"API 密钥",
+"how.demo_secret_label":"API 密钥密文",
+"how.demo_save":"保存",
+"how.demo_verifying":"正在验证 Alpaca 连接...",
+"how.demo_success":"Alpaca(美股,模拟盘)已连接。",
+"how.demo2_caption":"实时预览:选择资产、预览并执行",
+"how.demo2_assets_label":"您想获取哪些市场的信号?",
+"how.demo2_chip_stocks":"美股",
+"how.demo2_chip_crypto":"加密货币",
+"how.demo2_chip_forex":"外汇",
+"how.demo2_chip_commodities":"大宗商品",
+"how.demo2_save":"保存设置",
+"how.demo2_saved":"设置已保存。",
+"how.demo2_preview_button":"AI 预览",
+"how.demo2_scanning":"正在扫描市场数据...",
+"how.demo2_warn":"2 笔交易已就绪。在您确认之前不会执行任何操作。",
+"how.demo2_confirm_label":"我理解并希望执行这些交易",
+"how.demo2_execute_button":"执行",
+"how.demo2_placing":"正在下单...",
+"how.demo2_executed":"已在您连接的账户上下达 2 笔订单。",
+"assets.title":"一个仪表盘,四大资产类别",
+"assets.sub":"每个资产类别都经过同一套信号引擎处理,并拥有各自的仓位上限和券商连接。",
+"assets.stocks_tag":"股票",
+"assets.stocks_h":"通过 Alpaca 交易美股",
+"assets.stocks_p":"模拟交易账户。提供完整的订单历史,以及止损、止盈和移动止损保护。",
+"assets.crypto_tag":"加密货币",
+"assets.crypto_h":"Binance 测试网",
+"assets.crypto_p":"根据钱包实际余额确定仓位大小,而不仅仅依据本仪表盘自身的交易记录。",
+"assets.forex_tag":"外汇",
+"assets.forex_h":"eToro 演示账户, MT4/5",
+"assets.forex_p":"货币对的杠杆和止损比例按券商规则处理。",
+"assets.commodities_tag":"大宗商品",
+"assets.commodities_h":"eToro 演示账户, MT4/5",
+"assets.commodities_p":"黄金、原油等差价合约(CFD)工具与您的外汇仓位并列展示。",
+"risk.title":"风险管理在后台持续运行",
+"risk.sub":"从建仓那一刻起持续生效的保护机制,而不仅仅在入场时起作用。",
+"risk.row1_h":"止损与止盈",
+"risk.row1_p":"根据交易时的真实价格结构设定,而非固定百分比的估算值。",
+"risk.row2_h":"移动止盈锁定与保本调整",
+"risk.row2_p":"随着仓位朝有利方向移动,回吐的浮动盈利会越来越少,并沿途进行部分止盈。",
+"risk.row3_h":"强制限时离场",
+"risk.row3_p":"持仓超过设定天数后将被平仓,无论当前是盈利还是亏损。",
+"risk.row4_h":"投资组合层面的风险敞口上限",
+"risk.row4_p":"限制账户在任一时刻可承担的最大风险,在每笔新交易前都会进行检查。",
+"risk.row5_h":"一键熔断开关",
+"risk.row5_p":"一个控制开关即可立即停止所有已连接券商上的自动化操作。",
+"custody.title":"您的资金始终留在您自己的券商账户中",
+"custody.sub":"OrderTrade AI 是一个信号与执行层,而非资金托管方。",
+"custody.point1_h":"我们绝不持有或汇集资金",
+"custody.point1_p":"每笔交易都使用您自己的 API 密钥,直接在您自己的 Alpaca、Binance、eToro 或 MT4/5 账户上执行。",
+"custody.point2_h":"先模拟,准备好后再实盘",
+"custody.point2_p":"每个账户都从模拟/演示模式开始,不涉及真实资金风险。准备好后,您可以通过账户设置中的专用确认流程,为任何已连接的券商开启实盘交易。",
+"custody.point3_h":"凭证加密存储",
+"custody.point3_p":"券商 API 密钥在静态存储时会被加密,仅在对您自己的账户发起请求的那一刻才会解密。",
+"pricing.title":"价格",
+"pricing.sub":"单一套餐,涵盖所有资产类别和全部风险管理功能。",
+"pricing.per_month":"/ 月",
+"pricing.trial_note":"14 天免费试用,试用期结束前随时取消,均不会产生任何费用。",
+"pricing.feature1":"股票、加密货币、外汇和大宗商品信号",
+"pricing.feature2":"止损、止盈和移动止损保护",
+"pricing.feature3":"投资组合层面的风险敞口上限和一键熔断开关",
+"pricing.feature4":"使用您自己的券商,资金绝不离开您的账户",
+"pricing.feature5":"随时管理或取消您的账单",
+"pricing.fine":"通过 Stripe 按月计费,无需长期合约。",
+"faq.label":"常见问题",
+"faq.title":"常见问题",
+"faq.sub":"在连接券商之前,大家常问的问题。",
+"faq.q1":"这是投资建议吗?",
+"faq.a1":"不是。OrderTrade AI 会向您展示分级信号及其背后的推理依据,是否据此操作由您自己决定。它不是注册投资顾问,本页任何内容均不构成买卖任何特定证券、加密货币或金融工具的建议。交易存在风险,包括亏损的可能。",
+"faq.q2":"我可以用真实资金交易,还是只能模拟?",
+"faq.a2":"每个账户都从模拟模式开始,不涉及真实资金风险。准备好后,您可以在账户设置中开启实盘交易:阅读风险提示,确认您理解程序错误或券商故障可能造成真实亏损,并逐个券商开启。这是您主动做出的决定,而不是默认发生的事情。",
+"faq.q3":"我需要哪些券商账户?",
+"faq.a3":"美股使用 Alpaca,加密货币使用 Binance,外汇和大宗商品使用 eToro 或 MT4/5。所有账户默认从模拟盘开始,开启后可切换为实盘交易。您可以只连接与您想要获取信号的资产类别相匹配的账户,不必四个都开通,之后也可以随时在仪表盘中添加更多。",
+"faq.q4":"你们会持有或动用我的资金吗?",
+"faq.a4":"不会。每笔交易都使用您自己的 API 密钥,直接在您自己已连接的券商账户上执行,密钥在静态存储时会被加密。OrderTrade AI 是一个信号与执行层,而非资金托管方;详见上文“您的资金始终留在您自己的券商账户中”。",
+"faq.q5":"14 天免费试用结束后会怎样?",
+"faq.a5":"如果您没有在试用期结束前取消,系统将通过 Stripe 按每月 39 美元继续计费。您可以随时在账户设置中管理或取消订阅。没有长期合约,在试用期内取消则绝不会产生任何费用。",
+"final.title":"连接一个券商账户,查看您的第一条信号。",
+"final.sub":"模拟盘和演示交易,试用过程中不会有任何真实资金风险。",
+"footer.copyright":"© 2026 OrderTrade AI。Speedit Digital Technology 出品。",
+"footer.terms":"服务条款",
+"footer.privacy":"隐私政策",
+"footer.cookie_prefs":"Cookie 偏好设置",
+"footer.contact":"联系我们",
+"cookie.text_html":"我们仅在您同意后使用 Google Analytics 来了解访客如何使用本页面。不使用广告类 Cookie,您可以随时更改您的选择。请参阅我们的<a href=\"/app?page=privacy\">隐私政策</a>。",
+"cookie.reject":"拒绝",
+"cookie.accept":"接受"
+},
+id: {
+"nav.sign_in":"Masuk",
+"nav.start_trial":"Mulai Uji Coba Gratis",
+"hero.eyebrow":"Perdagangan demo secara default. Aktifkan langsung saat Anda siap.",
+"hero.h1":"Sinyal AI untuk akun broker yang sudah Anda miliki.",
+"hero.sub":"Hubungkan akun Alpaca, Binance, eToro, atau MT4/5 Anda sendiri. Lihat pratinjau setiap sinyal sebelum apa pun dieksekusi, lalu lakukan transaksi sendiri.",
+"preview.title":"AI Decision Engine, pratinjau ilustratif",
+"preview.note":"Sinyal sebenarnya bergantung pada data pasar langsung dan broker yang Anda hubungkan.",
+"preview.col_ticker":"Ticker",
+"preview.col_asset_class":"Kelas Aset",
+"preview.col_signal":"Sinyal",
+"preview.col_confidence":"Keyakinan",
+"preview.col_risk_reward":"Risiko / Imbalan",
+"preview.col_grade":"Grade",
+"preview.asset_us_stocks":"Saham AS",
+"preview.asset_crypto":"Kripto",
+"preview.asset_forex":"Forex",
+"preview.asset_commodities":"Komoditas",
+"preview.signal_buy":"Beli",
+"preview.signal_wait":"Tunggu",
+"how.title":"Cara kerjanya",
+"how.sub":"Tiga langkah antara menghubungkan akun dan meninjau sinyal pertama Anda.",
+"how.step1_h":"Hubungkan broker Anda sendiri",
+"how.step1_p":"Tautkan Alpaca, Binance, eToro, atau MT4/5 dengan kunci API Anda sendiri. Kunci tersebut dienkripsi saat disimpan dan hanya pernah didekripsi untuk bertindak atas akun Anda sendiri. OrderTrade AI tidak pernah mengumpulkan atau menahan dana siapa pun.",
+"how.step2_h":"AI menilai peluang",
+"how.step2_p":"Mesin sinyal membaca data pasar di seluruh kelas aset yang Anda aktifkan dan menghasilkan daftar berperingkat dan bernilai, disesuaikan dengan saldo akun terhubung Anda yang sebenarnya.",
+"how.step3_h":"Anda meninjau, lalu mengeksekusi",
+"how.step3_p":"Pratinjau menunjukkan persis apa yang akan dibeli dan mengapa. Tidak ada yang ditempatkan sampai Anda mencentang kotak konfirmasi dan mengklik Execute sendiri.",
+"how.demo_caption":"PRATINJAU LANGSUNG: MENGHUBUNGKAN BROKER",
+"how.demo_broker_label":"Alpaca (Saham AS, Paper)",
+"how.demo_not_connected":"Belum terhubung",
+"how.demo_connected":"Terhubung",
+"how.demo_key_label":"Kunci API",
+"how.demo_secret_label":"Rahasia API",
+"how.demo_save":"Simpan",
+"how.demo_verifying":"Memverifikasi koneksi Alpaca...",
+"how.demo_success":"Alpaca (Saham AS, Paper) terhubung.",
+"how.demo2_caption":"PRATINJAU LANGSUNG: PILIH ASET, PRATINJAU, DAN EKSEKUSI",
+"how.demo2_assets_label":"Untuk pasar mana Anda ingin sinyal?",
+"how.demo2_chip_stocks":"Saham AS",
+"how.demo2_chip_crypto":"Kripto",
+"how.demo2_chip_forex":"Forex",
+"how.demo2_chip_commodities":"Komoditas",
+"how.demo2_save":"Simpan pengaturan",
+"how.demo2_saved":"Pengaturan disimpan.",
+"how.demo2_preview_button":"Pratinjau AI",
+"how.demo2_scanning":"Memindai data pasar...",
+"how.demo2_warn":"2 transaksi siap. Tidak ada yang dieksekusi sebelum Anda konfirmasi.",
+"how.demo2_confirm_label":"Saya mengerti dan ingin melakukan transaksi ini",
+"how.demo2_execute_button":"Eksekusi",
+"how.demo2_placing":"Mengirim order...",
+"how.demo2_executed":"2 order dikirim ke akun Anda yang terhubung.",
+"assets.title":"Satu dasbor, empat kelas aset",
+"assets.sub":"Setiap kelas aset berjalan melalui mesin sinyal yang sama, dengan batas posisi dan koneksi broker masing-masing.",
+"assets.stocks_tag":"Saham",
+"assets.stocks_h":"Ekuitas AS via Alpaca",
+"assets.stocks_p":"Akun perdagangan paper. Riwayat order lengkap serta cakupan stop-loss, take-profit, dan trailing-exit.",
+"assets.crypto_tag":"Kripto",
+"assets.crypto_h":"Binance testnet",
+"assets.crypto_p":"Ukuran posisi berbasis saldo dompet, bukan hanya log transaksi dasbor ini sendiri.",
+"assets.forex_tag":"Forex",
+"assets.forex_h":"Demo eToro, MT4/5",
+"assets.forex_p":"Leverage dan rasio stop-loss ditangani sesuai aturan broker untuk pasangan mata uang.",
+"assets.commodities_tag":"Komoditas",
+"assets.commodities_h":"Demo eToro, MT4/5",
+"assets.commodities_p":"Emas, minyak, dan instrumen CFD lainnya bersama posisi forex Anda.",
+"risk.title":"Manajemen risiko berjalan di latar belakang",
+"risk.sub":"Perlindungan yang berlaku begitu posisi terbuka, tidak hanya saat masuk.",
+"risk.row1_h":"Stop-loss dan take-profit",
+"risk.row1_p":"Ditetapkan dari struktur harga nyata pada saat transaksi, bukan perkiraan persentase tetap.",
+"risk.row2_h":"Penguncian trailing-profit dan penyesuaian break-even",
+"risk.row2_p":"Mengembalikan lebih sedikit keuntungan terbuka saat posisi bergerak menguntungkan Anda, dengan pengambilan untung sebagian di sepanjang jalan.",
+"risk.row3_h":"Keluar paksa berbasis waktu",
+"risk.row3_p":"Posisi yang ditahan melebihi jumlah hari yang ditentukan akan ditutup terlepas dari untung atau rugi saat ini.",
+"risk.row4_h":"Batas eksposur tingkat portofolio",
+"risk.row4_p":"Batas atas seberapa banyak akun Anda yang bisa berisiko sekaligus, diperiksa sebelum setiap transaksi baru.",
+"risk.row5_h":"Kill switch",
+"risk.row5_p":"Satu kontrol menghentikan semua aktivitas otomatis di semua broker yang terhubung secara langsung.",
+"custody.title":"Uang Anda tetap berada di akun broker Anda sendiri",
+"custody.sub":"OrderTrade AI adalah lapisan sinyal dan eksekusi, bukan kustodian.",
+"custody.point1_h":"Kami tidak pernah menahan atau mengumpulkan dana",
+"custody.point1_p":"Setiap transaksi ditempatkan langsung di akun Alpaca, Binance, eToro, atau MT4/5 Anda sendiri menggunakan kunci API Anda sendiri.",
+"custody.point2_h":"Demo dulu, langsung saat Anda siap",
+"custody.point2_p":"Setiap akun dimulai dalam mode paper/demo, tanpa risiko uang sungguhan. Saat Anda siap, Anda dapat mengaktifkan perdagangan langsung untuk broker mana pun yang terhubung melalui alur konfirmasi khusus di pengaturan akun Anda.",
+"custody.point3_h":"Penyimpanan kredensial terenkripsi",
+"custody.point3_p":"Kunci API broker dienkripsi saat disimpan dan hanya didekripsi pada saat permintaan dibuat atas akun Anda sendiri.",
+"pricing.title":"Harga",
+"pricing.sub":"Satu paket. Semua kelas aset dan semua fitur manajemen risiko termasuk.",
+"pricing.per_month":"/ bulan",
+"pricing.trial_note":"Uji coba gratis 14 hari, batalkan kapan saja sebelum berakhir dan Anda tidak akan dikenai biaya.",
+"pricing.feature1":"Sinyal saham, kripto, forex, dan komoditas",
+"pricing.feature2":"Perlindungan stop-loss, take-profit, dan trailing-exit",
+"pricing.feature3":"Batas eksposur tingkat portofolio dan kill switch",
+"pricing.feature4":"Gunakan broker Anda sendiri, dana Anda tidak pernah meninggalkan akun Anda",
+"pricing.feature5":"Kelola atau batalkan penagihan Anda kapan saja",
+"pricing.fine":"Ditagih bulanan melalui Stripe. Tanpa kontrak jangka panjang.",
+"faq.label":"FAQ",
+"faq.title":"Pertanyaan yang sering diajukan",
+"faq.sub":"Pertanyaan yang muncul sebelum menghubungkan broker.",
+"faq.q1":"Apakah ini nasihat keuangan?",
+"faq.a1":"Tidak. OrderTrade AI menunjukkan sinyal bernilai kepada Anda beserta alasan di baliknya, dan Anda memutuskan apakah akan bertindak berdasarkan itu. Ini bukan penasihat investasi terdaftar, dan tidak ada apa pun di sini yang merupakan rekomendasi untuk membeli atau menjual sekuritas, koin, atau instrumen tertentu. Trading melibatkan risiko, termasuk risiko kerugian.",
+"faq.q2":"Bisakah saya berdagang dengan uang sungguhan, atau hanya demo?",
+"faq.a2":"Setiap akun dimulai dalam mode demo, tanpa risiko uang sungguhan. Saat Anda siap, Anda dapat mengaktifkan perdagangan langsung dari pengaturan akun Anda: baca pengungkapan risiko, konfirmasi bahwa Anda memahami bahwa bug atau gangguan broker dapat menyebabkan kerugian sungguhan, dan aktifkan satu per satu broker. Ini adalah keputusan yang sengaja Anda buat, bukan sesuatu yang terjadi secara default.",
+"faq.q3":"Broker apa yang saya butuhkan?",
+"faq.a3":"Alpaca untuk saham AS, Binance untuk kripto, dan eToro atau MT4/5 untuk forex dan komoditas. Semuanya dimulai dalam mode demo atau paper, dengan trading langsung tersedia setelah Anda mengaktifkannya. Hubungkan yang sesuai dengan kelas aset yang ingin Anda dapatkan sinyalnya. Anda tidak perlu keempatnya, dan Anda dapat menambahkan lebih banyak nanti dari dasbor Anda.",
+"faq.q4":"Apakah Anda pernah menahan atau menyentuh uang saya?",
+"faq.a4":"Tidak. Setiap transaksi ditempatkan langsung di akun broker terhubung Anda sendiri menggunakan kunci API Anda sendiri, yang dienkripsi saat disimpan. OrderTrade AI adalah lapisan sinyal dan eksekusi, bukan kustodian; lihat \"Uang Anda tetap berada di akun broker Anda sendiri\" di atas.",
+"faq.q5":"Apa yang terjadi setelah uji coba gratis 14 hari?",
+"faq.a5":"Jika Anda tidak membatalkan sebelum uji coba berakhir, penagihan berlanjut sebesar $39/bulan melalui Stripe. Anda dapat mengelola atau membatalkan langganan Anda kapan saja dari pengaturan akun Anda. Tidak ada kontrak jangka panjang, dan membatalkan selama masa uji coba berarti Anda tidak akan pernah dikenai biaya.",
+"final.title":"Hubungkan broker dan lihat sinyal pertama Anda.",
+"final.sub":"Perdagangan paper dan demo, jadi tidak ada risiko apa pun saat Anda mencobanya.",
+"footer.copyright":"© 2026 OrderTrade AI. Produk dari Speedit Digital Technology.",
+"footer.terms":"Ketentuan Layanan",
+"footer.privacy":"Kebijakan Privasi",
+"footer.cookie_prefs":"Preferensi cookie",
+"footer.contact":"Kontak",
+"cookie.text_html":"Kami menggunakan Google Analytics untuk melihat bagaimana pengunjung menggunakan halaman ini, hanya setelah Anda menyetujuinya. Tidak ada cookie iklan, dan Anda dapat mengubah pikiran Anda kapan saja. Lihat <a href=\"/app?page=privacy\">Kebijakan Privasi</a> kami.",
+"cookie.reject":"Tolak",
+"cookie.accept":"Terima"
+},
+ms: {
+"nav.sign_in":"Log Masuk",
+"nav.start_trial":"Mulakan Percubaan Percuma",
+"hero.eyebrow":"Dagangan demo secara lalai. Beralih ke langsung apabila anda bersedia.",
+"hero.h1":"Isyarat AI untuk akaun broker yang anda sudah ada.",
+"hero.sub":"Sambungkan akaun Alpaca, Binance, eToro atau MT4/5 anda sendiri. Pratonton setiap isyarat sebelum apa-apa dilaksanakan, kemudian buat dagangan sendiri.",
+"preview.title":"AI Decision Engine, pratonton ilustratif",
+"preview.note":"Isyarat sebenar bergantung pada data pasaran langsung dan broker yang anda sambungkan.",
+"preview.col_ticker":"Ticker",
+"preview.col_asset_class":"Kelas Aset",
+"preview.col_signal":"Isyarat",
+"preview.col_confidence":"Keyakinan",
+"preview.col_risk_reward":"Risiko / Ganjaran",
+"preview.col_grade":"Gred",
+"preview.asset_us_stocks":"Saham AS",
+"preview.asset_crypto":"Kripto",
+"preview.asset_forex":"Forex",
+"preview.asset_commodities":"Komoditi",
+"preview.signal_buy":"Beli",
+"preview.signal_wait":"Tunggu",
+"how.title":"Cara ia berfungsi",
+"how.sub":"Tiga langkah antara menyambungkan akaun dan menyemak isyarat pertama anda.",
+"how.step1_h":"Sambungkan broker anda sendiri",
+"how.step1_p":"Sambungkan Alpaca, Binance, eToro atau MT4/5 dengan kunci API anda sendiri. Kunci tersebut disulitkan semasa disimpan dan hanya dinyahsulit untuk bertindak atas akaun anda sendiri. OrderTrade AI tidak sesekali mengumpul atau menahan dana sesiapa pun.",
+"how.step2_h":"AI menilai peluang",
+"how.step2_p":"Enjin isyarat membaca data pasaran merentasi kelas aset yang anda aktifkan dan menghasilkan senarai bergred dan berpangkat, disesuaikan dengan baki akaun sebenar anda yang disambungkan.",
+"how.step3_h":"Anda semak, kemudian laksanakan",
+"how.step3_p":"Pratonton menunjukkan dengan tepat apa yang akan dibeli dan sebabnya. Tiada apa-apa ditempatkan sehingga anda menandakan kotak pengesahan dan klik Execute sendiri.",
+"how.demo_caption":"PRATONTON LANGSUNG: MENYAMBUNGKAN BROKER",
+"how.demo_broker_label":"Alpaca (Saham AS, Paper)",
+"how.demo_not_connected":"Belum disambungkan",
+"how.demo_connected":"Disambungkan",
+"how.demo_key_label":"Kunci API",
+"how.demo_secret_label":"Rahsia API",
+"how.demo_save":"Simpan",
+"how.demo_verifying":"Mengesahkan sambungan Alpaca...",
+"how.demo_success":"Alpaca (Saham AS, Paper) disambungkan.",
+"how.demo2_caption":"PRATONTON LANGSUNG: PILIH ASET, PRATONTON, DAN LAKSANAKAN",
+"how.demo2_assets_label":"Untuk pasaran mana anda mahukan isyarat?",
+"how.demo2_chip_stocks":"Saham AS",
+"how.demo2_chip_crypto":"Kripto",
+"how.demo2_chip_forex":"Forex",
+"how.demo2_chip_commodities":"Komoditi",
+"how.demo2_save":"Simpan tetapan",
+"how.demo2_saved":"Tetapan disimpan.",
+"how.demo2_preview_button":"Pratonton AI",
+"how.demo2_scanning":"Mengimbas data pasaran...",
+"how.demo2_warn":"2 dagangan sedia. Tiada apa dilaksanakan sehingga anda mengesahkan.",
+"how.demo2_confirm_label":"Saya faham dan mahu membuat dagangan ini",
+"how.demo2_execute_button":"Laksanakan",
+"how.demo2_placing":"Menghantar pesanan...",
+"how.demo2_executed":"2 pesanan dihantar ke akaun anda yang disambungkan.",
+"assets.title":"Satu papan pemuka, empat kelas aset",
+"assets.sub":"Setiap kelas aset melalui enjin isyarat yang sama, dengan had kedudukan dan sambungan broker sendiri.",
+"assets.stocks_tag":"Saham",
+"assets.stocks_h":"Ekuiti AS melalui Alpaca",
+"assets.stocks_p":"Akaun dagangan paper. Sejarah pesanan penuh serta liputan stop-loss, take-profit dan trailing-exit.",
+"assets.crypto_tag":"Kripto",
+"assets.crypto_h":"Binance testnet",
+"assets.crypto_p":"Saiz kedudukan berdasarkan baki dompet, bukan sekadar log dagangan papan pemuka ini sendiri.",
+"assets.forex_tag":"Forex",
+"assets.forex_h":"Demo eToro, MT4/5",
+"assets.forex_p":"Leveraj dan kadar stop-loss dikendalikan mengikut peraturan broker untuk pasangan mata wang.",
+"assets.commodities_tag":"Komoditi",
+"assets.commodities_h":"Demo eToro, MT4/5",
+"assets.commodities_p":"Emas, minyak dan instrumen CFD lain bersama kedudukan forex anda.",
+"risk.title":"Pengurusan risiko berjalan di latar belakang",
+"risk.sub":"Perlindungan yang terpakai sebaik sahaja kedudukan dibuka, bukan hanya semasa masuk.",
+"risk.row1_h":"Stop-loss dan take-profit",
+"risk.row1_p":"Ditetapkan daripada struktur harga sebenar semasa dagangan, bukan anggaran peratusan tetap.",
+"risk.row2_h":"Kunci trailing-profit dan pelarasan pulang modal",
+"risk.row2_p":"Memberikan kembali kurang keuntungan terbuka apabila kedudukan bergerak menguntungkan anda, dengan pengambilan untung separa sepanjang perjalanan.",
+"risk.row3_h":"Keluar wajib berasaskan masa",
+"risk.row3_p":"Kedudukan yang dipegang melebihi bilangan hari yang ditetapkan akan ditutup tanpa mengira untung atau rugi semasa.",
+"risk.row4_h":"Had pendedahan peringkat portfolio",
+"risk.row4_p":"Had ke atas berapa banyak akaun anda boleh berisiko pada satu masa, disemak sebelum setiap dagangan baharu.",
+"risk.row5_h":"Kill switch",
+"risk.row5_p":"Satu kawalan menghentikan semua aktiviti automatik merentasi setiap broker yang disambungkan dengan serta-merta.",
+"custody.title":"Wang anda kekal di akaun broker anda sendiri",
+"custody.sub":"OrderTrade AI adalah lapisan isyarat dan pelaksanaan, bukan penjaga (custodian).",
+"custody.point1_h":"Kami tidak sesekali menahan atau mengumpul dana",
+"custody.point1_p":"Setiap dagangan ditempatkan terus di akaun Alpaca, Binance, eToro atau MT4/5 anda sendiri menggunakan kunci API anda sendiri.",
+"custody.point2_h":"Demo dahulu, langsung apabila anda bersedia",
+"custody.point2_p":"Setiap akaun bermula dalam mod paper/demo, tanpa risiko wang sebenar. Apabila anda bersedia, anda boleh mengaktifkan dagangan langsung untuk mana-mana broker yang disambungkan melalui aliran pengesahan khusus dalam tetapan akaun anda.",
+"custody.point3_h":"Penyimpanan kelayakan disulitkan",
+"custody.point3_p":"Kunci API broker disulitkan semasa disimpan dan hanya dinyahsulit pada saat permintaan dibuat atas akaun anda sendiri.",
+"pricing.title":"Harga",
+"pricing.sub":"Satu pelan. Semua kelas aset dan semua ciri pengurusan risiko termasuk.",
+"pricing.per_month":"/ bulan",
+"pricing.trial_note":"Percubaan percuma 14 hari, batalkan pada bila-bila masa sebelum ia tamat dan anda tidak akan dikenakan bayaran.",
+"pricing.feature1":"Isyarat saham, kripto, forex dan komoditi",
+"pricing.feature2":"Perlindungan stop-loss, take-profit dan trailing-exit",
+"pricing.feature3":"Had pendedahan peringkat portfolio dan kill switch",
+"pricing.feature4":"Gunakan broker anda sendiri, dana anda tidak sesekali meninggalkan akaun anda",
+"pricing.feature5":"Urus atau batalkan pengebilan anda pada bila-bila masa",
+"pricing.fine":"Dibil bulanan melalui Stripe. Tiada kontrak jangka panjang.",
+"faq.label":"FAQ",
+"faq.title":"Soalan lazim",
+"faq.sub":"Soalan yang timbul sebelum menyambungkan broker.",
+"faq.q1":"Adakah ini nasihat kewangan?",
+"faq.a1":"Tidak. OrderTrade AI menunjukkan kepada anda isyarat bergred serta rasional di sebaliknya, dan anda yang memutuskan sama ada untuk bertindak ke atasnya. Ia bukan penasihat pelaburan berdaftar, dan tiada apa-apa di sini yang merupakan cadangan untuk membeli atau menjual mana-mana sekuriti, syiling atau instrumen tertentu. Dagangan melibatkan risiko, termasuk risiko kerugian.",
+"faq.q2":"Bolehkah saya berdagang dengan wang sebenar, atau hanya demo?",
+"faq.a2":"Setiap akaun bermula dalam mod demo, tanpa risiko wang sebenar. Apabila anda bersedia, anda boleh mengaktifkan dagangan langsung daripada tetapan akaun anda: baca pendedahan risiko, sahkan anda faham bahawa pepijat atau gangguan broker boleh menyebabkan kerugian sebenar, dan aktifkan broker demi broker. Ini adalah keputusan yang anda buat secara sengaja, bukan sesuatu yang berlaku secara lalai.",
+"faq.q3":"Broker apakah yang saya perlukan?",
+"faq.a3":"Alpaca untuk saham AS, Binance untuk kripto, dan eToro atau MT4/5 untuk forex dan komoditi. Semuanya bermula dalam mod demo atau paper, dengan dagangan langsung tersedia sebaik sahaja anda mengaktifkannya. Sambungkan mana-mana yang sepadan dengan kelas aset yang anda mahukan isyarat. Anda tidak perlu keempat-empatnya, dan anda boleh menambah lagi kemudian daripada papan pemuka anda.",
+"faq.q4":"Adakah anda pernah menahan atau menyentuh wang saya?",
+"faq.a4":"Tidak. Setiap dagangan ditempatkan terus di akaun broker anda sendiri yang disambungkan menggunakan kunci API anda sendiri, yang disulitkan semasa disimpan. OrderTrade AI adalah lapisan isyarat dan pelaksanaan, bukan penjaga (custodian); lihat \"Wang anda kekal di akaun broker anda sendiri\" di atas.",
+"faq.q5":"Apa yang berlaku selepas percubaan percuma 14 hari?",
+"faq.a5":"Jika anda tidak membatalkan sebelum percubaan tamat, pengebilan diteruskan pada $39/bulan melalui Stripe. Anda boleh mengurus atau membatalkan langganan anda pada bila-bila masa daripada tetapan akaun anda. Tiada kontrak jangka panjang, dan membatalkan semasa tempoh percubaan bermakna anda tidak akan sesekali dikenakan bayaran.",
+"final.title":"Sambungkan broker dan lihat isyarat pertama anda.",
+"final.sub":"Dagangan paper dan demo, jadi tiada apa-apa berisiko semasa anda mencubanya.",
+"footer.copyright":"© 2026 OrderTrade AI. Produk Speedit Digital Technology.",
+"footer.terms":"Terma Perkhidmatan",
+"footer.privacy":"Dasar Privasi",
+"footer.cookie_prefs":"Keutamaan kuki",
+"footer.contact":"Hubungi",
+"cookie.text_html":"Kami menggunakan Google Analytics untuk melihat bagaimana pelawat menggunakan halaman ini, hanya selepas anda bersetuju. Tiada kuki pengiklanan, dan anda boleh menukar fikiran anda pada bila-bila masa. Lihat <a href=\"/app?page=privacy\">Dasar Privasi</a> kami.",
+"cookie.reject":"Tolak",
+"cookie.accept":"Terima"
+},
+"zh-TW": {
+"nav.sign_in":"登入",
+"nav.start_trial":"開始免費試用",
+"hero.eyebrow":"預設模擬交易。準備好後切換實盤。",
+"hero.h1":"為您已有的券商帳戶提供 AI 交易信號。",
+"hero.sub":"連接您自己的 Alpaca、Binance、eToro 或 MT4/5 帳戶。在任何操作執行前預覽每一條信號,然後由您自己下單。",
+"preview.title":"AI 決策引擎,示意預覽",
+"preview.note":"實際信號取決於即時市場數據和您已連接的券商。",
+"preview.col_ticker":"代碼",
+"preview.col_asset_class":"資產類別",
+"preview.col_signal":"信號",
+"preview.col_confidence":"信心度",
+"preview.col_risk_reward":"風險/收益比",
+"preview.col_grade":"評級",
+"preview.asset_us_stocks":"美股",
+"preview.asset_crypto":"加密貨幣",
+"preview.asset_forex":"外匯",
+"preview.asset_commodities":"大宗商品",
+"preview.signal_buy":"買入",
+"preview.signal_wait":"觀望",
+"how.title":"使用方式",
+"how.sub":"從連接帳戶到查看第一條信號,只需三步。",
+"how.step1_h":"連接您自己的券商",
+"how.step1_p":"使用您自己的 API 金鑰關聯 Alpaca、Binance、eToro 或 MT4/5。金鑰在靜態儲存時會被加密,僅在對您自己的帳戶執行操作時才會解密。OrderTrade AI 絕不會匯集或持有任何人的資金。",
+"how.step2_h":"AI 為機會評分",
+"how.step2_p":"信號引擎會讀取您已啟用資產類別的市場數據,產生一份分級排序的清單,並根據您所連接帳戶的真實餘額決定倉位大小。",
+"how.step3_h":"您審核,然後執行",
+"how.step3_p":"預覽會準確顯示將要買入的內容及原因。在您勾選確認框並親自點擊執行之前,不會下達任何訂單。",
+"how.demo_caption":"即時預覽:連接經紀商",
+"how.demo_broker_label":"Alpaca(美股,模擬盤)",
+"how.demo_not_connected":"未連接",
+"how.demo_connected":"已連接",
+"how.demo_key_label":"API 金鑰",
+"how.demo_secret_label":"API 密鑰",
+"how.demo_save":"儲存",
+"how.demo_verifying":"正在驗證 Alpaca 連接...",
+"how.demo_success":"Alpaca(美股,模擬盤)已連接。",
+"how.demo2_caption":"即時預覽:選擇資產、預覽並執行",
+"how.demo2_assets_label":"您想取得哪些市場的信號?",
+"how.demo2_chip_stocks":"美股",
+"how.demo2_chip_crypto":"加密貨幣",
+"how.demo2_chip_forex":"外匯",
+"how.demo2_chip_commodities":"大宗商品",
+"how.demo2_save":"儲存設定",
+"how.demo2_saved":"設定已儲存。",
+"how.demo2_preview_button":"AI 預覽",
+"how.demo2_scanning":"正在掃描市場數據...",
+"how.demo2_warn":"2 筆交易已就緒。在您確認之前不會執行任何操作。",
+"how.demo2_confirm_label":"我理解並希望執行這些交易",
+"how.demo2_execute_button":"執行",
+"how.demo2_placing":"正在下單...",
+"how.demo2_executed":"已在您連接的帳戶上送出 2 筆訂單。",
+"assets.title":"一個儀表板,四大資產類別",
+"assets.sub":"每個資產類別都經過同一套信號引擎處理,並擁有各自的倉位上限和券商連接。",
+"assets.stocks_tag":"股票",
+"assets.stocks_h":"透過 Alpaca 交易美股",
+"assets.stocks_p":"模擬交易帳戶。提供完整的訂單歷史,以及停損、停利和移動停損保護。",
+"assets.crypto_tag":"加密貨幣",
+"assets.crypto_h":"Binance 測試網",
+"assets.crypto_p":"根據錢包實際餘額決定倉位大小,而不僅僅依據本儀表板自身的交易記錄。",
+"assets.forex_tag":"外匯",
+"assets.forex_h":"eToro 示範帳戶, MT4/5",
+"assets.forex_p":"貨幣對的槓桿和停損比例按券商規則處理。",
+"assets.commodities_tag":"大宗商品",
+"assets.commodities_h":"eToro 示範帳戶, MT4/5",
+"assets.commodities_p":"黃金、原油等差價合約(CFD)工具與您的外匯倉位並列顯示。",
+"risk.title":"風險管理在背景持續運行",
+"risk.sub":"從建倉那一刻起持續生效的保護機制,而不僅僅在進場時起作用。",
+"risk.row1_h":"停損與停利",
+"risk.row1_p":"根據交易時的真實價格結構設定,而非固定百分比的估算值。",
+"risk.row2_h":"移動停利鎖定與保本調整",
+"risk.row2_p":"隨著倉位朝有利方向移動,回吐的浮動盈利會越來越少,並沿途進行部分停利。",
+"risk.row3_h":"強制限時出場",
+"risk.row3_p":"持倉超過設定天數後將被平倉,無論目前是盈利還是虧損。",
+"risk.row4_h":"投資組合層面的風險曝險上限",
+"risk.row4_p":"限制帳戶在任一時刻可承擔的最大風險,在每筆新交易前都會進行檢查。",
+"risk.row5_h":"一鍵熔斷開關",
+"risk.row5_p":"一個控制開關即可立即停止所有已連接券商上的自動化操作。",
+"custody.title":"您的資金始終留在您自己的券商帳戶中",
+"custody.sub":"OrderTrade AI 是一個信號與執行層,而非資金託管方。",
+"custody.point1_h":"我們絕不持有或匯集資金",
+"custody.point1_p":"每筆交易都使用您自己的 API 金鑰,直接在您自己的 Alpaca、Binance、eToro 或 MT4/5 帳戶上執行。",
+"custody.point2_h":"先模擬,準備好後再實盤",
+"custody.point2_p":"每個帳戶都從模擬/示範模式開始,不涉及真實資金風險。準備好後,您可以透過帳戶設定中的專用確認流程,為任何已連接的券商開啟實盤交易。",
+"custody.point3_h":"憑證加密儲存",
+"custody.point3_p":"券商 API 金鑰在靜態儲存時會被加密,僅在對您自己的帳戶發起請求的那一刻才會解密。",
+"pricing.title":"價格",
+"pricing.sub":"單一方案,涵蓋所有資產類別和全部風險管理功能。",
+"pricing.per_month":"/ 月",
+"pricing.trial_note":"14 天免費試用,試用期結束前隨時取消,均不會產生任何費用。",
+"pricing.feature1":"股票、加密貨幣、外匯和大宗商品信號",
+"pricing.feature2":"停損、停利和移動停損保護",
+"pricing.feature3":"投資組合層面的風險曝險上限和一鍵熔斷開關",
+"pricing.feature4":"使用您自己的券商,資金絕不離開您的帳戶",
+"pricing.feature5":"隨時管理或取消您的帳單",
+"pricing.fine":"透過 Stripe 按月計費,無需長期合約。",
+"faq.label":"常見問題",
+"faq.title":"常見問題",
+"faq.sub":"在連接券商之前,大家常問的問題。",
+"faq.q1":"這是投資建議嗎?",
+"faq.a1":"不是。OrderTrade AI 會向您展示分級信號及其背後的推理依據,是否據此操作由您自己決定。它不是註冊投資顧問,本頁任何內容均不構成買賣任何特定證券、加密貨幣或金融工具的建議。交易存在風險,包括虧損的可能。",
+"faq.q2":"我可以用真實資金交易,還是只能模擬?",
+"faq.a2":"每個帳戶都從模擬模式開始,不涉及真實資金風險。準備好後,您可以在帳戶設定中開啟實盤交易:閱讀風險提示,確認您理解程式錯誤或券商故障可能造成真實虧損,並逐一為每個券商開啟。這是您主動做出的決定,而不是預設發生的事情。",
+"faq.q3":"我需要哪些券商帳戶?",
+"faq.a3":"美股使用 Alpaca,加密貨幣使用 Binance,外匯和大宗商品使用 eToro 或 MT4/5。所有帳戶預設從模擬盤開始,啟用後可切換為實盤交易。您可以只連接與您想要取得信號的資產類別相符的帳戶,不必四個都開通,之後也可以隨時在儀表板中新增更多。",
+"faq.q4":"你們會持有或動用我的資金嗎?",
+"faq.a4":"不會。每筆交易都使用您自己的 API 金鑰,直接在您自己已連接的券商帳戶上執行,金鑰在靜態儲存時會被加密。OrderTrade AI 是一個信號與執行層,而非資金託管方;詳見上文「您的資金始終留在您自己的券商帳戶中」。",
+"faq.q5":"14 天免費試用結束後會怎樣?",
+"faq.a5":"如果您沒有在試用期結束前取消,系統將透過 Stripe 按每月 39 美元繼續計費。您可以隨時在帳戶設定中管理或取消訂閱。沒有長期合約,在試用期內取消則絕不會產生任何費用。",
+"final.title":"連接一個券商帳戶,查看您的第一條信號。",
+"final.sub":"模擬盤和示範交易,試用過程中不會有任何真實資金風險。",
+"footer.copyright":"© 2026 OrderTrade AI。Speedit Digital Technology 出品。",
+"footer.terms":"服務條款",
+"footer.privacy":"隱私政策",
+"footer.cookie_prefs":"Cookie 偏好設定",
+"footer.contact":"聯絡我們",
+"cookie.text_html":"我們僅在您同意後使用 Google Analytics 來了解訪客如何使用本頁面。不使用廣告類 Cookie,您可以隨時更改您的選擇。請參閱我們的<a href=\"/app?page=privacy\">隱私政策</a>。",
+"cookie.reject":"拒絕",
+"cookie.accept":"接受"
+},
+th: {
+"nav.sign_in":"เข้าสู่ระบบ",
+"nav.start_trial":"เริ่มทดลองใช้งานฟรี",
+"hero.eyebrow":"เทรดเดโมเป็นค่าเริ่มต้น ไปเทรดจริงเมื่อคุณพร้อม",
+"hero.h1":"สัญญาณ AI สำหรับบัญชีโบรกเกอร์ที่คุณมีอยู่แล้ว",
+"hero.sub":"เชื่อมต่อบัญชี Alpaca, Binance, eToro หรือ MT4/5 ของคุณเอง ดูตัวอย่างทุกสัญญาณก่อนที่จะมีการดำเนินการใดๆ จากนั้นส่งคำสั่งซื้อขายด้วยตัวคุณเอง",
+"preview.title":"AI Decision Engine ตัวอย่างประกอบ",
+"preview.note":"สัญญาณจริงขึ้นอยู่กับข้อมูลตลาดแบบเรียลไทม์และโบรกเกอร์ที่คุณเชื่อมต่อไว้",
+"preview.col_ticker":"ทิกเกอร์",
+"preview.col_asset_class":"ประเภทสินทรัพย์",
+"preview.col_signal":"สัญญาณ",
+"preview.col_confidence":"ความมั่นใจ",
+"preview.col_risk_reward":"ความเสี่ยง/ผลตอบแทน",
+"preview.col_grade":"เกรด",
+"preview.asset_us_stocks":"หุ้นสหรัฐฯ",
+"preview.asset_crypto":"คริปโต",
+"preview.asset_forex":"ฟอเร็กซ์",
+"preview.asset_commodities":"สินค้าโภคภัณฑ์",
+"preview.signal_buy":"ซื้อ",
+"preview.signal_wait":"รอ",
+"how.title":"วิธีการทำงาน",
+"how.sub":"สามขั้นตอนระหว่างการเชื่อมต่อบัญชีและการตรวจสอบสัญญาณแรกของคุณ",
+"how.step1_h":"เชื่อมต่อโบรกเกอร์ของคุณเอง",
+"how.step1_p":"เชื่อมโยง Alpaca, Binance, eToro หรือ MT4/5 ด้วยคีย์ API ของคุณเอง ซึ่งจะถูกเข้ารหัสขณะจัดเก็บและถอดรหัสเฉพาะเมื่อดำเนินการกับบัญชีของคุณเองเท่านั้น OrderTrade AI จะไม่รวมหรือถือครองเงินทุนของใครทั้งสิ้น",
+"how.step2_h":"AI ให้คะแนนโอกาส",
+"how.step2_p":"เอนจินสัญญาณจะอ่านข้อมูลตลาดในประเภทสินทรัพย์ที่คุณเปิดใช้งาน และสร้างรายการที่จัดอันดับและให้คะแนน โดยกำหนดขนาดตามยอดคงเหลือจริงของบัญชีที่เชื่อมต่อไว้ของคุณ",
+"how.step3_h":"คุณตรวจสอบแล้วจึงดำเนินการ",
+"how.step3_p":"ตัวอย่างจะแสดงให้เห็นอย่างชัดเจนว่าจะซื้ออะไรและเพราะเหตุใด จะไม่มีการส่งคำสั่งใดๆ จนกว่าคุณจะทำเครื่องหมายในช่องยืนยันและคลิก Execute ด้วยตัวคุณเอง",
+"how.demo_caption":"ตัวอย่างสด: การเชื่อมต่อโบรกเกอร์",
+"how.demo_broker_label":"Alpaca (หุ้นสหรัฐฯ, Paper)",
+"how.demo_not_connected":"ยังไม่ได้เชื่อมต่อ",
+"how.demo_connected":"เชื่อมต่อแล้ว",
+"how.demo_key_label":"API Key",
+"how.demo_secret_label":"API Secret",
+"how.demo_save":"บันทึก",
+"how.demo_verifying":"กำลังตรวจสอบการเชื่อมต่อ Alpaca...",
+"how.demo_success":"Alpaca (หุ้นสหรัฐฯ, Paper) เชื่อมต่อแล้ว",
+"how.demo2_caption":"ตัวอย่างสด: เลือกสินทรัพย์ ดูตัวอย่าง และดำเนินการ",
+"how.demo2_assets_label":"คุณต้องการสัญญาณสำหรับตลาดใด?",
+"how.demo2_chip_stocks":"หุ้นสหรัฐฯ",
+"how.demo2_chip_crypto":"คริปโต",
+"how.demo2_chip_forex":"ฟอเร็กซ์",
+"how.demo2_chip_commodities":"สินค้าโภคภัณฑ์",
+"how.demo2_save":"บันทึกการตั้งค่า",
+"how.demo2_saved":"บันทึกการตั้งค่าแล้ว",
+"how.demo2_preview_button":"ดูตัวอย่าง AI",
+"how.demo2_scanning":"กำลังสแกนข้อมูลตลาด...",
+"how.demo2_warn":"มี 2 รายการพร้อมซื้อขาย จะไม่มีการดำเนินการใดๆ จนกว่าคุณจะยืนยัน",
+"how.demo2_confirm_label":"ฉันเข้าใจและต้องการทำรายการซื้อขายนี้",
+"how.demo2_execute_button":"ดำเนินการ",
+"how.demo2_placing":"กำลังส่งคำสั่งซื้อขาย...",
+"how.demo2_executed":"ส่งคำสั่งซื้อขาย 2 รายการไปยังบัญชีที่เชื่อมต่อของคุณแล้ว",
+"assets.title":"แดชบอร์ดเดียว สี่ประเภทสินทรัพย์",
+"assets.sub":"แต่ละประเภทสินทรัพย์ทำงานผ่านเอนจินสัญญาณเดียวกัน โดยมีเพดานโพซิชันและการเชื่อมต่อโบรกเกอร์เป็นของตัวเอง",
+"assets.stocks_tag":"หุ้น",
+"assets.stocks_h":"หุ้นสหรัฐฯ ผ่าน Alpaca",
+"assets.stocks_p":"บัญชีซื้อขายแบบ paper ประวัติคำสั่งซื้อขายครบถ้วน พร้อมความคุ้มครองแบบ stop-loss, take-profit และ trailing-exit",
+"assets.crypto_tag":"คริปโต",
+"assets.crypto_h":"Binance testnet",
+"assets.crypto_p":"กำหนดขนาดโพซิชันตามยอดคงเหลือในกระเป๋าเงินจริง ไม่ใช่แค่บันทึกการซื้อขายของแดชบอร์ดนี้เอง",
+"assets.forex_tag":"ฟอเร็กซ์",
+"assets.forex_h":"eToro demo, MT4/5",
+"assets.forex_p":"เลเวอเรจและอัตรา stop-loss จัดการตามกฎของโบรกเกอร์สำหรับคู่สกุลเงิน",
+"assets.commodities_tag":"สินค้าโภคภัณฑ์",
+"assets.commodities_h":"eToro demo, MT4/5",
+"assets.commodities_p":"ทองคำ น้ำมัน และเครื่องมือ CFD อื่นๆ ควบคู่ไปกับโพซิชันฟอเร็กซ์ของคุณ",
+"risk.title":"การบริหารความเสี่ยงทำงานอยู่เบื้องหลัง",
+"risk.sub":"การป้องกันที่มีผลทันทีที่เปิดโพซิชัน ไม่ใช่แค่ตอนเข้าซื้อเท่านั้น",
+"risk.row1_h":"Stop-loss และ take-profit",
+"risk.row1_p":"กำหนดจากโครงสร้างราคาจริง ณ เวลาที่ทำการซื้อขาย ไม่ใช่การประมาณเปอร์เซ็นต์คงที่",
+"risk.row2_h":"การล็อกกำไรแบบ trailing และการปรับจุดคุ้มทุน",
+"risk.row2_p":"คืนกำไรที่เปิดอยู่น้อยลงเมื่อโพซิชันเคลื่อนไหวไปในทางที่เป็นประโยชน์กับคุณ พร้อมทำกำไรบางส่วนระหว่างทาง",
+"risk.row3_h":"การออกจากสถานะแบบบังคับตามเวลา",
+"risk.row3_p":"โพซิชันที่ถือครองเกินจำนวนวันที่กำหนดจะถูกปิดโดยไม่คำนึงถึงกำไรหรือขาดทุนในปัจจุบัน",
+"risk.row4_h":"เพดานความเสี่ยงระดับพอร์ตโฟลิโอ",
+"risk.row4_p":"เพดานจำกัดว่าบัญชีของคุณจะมีความเสี่ยงได้มากเพียงใดในคราวเดียว ซึ่งจะถูกตรวจสอบก่อนการซื้อขายใหม่ทุกครั้ง",
+"risk.row5_h":"Kill switch",
+"risk.row5_p":"การควบคุมเพียงจุดเดียวที่หยุดกิจกรรมอัตโนมัติทั้งหมดในทุกโบรกเกอร์ที่เชื่อมต่อไว้ได้ทันที",
+"custody.title":"เงินของคุณยังคงอยู่ในบัญชีโบรกเกอร์ของคุณเอง",
+"custody.sub":"OrderTrade AI เป็นชั้นสัญญาณและการดำเนินการ ไม่ใช่ผู้รับฝากทรัพย์สิน",
+"custody.point1_h":"เราไม่เคยถือครองหรือรวมเงินทุน",
+"custody.point1_p":"ทุกการซื้อขายจะถูกส่งโดยตรงไปยังบัญชี Alpaca, Binance, eToro หรือ MT4/5 ของคุณเองโดยใช้คีย์ API ของคุณเอง",
+"custody.point2_h":"เดโมก่อน ไปจริงเมื่อคุณพร้อม",
+"custody.point2_p":"ทุกบัญชีเริ่มต้นในโหมด paper/demo โดยไม่มีเงินจริงเสี่ยง เมื่อคุณพร้อม คุณสามารถเปิดใช้งานการซื้อขายจริงสำหรับโบรกเกอร์ที่เชื่อมต่อไว้ผ่านขั้นตอนยืนยันเฉพาะในการตั้งค่าบัญชีของคุณ",
+"custody.point3_h":"การจัดเก็บข้อมูลรับรองแบบเข้ารหัส",
+"custody.point3_p":"คีย์ API ของโบรกเกอร์จะถูกเข้ารหัสขณะจัดเก็บ และถอดรหัสเฉพาะในขณะที่มีการส่งคำขอสำหรับบัญชีของคุณเองเท่านั้น",
+"pricing.title":"ราคา",
+"pricing.sub":"แพ็กเกจเดียว ครอบคลุมทุกประเภทสินทรัพย์และคุณสมบัติการบริหารความเสี่ยงทั้งหมด",
+"pricing.per_month":"/ เดือน",
+"pricing.trial_note":"ทดลองใช้งานฟรี 14 วัน ยกเลิกได้ทุกเมื่อก่อนสิ้นสุดระยะเวลาทดลองโดยไม่มีค่าใช้จ่าย",
+"pricing.feature1":"สัญญาณหุ้น คริปโต ฟอเร็กซ์ และสินค้าโภคภัณฑ์",
+"pricing.feature2":"การป้องกันแบบ stop-loss, take-profit และ trailing-exit",
+"pricing.feature3":"เพดานความเสี่ยงระดับพอร์ตโฟลิโอและ kill switch",
+"pricing.feature4":"ใช้โบรกเกอร์ของคุณเอง เงินทุนของคุณไม่มีวันออกจากบัญชีของคุณ",
+"pricing.feature5":"จัดการหรือยกเลิกการเรียกเก็บเงินของคุณได้ทุกเมื่อ",
+"pricing.fine":"เรียกเก็บเงินรายเดือนผ่าน Stripe ไม่มีสัญญาระยะยาว",
+"faq.label":"คำถามที่พบบ่อย",
+"faq.title":"คำถามที่พบบ่อย",
+"faq.sub":"คำถามที่มักเกิดขึ้นก่อนเชื่อมต่อโบรกเกอร์",
+"faq.q1":"นี่คือคำแนะนำทางการเงินหรือไม่?",
+"faq.a1":"ไม่ใช่ OrderTrade AI แสดงสัญญาณที่ให้คะแนนพร้อมเหตุผลเบื้องหลัง และคุณเป็นผู้ตัดสินใจว่าจะดำเนินการตามนั้นหรือไม่ นี่ไม่ใช่ที่ปรึกษาการลงทุนที่ได้รับการจดทะเบียน และไม่มีสิ่งใดในที่นี้เป็นคำแนะนำให้ซื้อหรือขายหลักทรัพย์ เหรียญ หรือเครื่องมือใดๆ โดยเฉพาะ การเทรดมีความเสี่ยง รวมถึงความเสี่ยงที่จะขาดทุน",
+"faq.q2":"ฉันสามารถซื้อขายด้วยเงินจริงได้ไหม หรือเป็นเดโมเท่านั้น?",
+"faq.a2":"ทุกบัญชีเริ่มต้นในโหมดเดโม โดยไม่มีเงินจริงเสี่ยง เมื่อคุณพร้อม คุณสามารถเปิดใช้งานการซื้อขายจริงได้จากการตั้งค่าบัญชีของคุณ อ่านคำเปิดเผยความเสี่ยง ยืนยันว่าคุณเข้าใจว่าข้อผิดพลาดหรือความขัดข้องของโบรกเกอร์อาจทำให้เกิดการขาดทุนจริง แล้วเปิดใช้งานทีละโบรกเกอร์ นี่คือการตัดสินใจที่คุณทำโดยตั้งใจ ไม่ใช่สิ่งที่เกิดขึ้นโดยค่าเริ่มต้น",
+"faq.q3":"ฉันต้องใช้โบรกเกอร์ใดบ้าง?",
+"faq.a3":"Alpaca สำหรับหุ้นสหรัฐฯ, Binance สำหรับคริปโต และ eToro หรือ MT4/5 สำหรับฟอเร็กซ์และสินค้าโภคภัณฑ์ ทุกอย่างเริ่มต้นในโหมดเดโมหรือ paper และสามารถเปิดใช้เทรดจริงได้เมื่อคุณเลือกเปิดใช้งาน เชื่อมต่อเฉพาะที่ตรงกับประเภทสินทรัพย์ที่คุณต้องการสัญญาณ คุณไม่จำเป็นต้องใช้ทั้งสี่อย่าง และสามารถเพิ่มเติมภายหลังได้จากแดชบอร์ดของคุณ",
+"faq.q4":"คุณเคยถือครองหรือแตะต้องเงินของฉันหรือไม่?",
+"faq.a4":"ไม่เคย ทุกการซื้อขายจะถูกส่งโดยตรงไปยังบัญชีโบรกเกอร์ที่เชื่อมต่อไว้ของคุณเองโดยใช้คีย์ API ของคุณเองซึ่งถูกเข้ารหัสขณะจัดเก็บ OrderTrade AI เป็นชั้นสัญญาณและการดำเนินการ ไม่ใช่ผู้รับฝากทรัพย์สิน ดูหัวข้อ \"เงินของคุณยังคงอยู่ในบัญชีโบรกเกอร์ของคุณเอง\" ด้านบน",
+"faq.q5":"จะเกิดอะไรขึ้นหลังทดลองใช้งานฟรี 14 วัน?",
+"faq.a5":"หากคุณไม่ยกเลิกก่อนสิ้นสุดระยะเวลาทดลอง การเรียกเก็บเงินจะดำเนินต่อที่ $39/เดือนผ่าน Stripe คุณสามารถจัดการหรือยกเลิกการสมัครสมาชิกได้ทุกเมื่อจากการตั้งค่าบัญชีของคุณ ไม่มีสัญญาระยะยาว และการยกเลิกระหว่างช่วงทดลองใช้งานหมายความว่าคุณจะไม่ถูกเรียกเก็บเงินเลย",
+"final.title":"เชื่อมต่อโบรกเกอร์และดูสัญญาณแรกของคุณ",
+"final.sub":"การซื้อขายแบบ paper และ demo จึงไม่มีความเสี่ยงใดๆ ขณะที่คุณทดลองใช้งาน",
+"footer.copyright":"© 2026 OrderTrade AI ผลิตภัณฑ์จาก Speedit Digital Technology",
+"footer.terms":"ข้อกำหนดการให้บริการ",
+"footer.privacy":"นโยบายความเป็นส่วนตัว",
+"footer.cookie_prefs":"การตั้งค่าคุกกี้",
+"footer.contact":"ติดต่อ",
+"cookie.text_html":"เราใช้ Google Analytics เพื่อดูว่าผู้เยี่ยมชมใช้งานหน้านี้อย่างไร หลังจากที่คุณยอมรับเท่านั้น ไม่มีคุกกี้โฆษณา และคุณสามารถเปลี่ยนใจได้ทุกเมื่อ ดู<a href=\"/app?page=privacy\">นโยบายความเป็นส่วนตัว</a>ของเรา",
+"cookie.reject":"ปฏิเสธ",
+"cookie.accept":"ยอมรับ"
+},
+ja: {
+"nav.sign_in":"ログイン",
+"nav.start_trial":"無料トライアルを開始",
+"hero.eyebrow":"デフォルトはデモ取引。準備ができたらライブへ。",
+"hero.h1":"すでにお持ちのブローカー口座向けのAIシグナル。",
+"hero.sub":"ご自身のAlpaca、Binance、eToro、またはMT4/5アカウントを接続してください。何かが実行される前にすべてのシグナルをプレビューし、その後ご自身で取引を行います。",
+"preview.title":"AI Decision Engine、イメージプレビュー",
+"preview.note":"実際のシグナルはライブ市場データと接続されたブローカーに依存します。",
+"preview.col_ticker":"ティッカー",
+"preview.col_asset_class":"アセットクラス",
+"preview.col_signal":"シグナル",
+"preview.col_confidence":"信頼度",
+"preview.col_risk_reward":"リスク/リワード",
+"preview.col_grade":"グレード",
+"preview.asset_us_stocks":"米国株",
+"preview.asset_crypto":"暗号資産",
+"preview.asset_forex":"外国為替",
+"preview.asset_commodities":"コモディティ",
+"preview.signal_buy":"買い",
+"preview.signal_wait":"待機",
+"how.title":"仕組み",
+"how.sub":"口座を接続してから最初のシグナルを確認するまでの3つのステップ。",
+"how.step1_h":"ご自身のブローカーを接続",
+"how.step1_p":"ご自身のAPIキーでAlpaca、Binance、eToro、またはMT4/5を連携します。キーは保存時に暗号化され、ご自身の口座で操作を行う際にのみ復号されます。OrderTrade AIが誰かの資金をプールしたり保管したりすることは一切ありません。",
+"how.step2_h":"AIが機会を評価",
+"how.step2_p":"シグナルエンジンは有効化されたアセットクラス全体の市場データを読み取り、接続された口座の実際の残高に応じてサイジングされた、格付け済みのランキングリストを生成します。",
+"how.step3_h":"確認してから実行",
+"how.step3_p":"プレビューには、何が購入されるか、その理由が正確に表示されます。確認チェックボックスにチェックを入れ、ご自身でExecuteをクリックするまで何も発注されません。",
+"how.demo_caption":"ライブプレビュー: ブローカー接続",
+"how.demo_broker_label":"Alpaca(米国株、ペーパー)",
+"how.demo_not_connected":"未接続",
+"how.demo_connected":"接続済み",
+"how.demo_key_label":"APIキー",
+"how.demo_secret_label":"APIシークレット",
+"how.demo_save":"保存",
+"how.demo_verifying":"Alpacaの接続を確認しています...",
+"how.demo_success":"Alpaca(米国株、ペーパー)が接続されました。",
+"how.demo2_caption":"ライブプレビュー:資産の選択、プレビュー、実行",
+"how.demo2_assets_label":"どの市場のシグナルが必要ですか?",
+"how.demo2_chip_stocks":"米国株",
+"how.demo2_chip_crypto":"暗号資産",
+"how.demo2_chip_forex":"外国為替",
+"how.demo2_chip_commodities":"コモディティ",
+"how.demo2_save":"設定を保存",
+"how.demo2_saved":"設定を保存しました。",
+"how.demo2_preview_button":"AIプレビュー",
+"how.demo2_scanning":"市場データをスキャン中...",
+"how.demo2_warn":"2件の取引が準備できました。確認するまで何も実行されません。",
+"how.demo2_confirm_label":"内容を理解し、この取引を実行します",
+"how.demo2_execute_button":"実行",
+"how.demo2_placing":"注文を送信中...",
+"how.demo2_executed":"接続済みのアカウントに2件の注文を送信しました。",
+"assets.title":"1つのダッシュボード、4つのアセットクラス",
+"assets.sub":"各アセットクラスは同じシグナルエンジンで処理され、それぞれ独自のポジション上限とブローカー接続を持ちます。",
+"assets.stocks_tag":"株式",
+"assets.stocks_h":"Alpaca経由の米国株",
+"assets.stocks_p":"ペーパートレード口座。完全な注文履歴と、ストップロス、テイクプロフィット、トレーリングエグジットによる保護。",
+"assets.crypto_tag":"暗号資産",
+"assets.crypto_h":"Binanceテストネット",
+"assets.crypto_p":"このダッシュボード自体の取引ログだけでなく、ウォレットの実際の残高に基づいたポジションサイジング。",
+"assets.forex_tag":"外国為替",
+"assets.forex_h":"eToroデモ、MT4/5",
+"assets.forex_p":"通貨ペアのレバレッジとストップロス率はブローカーのルールに従って処理されます。",
+"assets.commodities_tag":"コモディティ",
+"assets.commodities_h":"eToroデモ、MT4/5",
+"assets.commodities_p":"金、原油、その他のCFD商品が外国為替ポジションと並んで表示されます。",
+"risk.title":"リスク管理はバックグラウンドで動作",
+"risk.sub":"エントリー時だけでなく、ポジションが開いた時点から適用される保護。",
+"risk.row1_h":"ストップロスとテイクプロフィット",
+"risk.row1_p":"固定パーセンテージの推定値ではなく、取引時点の実際の価格構造から設定されます。",
+"risk.row2_h":"トレーリング利益確定ロックとブレークイーブン調整",
+"risk.row2_p":"ポジションが有利な方向に動くにつれて、含み益の還元幅が小さくなり、その過程で部分的な利益確定が行われます。",
+"risk.row3_h":"時間ベースの強制決済",
+"risk.row3_p":"設定された日数を超えて保有されたポジションは、現在の損益にかかわらず決済されます。",
+"risk.row4_h":"ポートフォリオレベルのエクスポージャー上限",
+"risk.row4_p":"アカウント全体で一度にリスクにさらせる上限を設け、新規取引のたびに確認します。",
+"risk.row5_h":"キルスイッチ",
+"risk.row5_p":"1つの操作で、接続されているすべてのブローカーにわたる自動化アクティビティを即座に停止します。",
+"custody.title":"資金はご自身のブローカー口座に留まります",
+"custody.sub":"OrderTrade AIはシグナルと執行のレイヤーであり、カストディアンではありません。",
+"custody.point1_h":"資金を保管・プールすることは一切ありません",
+"custody.point1_p":"すべての取引は、ご自身のAPIキーを使用して、ご自身のAlpaca、Binance、eToro、またはMT4/5口座で直接実行されます。",
+"custody.point2_h":"まずはデモ、準備ができたらライブへ",
+"custody.point2_p":"すべてのアカウントはペーパー/デモモードで開始され、実際の資金リスクはありません。準備ができたら、アカウント設定内の専用の確認フローを通じて、接続済みの任意のブローカーでライブ取引を有効にできます。",
+"custody.point3_h":"暗号化された認証情報の保存",
+"custody.point3_p":"ブローカーのAPIキーは保存時に暗号化され、ご自身の口座でリクエストが行われる瞬間にのみ復号されます。",
+"pricing.title":"料金",
+"pricing.sub":"プランは1つのみ。すべてのアセットクラスとすべてのリスク管理機能が含まれます。",
+"pricing.per_month":"/ 月",
+"pricing.trial_note":"14日間の無料トライアル。終了前であればいつでもキャンセルでき、その場合課金されません。",
+"pricing.feature1":"株式、暗号資産、外国為替、コモディティのシグナル",
+"pricing.feature2":"ストップロス、テイクプロフィット、トレーリングエグジットによる保護",
+"pricing.feature3":"ポートフォリオレベルのエクスポージャー上限とキルスイッチ",
+"pricing.feature4":"ご自身のブローカーを使用し、資金が口座から離れることはありません",
+"pricing.feature5":"いつでもお支払いを管理またはキャンセル可能",
+"pricing.fine":"Stripeを通じて月次で請求されます。長期契約はありません。",
+"faq.label":"FAQ",
+"faq.title":"よくある質問",
+"faq.sub":"ブローカーを接続する前によく寄せられる質問。",
+"faq.q1":"これは投資助言ですか?",
+"faq.a1":"いいえ。OrderTrade AIは格付けされたシグナルとその根拠を表示し、それに基づいて行動するかどうかはお客様が判断します。登録された投資顧問ではなく、ここに記載されている内容は特定の証券、コイン、または商品の売買を推奨するものではありません。取引には損失を含むリスクが伴います。",
+"faq.q2":"実際のお金で取引できますか、それともデモだけですか?",
+"faq.a2":"すべてのアカウントはデモモードで開始され、実際の資金リスクはありません。準備ができたら、アカウント設定からライブ取引を有効にできます。リスク開示を読み、バグやブローカーの障害が実際の損失につながる可能性があることを理解したことを確認したうえで、ブローカーごとに有効化します。これはデフォルトで起こることではなく、あなたが意図的に下す決定です。",
+"faq.q3":"どのブローカーが必要ですか?",
+"faq.a3":"米国株にはAlpaca、暗号資産にはBinance、外国為替とコモディティにはeToroまたはMT4/5を使用します。すべてデモまたはペーパーモードから始まり、オプトインすればライブトレードも利用できます。シグナルが必要なアセットクラスに合ったものを接続してください。4つすべてが必要なわけではなく、後からダッシュボードでさらに追加することもできます。",
+"faq.q4":"私の資金を保管したり触れたりすることはありますか?",
+"faq.a4":"いいえ。すべての取引は、保存時に暗号化されたご自身のAPIキーを使用して、接続されたご自身のブローカー口座で直接実行されます。OrderTrade AIはシグナルと執行のレイヤーであり、カストディアンではありません。上記の「資金はご自身のブローカー口座に留まります」をご覧ください。",
+"faq.q5":"14日間の無料トライアル終了後はどうなりますか?",
+"faq.a5":"トライアル終了前にキャンセルしない場合、Stripeを通じて月額$39の請求が継続されます。アカウント設定からいつでもサブスクリプションを管理またはキャンセルできます。長期契約はなく、トライアル期間中にキャンセルすれば課金されることはありません。",
+"final.title":"ブローカーを接続して、最初のシグナルを確認しましょう。",
+"final.sub":"ペーパーおよびデモ取引のため、お試しいただく間、リスクにさらされるものは何もありません。",
+"footer.copyright":"© 2026 OrderTrade AI。Speedit Digital Technologyの製品です。",
+"footer.terms":"利用規約",
+"footer.privacy":"プライバシーポリシー",
+"footer.cookie_prefs":"Cookieの設定",
+"footer.contact":"お問い合わせ",
+"cookie.text_html":"訪問者がこのページをどのように利用しているかを確認するために、お客様が同意した場合にのみGoogle Analyticsを使用します。広告用Cookieは使用せず、いつでも設定を変更できます。<a href=\"/app?page=privacy\">プライバシーポリシー</a>をご覧ください。",
+"cookie.reject":"拒否",
+"cookie.accept":"同意する"
+},
+ko: {
+"nav.sign_in":"로그인",
+"nav.start_trial":"무료 체험 시작",
+"hero.eyebrow":"기본은 데모 거래. 준비되면 라이브로 전환하세요.",
+"hero.h1":"이미 보유한 브로커 계좌를 위한 AI 시그널.",
+"hero.sub":"본인의 Alpaca, Binance, eToro 또는 MT4/5 계좌를 연결하세요. 실행되기 전에 모든 시그널을 미리 확인한 다음, 직접 거래를 실행하세요.",
+"preview.title":"AI Decision Engine, 예시 미리보기",
+"preview.note":"실제 시그널은 실시간 시장 데이터와 연결된 브로커에 따라 달라집니다.",
+"preview.col_ticker":"티커",
+"preview.col_asset_class":"자산군",
+"preview.col_signal":"시그널",
+"preview.col_confidence":"신뢰도",
+"preview.col_risk_reward":"위험/보상",
+"preview.col_grade":"등급",
+"preview.asset_us_stocks":"미국 주식",
+"preview.asset_crypto":"암호화폐",
+"preview.asset_forex":"외환",
+"preview.asset_commodities":"원자재",
+"preview.signal_buy":"매수",
+"preview.signal_wait":"대기",
+"how.title":"작동 방식",
+"how.sub":"계좌 연결부터 첫 시그널 확인까지 세 단계면 충분합니다.",
+"how.step1_h":"본인의 브로커 연결",
+"how.step1_p":"본인의 API 키로 Alpaca, Binance, eToro 또는 MT4/5를 연결하세요. 키는 저장 시 암호화되며, 본인의 계좌에서 작업을 수행할 때만 복호화됩니다. OrderTrade AI는 누구의 자금도 모으거나 보관하지 않습니다.",
+"how.step2_h":"AI가 기회를 평가",
+"how.step2_p":"시그널 엔진은 활성화된 자산군 전반의 시장 데이터를 읽고, 연결된 계좌의 실제 잔액에 맞춰 규모가 조정된 등급별 순위 목록을 생성합니다.",
+"how.step3_h":"검토 후 직접 실행",
+"how.step3_p":"미리보기에는 무엇을 매수할지와 그 이유가 정확히 표시됩니다. 확인란에 체크하고 직접 Execute를 클릭하기 전까지는 아무것도 실행되지 않습니다.",
+"how.demo_caption":"실시간 미리보기: 브로커 연결",
+"how.demo_broker_label":"Alpaca(미국 주식, 페이퍼)",
+"how.demo_not_connected":"연결되지 않음",
+"how.demo_connected":"연결됨",
+"how.demo_key_label":"API 키",
+"how.demo_secret_label":"API 시크릿",
+"how.demo_save":"저장",
+"how.demo_verifying":"Alpaca 연결을 확인하는 중...",
+"how.demo_success":"Alpaca(미국 주식, 페이퍼)가 연결되었습니다.",
+"how.demo2_caption":"실시간 미리보기: 자산 선택, 미리보기 및 실행",
+"how.demo2_assets_label":"어떤 시장의 시그널을 원하시나요?",
+"how.demo2_chip_stocks":"미국 주식",
+"how.demo2_chip_crypto":"암호화폐",
+"how.demo2_chip_forex":"외환",
+"how.demo2_chip_commodities":"원자재",
+"how.demo2_save":"설정 저장",
+"how.demo2_saved":"설정이 저장되었습니다.",
+"how.demo2_preview_button":"AI 미리보기",
+"how.demo2_scanning":"시장 데이터 스캔 중...",
+"how.demo2_warn":"2건의 거래가 준비되었습니다. 확인하기 전까지는 아무것도 실행되지 않습니다.",
+"how.demo2_confirm_label":"이해했으며 이 거래를 실행하고 싶습니다",
+"how.demo2_execute_button":"실행",
+"how.demo2_placing":"주문 전송 중...",
+"how.demo2_executed":"연결된 계좌에 2건의 주문을 전송했습니다.",
+"assets.title":"하나의 대시보드, 네 가지 자산군",
+"assets.sub":"각 자산군은 동일한 시그널 엔진을 거치며, 각각 고유한 포지션 한도와 브로커 연결을 갖습니다.",
+"assets.stocks_tag":"주식",
+"assets.stocks_h":"Alpaca를 통한 미국 주식",
+"assets.stocks_p":"페이퍼 트레이딩 계좌. 전체 주문 내역과 손절매, 익절, 트레일링 청산 보호 기능을 제공합니다.",
+"assets.crypto_tag":"암호화폐",
+"assets.crypto_h":"Binance 테스트넷",
+"assets.crypto_p":"이 대시보드 자체의 거래 기록이 아닌, 실제 지갑 잔액을 기반으로 한 포지션 사이징.",
+"assets.forex_tag":"외환",
+"assets.forex_h":"eToro 데모, MT4/5",
+"assets.forex_p":"통화쌍에 대한 레버리지와 손절매 비율은 브로커 규칙에 따라 처리됩니다.",
+"assets.commodities_tag":"원자재",
+"assets.commodities_h":"eToro 데모, MT4/5",
+"assets.commodities_p":"금, 원유 등 CFD 상품이 외환 포지션과 함께 표시됩니다.",
+"risk.title":"리스크 관리는 백그라운드에서 작동합니다",
+"risk.sub":"진입 시점뿐 아니라 포지션이 열려 있는 동안 계속 적용되는 보호 장치입니다.",
+"risk.row1_h":"손절매와 익절",
+"risk.row1_p":"고정된 퍼센트 추정치가 아닌, 거래 시점의 실제 가격 구조를 기반으로 설정됩니다.",
+"risk.row2_h":"트레일링 수익 잠금과 손익분기점 조정",
+"risk.row2_p":"포지션이 유리한 방향으로 움직일수록 반환되는 평가 이익의 비율이 줄어들며, 그 과정에서 부분 이익 실현이 이루어집니다.",
+"risk.row3_h":"시간 기반 강제 청산",
+"risk.row3_p":"설정된 일수를 초과하여 보유된 포지션은 현재 손익과 관계없이 청산됩니다.",
+"risk.row4_h":"포트폴리오 단위 노출 한도",
+"risk.row4_p":"계좌가 한 번에 감수할 수 있는 위험의 상한선을 두며, 매 신규 거래 전에 확인합니다.",
+"risk.row5_h":"킬 스위치",
+"risk.row5_p":"하나의 컨트롤로 연결된 모든 브로커에서 자동화된 활동을 즉시 중단할 수 있습니다.",
+"custody.title":"고객님의 자금은 본인의 브로커 계좌에 그대로 유지됩니다",
+"custody.sub":"OrderTrade AI는 시그널 및 실행 계층이며, 수탁 기관이 아닙니다.",
+"custody.point1_h":"저희는 자금을 보관하거나 모으지 않습니다",
+"custody.point1_p":"모든 거래는 본인의 API 키를 사용하여 본인의 Alpaca, Binance, eToro 또는 MT4/5 계좌에서 직접 실행됩니다.",
+"custody.point2_h":"먼저 데모로, 준비되면 라이브로",
+"custody.point2_p":"모든 계정은 실제 자금 위험 없이 페이퍼/데모 모드로 시작됩니다. 준비가 되면 계정 설정의 전용 확인 절차를 통해 연결된 브로커에서 라이브 거래를 활성화할 수 있습니다.",
+"custody.point3_h":"암호화된 자격 증명 저장",
+"custody.point3_p":"브로커 API 키는 저장 시 암호화되며, 본인의 계좌에 대한 요청이 이루어지는 순간에만 복호화됩니다.",
+"pricing.title":"가격",
+"pricing.sub":"단일 요금제. 모든 자산군과 모든 리스크 관리 기능이 포함됩니다.",
+"pricing.per_month":"/ 월",
+"pricing.trial_note":"14일 무료 체험, 종료 전 언제든지 취소할 수 있으며 요금이 청구되지 않습니다.",
+"pricing.feature1":"주식, 암호화폐, 외환, 원자재 시그널",
+"pricing.feature2":"손절매, 익절, 트레일링 청산 보호",
+"pricing.feature3":"포트폴리오 단위 노출 한도와 킬 스위치",
+"pricing.feature4":"본인의 브로커를 사용하며, 자금이 계좌를 벗어나는 일은 없습니다",
+"pricing.feature5":"언제든지 결제를 관리하거나 취소할 수 있습니다",
+"pricing.fine":"Stripe를 통해 매월 청구됩니다. 장기 계약이 없습니다.",
+"faq.label":"자주 묻는 질문",
+"faq.title":"자주 묻는 질문",
+"faq.sub":"브로커를 연결하기 전에 자주 나오는 질문들입니다.",
+"faq.q1":"이것이 재무 조언인가요?",
+"faq.a1":"아닙니다. OrderTrade AI는 등급이 매겨진 시그널과 그 근거를 보여주며, 이를 실행할지는 고객님이 결정합니다. 등록된 투자 자문사가 아니며, 여기에 있는 어떤 내용도 특정 증권, 코인 또는 상품의 매수나 매도를 권유하는 것이 아닙니다. 거래에는 손실 위험을 포함한 리스크가 따릅니다.",
+"faq.q2":"실제 자금으로 거래할 수 있나요, 아니면 데모만 가능한가요?",
+"faq.a2":"모든 계정은 실제 자금 위험 없이 데모 모드로 시작됩니다. 준비가 되면 계정 설정에서 라이브 거래를 활성화할 수 있습니다. 위험 고지를 읽고, 버그나 브로커 장애로 실제 손실이 발생할 수 있음을 이해했음을 확인한 후, 브로커별로 활성화합니다. 이는 기본으로 발생하는 일이 아니라 고객님이 직접 내리는 신중한 결정입니다.",
+"faq.q3":"어떤 브로커가 필요한가요?",
+"faq.a3":"미국 주식은 Alpaca, 암호화폐는 Binance, 외환 및 원자재는 eToro 또는 MT4/5를 사용합니다. 모든 계정은 데모 또는 페이퍼 모드로 시작하며, 선택하면 실거래도 이용할 수 있습니다. 원하는 시그널의 자산군에 맞는 것만 연결하면 됩니다. 네 가지 모두 필요하지는 않으며, 나중에 대시보드에서 추가로 연결할 수 있습니다.",
+"faq.q4":"제 자금을 보관하거나 다루는 경우가 있나요?",
+"faq.a4":"아닙니다. 모든 거래는 저장 시 암호화된 본인의 API 키를 사용하여 연결된 본인의 브로커 계좌에서 직접 실행됩니다. OrderTrade AI는 시그널 및 실행 계층이며, 수탁 기관이 아닙니다. 위의 \"고객님의 자금은 본인의 브로커 계좌에 그대로 유지됩니다\"를 참고하세요.",
+"faq.q5":"14일 무료 체험이 끝나면 어떻게 되나요?",
+"faq.a5":"체험 기간이 끝나기 전에 취소하지 않으면 Stripe를 통해 월 $39의 요금이 계속 청구됩니다. 계정 설정에서 언제든지 구독을 관리하거나 취소할 수 있습니다. 장기 계약이 없으며, 체험 기간 중 취소하면 요금이 전혀 청구되지 않습니다.",
+"final.title":"브로커를 연결하고 첫 시그널을 확인해 보세요.",
+"final.sub":"페이퍼 및 데모 거래이므로 체험하는 동안 위험에 노출되는 것은 없습니다.",
+"footer.copyright":"© 2026 OrderTrade AI. Speedit Digital Technology의 제품입니다.",
+"footer.terms":"서비스 약관",
+"footer.privacy":"개인정보 처리방침",
+"footer.cookie_prefs":"쿠키 환경설정",
+"footer.contact":"문의하기",
+"cookie.text_html":"방문자가 이 페이지를 어떻게 사용하는지 확인하기 위해 동의하신 경우에만 Google Analytics를 사용합니다. 광고용 쿠키는 사용하지 않으며 언제든지 선택을 변경할 수 있습니다. 저희 <a href=\"/app?page=privacy\">개인정보 처리방침</a>을 확인하세요.",
+"cookie.reject":"거부",
+"cookie.accept":"수락"
+}
+  };
+
+  var LANG_KEY = "ota_lang";
+
+  function detectDefaultLang() {
+    try {
+      var stored = localStorage.getItem(LANG_KEY);
+      if (stored && OTA_I18N[stored]) return stored;
+    } catch (e) {}
+    var navLangs = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || "en"];
+    for (var i = 0; i < navLangs.length; i++) {
+      var code = (navLangs[i] || "").slice(0, 2).toLowerCase();
+      if (OTA_I18N[code]) return code;
+    }
+    return "en";
+  }
+
+  function applyLanguage(lang) {
+    if (!OTA_I18N[lang]) lang = "en";
+    var table = OTA_I18N[lang];
+    var base = OTA_I18N.en;
+    document.querySelectorAll("[data-i18n]").forEach(function (el) {
+      var key = el.getAttribute("data-i18n");
+      var text = (key in table) ? table[key] : (base[key] !== undefined ? base[key] : key);
+      el.textContent = text;
+    });
+    document.querySelectorAll("[data-i18n-html]").forEach(function (el) {
+      var key = el.getAttribute("data-i18n-html");
+      var html = (key in table) ? table[key] : (base[key] !== undefined ? base[key] : key);
+      el.innerHTML = html;
+    });
+    document.documentElement.lang = lang;
+    var sel = document.getElementById("ota-lang-select");
+    if (sel) sel.value = lang;
+    try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
+  }
+
+  window.otaSetLanguage = applyLanguage;
+
+  document.addEventListener("DOMContentLoaded", function () {
+    applyLanguage(detectDefaultLang());
+  });
+})();
+</script>
+
+<script>
+/*
+  Broker-connect looping demo (added 2026-09-12). Purely a visual mockup
+  recreating the real saas_app.py "Connect Broker" expander/form for
+  Alpaca (see render_broker_connection() in saas_app.py: an st.expander
+  containing api_key/api_secret password fields, a Save button, and a
+  spinner->success flow on save). Not a video, not a screen recording,
+  and not wired to any real API -- purely CSS/JS looping through the
+  same steps a real user takes, so a first-time visitor can see what
+  connecting a broker looks like before they ever sign up. Respects
+  prefers-reduced-motion by skipping straight to the "connected" end
+  state and holding there instead of looping.
+*/
+(function () {
+  var panel = document.getElementById("otaBrokerDemo");
+  if (!panel) return;
+
+  var head = document.getElementById("bdHead");
+  var headStatus = document.getElementById("bdHeadStatus");
+  var body = document.getElementById("bdBody");
+  var keyInput = document.getElementById("bdKeyInput");
+  var secretInput = document.getElementById("bdSecretInput");
+  var saveBtn = document.getElementById("bdSaveBtn");
+  var spinner = document.getElementById("bdSpinner");
+  var success = document.getElementById("bdSuccess");
+  var cursor = document.getElementById("bdCursor");
+
+  var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function moveCursorTo(el, xOffset, yOffset) {
+    var panelRect = panel.getBoundingClientRect();
+    var elRect = el.getBoundingClientRect();
+    var x = elRect.left - panelRect.left + (xOffset !== undefined ? xOffset : elRect.width / 2);
+    var y = elRect.top - panelRect.top + (yOffset !== undefined ? yOffset : elRect.height / 2);
+    cursor.style.left = x + "px";
+    cursor.style.top = y + "px";
+  }
+
+  function typeInto(el, char, count, interval, done) {
+    var i = 0;
+    var timer = setInterval(function () {
+      el.textContent += char;
+      i++;
+      if (i >= count) {
+        clearInterval(timer);
+        if (done) done();
+      }
+    }, interval);
+  }
+
+  function reset() {
+    panel.classList.remove("open", "connected");
+    keyInput.textContent = "";
+    keyInput.classList.remove("focused");
+    secretInput.textContent = "";
+    secretInput.classList.remove("focused");
+    saveBtn.classList.remove("pressed");
+    spinner.classList.remove("show");
+    success.classList.remove("show");
+    cursor.classList.remove("visible", "click");
+  }
+
+  var notConnectedText = null;
+  var connectedText = null;
+
+  function getStatusStrings() {
+    // Pull current-language text so the demo matches whatever language
+    // the visitor has selected, rather than hardcoding English.
+    var lang = document.documentElement.lang || "en";
+    var table = (window.OTA_I18N && window.OTA_I18N[lang]) || {};
+    var base = (window.OTA_I18N && window.OTA_I18N.en) || {};
+    notConnectedText = table["how.demo_not_connected"] || base["how.demo_not_connected"] || "Not connected";
+    connectedText = table["how.demo_connected"] || base["how.demo_connected"] || "Connected";
+  }
+
+  function runSequence() {
+    getStatusStrings();
+    reset();
+    headStatus.textContent = notConnectedText;
+
+    var t = 400;
+    setTimeout(function () {
+      cursor.classList.add("visible");
+      moveCursorTo(head, 20, 20);
+    }, t);
+
+    t += 700;
+    setTimeout(function () {
+      cursor.classList.add("click");
+      panel.classList.add("open");
+      setTimeout(function () { cursor.classList.remove("click"); }, 450);
+    }, t);
+
+    t += 900;
+    setTimeout(function () { moveCursorTo(keyInput, 16, 17); }, t);
+
+    t += 550;
+    setTimeout(function () {
+      cursor.classList.add("click");
+      keyInput.classList.add("focused");
+      setTimeout(function () { cursor.classList.remove("click"); }, 450);
+      typeInto(keyInput, String.fromCharCode(0x2022), 18, 55);
+    }, t);
+
+    t += 1450;
+    setTimeout(function () {
+      keyInput.classList.remove("focused");
+      moveCursorTo(secretInput, 16, 17);
+    }, t);
+
+    t += 550;
+    setTimeout(function () {
+      cursor.classList.add("click");
+      secretInput.classList.add("focused");
+      setTimeout(function () { cursor.classList.remove("click"); }, 450);
+      typeInto(secretInput, String.fromCharCode(0x2022), 26, 50);
+    }, t);
+
+    t += 1600;
+    setTimeout(function () {
+      secretInput.classList.remove("focused");
+      moveCursorTo(saveBtn, saveBtn.offsetWidth / 2, saveBtn.offsetHeight / 2);
+    }, t);
+
+    t += 550;
+    setTimeout(function () {
+      cursor.classList.add("click");
+      saveBtn.classList.add("pressed");
+      spinner.classList.add("show");
+      setTimeout(function () {
+        cursor.classList.remove("click");
+        saveBtn.classList.remove("pressed");
+      }, 200);
+    }, t);
+
+    t += 1300;
+    setTimeout(function () {
+      spinner.classList.remove("show");
+      success.classList.add("show");
+      panel.classList.add("connected");
+      headStatus.textContent = connectedText;
+      cursor.classList.remove("visible");
+    }, t);
+
+    t += 2600;
+    if (reduceMotion) return; // hold on the connected end state, no loop
+    setTimeout(runSequence, t);
+  }
+
+  var started = false;
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (entry.isIntersecting && !started) {
+        started = true;
+        runSequence();
+      }
+    });
+  }, { threshold: 0.3 });
+  io.observe(panel);
+})();
+</script>
+
+<script>
+/*
+  Second synthetic animated demo (task #341): shows what happens after a
+  broker is already connected -- picking which asset classes to trade
+  (US stocks / crypto / forex / commodities, any combination), clicking
+  Preview AI to see graded signal results, then confirming and clicking
+  Execute. Same approach as the broker-connect demo above: pure CSS/JS
+  looping through the states a real user would see in saas_app.py's
+  Trading Settings (asset-class multiselect) and Trading Run (Preview
+  Signals -> confirm checkbox -> Execute) sections -- not a video, not
+  wired to any real API. Respects prefers-reduced-motion by holding on
+  the "executed" end state instead of looping.
+*/
+(function () {
+  var panel = document.getElementById("otaTradeDemo");
+  if (!panel) return;
+
+  var chipStocks = document.getElementById("tdChipStocks");
+  var chipCrypto = document.getElementById("tdChipCrypto");
+  var chipForex = document.getElementById("tdChipForex");
+  var chipCommodities = document.getElementById("tdChipCommodities");
+  var saveBtn = document.getElementById("tdSaveBtn");
+  var savedMsg = document.getElementById("tdSavedMsg");
+  var previewBtn = document.getElementById("tdPreviewBtn");
+  var scanSpinner = document.getElementById("tdScanSpinner");
+  var results = document.getElementById("tdResults");
+  var row1 = document.getElementById("tdRow1");
+  var row2 = document.getElementById("tdRow2");
+  var warn = document.getElementById("tdWarn");
+  var confirmRow = document.getElementById("tdConfirmRow");
+  var checkbox = document.getElementById("tdCheckbox");
+  var executeBtn = document.getElementById("tdExecuteBtn");
+  var placingSpinner = document.getElementById("tdPlacingSpinner");
+  var executedMsg = document.getElementById("tdExecutedMsg");
+  var cursor = document.getElementById("tdCursor");
+
+  var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function moveCursorTo(el, xOffset, yOffset) {
+    var panelRect = panel.getBoundingClientRect();
+    var elRect = el.getBoundingClientRect();
+    var x = elRect.left - panelRect.left + (xOffset !== undefined ? xOffset : elRect.width / 2);
+    var y = elRect.top - panelRect.top + (yOffset !== undefined ? yOffset : elRect.height / 2);
+    cursor.style.left = x + "px";
+    cursor.style.top = y + "px";
+  }
+
+  function clickPulse(el, holdClass) {
+    cursor.classList.add("click");
+    if (holdClass) el.classList.add(holdClass);
+    setTimeout(function () {
+      cursor.classList.remove("click");
+      if (holdClass) el.classList.remove(holdClass);
+    }, 200);
+  }
+
+  function reset() {
+    [chipStocks, chipCrypto, chipForex, chipCommodities].forEach(function (c) {
+      c.classList.remove("active");
+    });
+    savedMsg.classList.remove("show");
+    scanSpinner.classList.remove("show");
+    results.classList.remove("show");
+    row1.classList.remove("show");
+    row2.classList.remove("show");
+    warn.classList.remove("show");
+    confirmRow.classList.remove("show");
+    checkbox.classList.remove("checked");
+    executeBtn.classList.add("disabled");
+    placingSpinner.classList.remove("show");
+    executedMsg.classList.remove("show");
+    cursor.classList.remove("visible", "click");
+  }
+
+  function runSequence() {
+    reset();
+
+    var t = 400;
+    setTimeout(function () {
+      cursor.classList.add("visible");
+      moveCursorTo(chipStocks, chipStocks.offsetWidth / 2, chipStocks.offsetHeight / 2);
+    }, t);
+
+    t += 600;
+    setTimeout(function () {
+      clickPulse(chipStocks);
+      chipStocks.classList.add("active");
+    }, t);
+
+    t += 700;
+    setTimeout(function () { moveCursorTo(chipCrypto, chipCrypto.offsetWidth / 2, chipCrypto.offsetHeight / 2); }, t);
+
+    t += 550;
+    setTimeout(function () {
+      clickPulse(chipCrypto);
+      chipCrypto.classList.add("active");
+    }, t);
+
+    t += 700;
+    setTimeout(function () { moveCursorTo(saveBtn, saveBtn.offsetWidth / 2, saveBtn.offsetHeight / 2); }, t);
+
+    t += 550;
+    setTimeout(function () {
+      clickPulse(saveBtn, "pressed");
+      savedMsg.classList.add("show");
+    }, t);
+
+    t += 900;
+    setTimeout(function () { moveCursorTo(previewBtn, previewBtn.offsetWidth / 2, previewBtn.offsetHeight / 2); }, t);
+
+    t += 550;
+    setTimeout(function () {
+      clickPulse(previewBtn, "pressed");
+      scanSpinner.classList.add("show");
+    }, t);
+
+    t += 1300;
+    setTimeout(function () {
+      scanSpinner.classList.remove("show");
+      results.classList.add("show");
+      row1.classList.add("show");
+      setTimeout(function () { row2.classList.add("show"); }, 150);
+      warn.classList.add("show");
+      confirmRow.classList.add("show");
+    }, t);
+
+    t += 900;
+    setTimeout(function () { moveCursorTo(checkbox, 8, 8); }, t);
+
+    t += 550;
+    setTimeout(function () {
+      clickPulse(checkbox);
+      checkbox.classList.add("checked");
+      executeBtn.classList.remove("disabled");
+    }, t);
+
+    t += 700;
+    setTimeout(function () { moveCursorTo(executeBtn, executeBtn.offsetWidth / 2, executeBtn.offsetHeight / 2); }, t);
+
+    t += 550;
+    setTimeout(function () {
+      clickPulse(executeBtn, "pressed");
+      placingSpinner.classList.add("show");
+    }, t);
+
+    t += 1300;
+    setTimeout(function () {
+      placingSpinner.classList.remove("show");
+      executedMsg.classList.add("show");
+      cursor.classList.remove("visible");
+    }, t);
+
+    t += 2600;
+    if (reduceMotion) return; // hold on the executed end state, no loop
+    setTimeout(runSequence, t);
+  }
+
+  var started = false;
+  var io2 = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (entry.isIntersecting && !started) {
+        started = true;
+        runSequence();
+      }
+    });
+  }, { threshold: 0.3 });
+  io2.observe(panel);
+})();
 </script>
 
 </body>

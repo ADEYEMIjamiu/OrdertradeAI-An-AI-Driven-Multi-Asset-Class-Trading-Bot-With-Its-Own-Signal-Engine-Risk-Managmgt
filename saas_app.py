@@ -1400,6 +1400,19 @@ def render_performance_view(user_id):
             # their $ figure isn't trustworthy -- blank it out here rather
             # than show a number the summary metrics above deliberately exclude.
             trades_df.loc[~trades_df["priced"], _t("col.pnl_usd")] = None
+            # FIX 2026-09-14 (same audit that found the My Positions Total
+            # Invested bug): "quantity" for a non-priced (eToro/MT4-5) closed
+            # trade is computed at journal-time as trade_amount / entry_price
+            # -- see saas_decision_engine.py's eToro BUY branch -- which is
+            # neither eToro's own margin-dollar convention (what My Positions
+            # now shows for eToro, see saas_broker_factory.py) nor a directly
+            # comparable MT4/5 lot count. Sitting next to a real Alpaca/
+            # Binance share count in the same column invites exactly the
+            # "why don't these numbers agree" confusion the My Positions fix
+            # was about -- blanked here for the same reason the $ column
+            # above already is, rather than implying a precision it doesn't
+            # have.
+            trades_df.loc[~trades_df["priced"], _t("col.quantity")] = None
             column_order = [_t("col.closed_at"), _t("col.broker"), _t("col.ticker"), _t("col.asset_class"), _t("col.entry_price"),
                              _t("col.exit_price"), _t("col.quantity"), _t("col.pnl_usd"), _t("col.pnl_pct"), _t("col.exit_strategy")]
             trades_df = trades_df[[c for c in column_order if c in trades_df.columns]]
@@ -1445,6 +1458,9 @@ def render_performance_view(user_id):
             if badge_col in trades_df.columns:
                 styled_trades = styled_trades.map(_badge_style, subset=[badge_col])
             st.dataframe(styled_trades, use_container_width=True, hide_index=True)
+
+            if any(not t["priced"] for t in period_trades):
+                st.caption(_t("perf.caption_quantity_not_priced"))
 
     asset_class_breakdown = _cached_pnl_by_asset_class(user_id)
     strategy_breakdown = _cached_pnl_by_exit_strategy(user_id)

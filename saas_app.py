@@ -948,6 +948,64 @@ def render_account_settings(user):
                         traceback.print_exc()
                         st.error(_t("account.err_send_failed"))
 
+    # ADDED 2026-09-15 (card-optional trial redesign, Phase 1): lets a user
+    # who's satisfied mid-trial add a card proactively instead of waiting
+    # to be forced into render_billing_gate() when trial_ends_at passes --
+    # exactly the "use it free, then decide" flow that was asked for. The
+    # Checkout session still honors whatever's left of their original
+    # trial_ends_at (see billing_engine.create_checkout_session()'s
+    # trial_ends_at param), so adding a card early never starts billing
+    # any sooner than the free trial they were already promised.
+    with st.expander(_t("account.billing_expander")):
+        billing = tenant.get_billing_info(user["user_id"]) or {}
+        status = billing.get("billing_status", "none")
+
+        if status == "trialing" and not billing.get("stripe_subscription_id"):
+            days_left = tenant.get_trial_days_remaining(user["user_id"])
+            if days_left is not None:
+                st.caption(_t("account.billing_trial_caption", days=days_left))
+            st.write(_t("account.billing_add_payment_body"))
+            try:
+                checkout_url = billing_engine.create_checkout_session(
+                    user["user_id"], user["email"], APP_URL,
+                    trial_ends_at=billing.get("trial_ends_at"),
+                )
+                st.link_button(
+                    _t("account.billing_add_payment_button"), checkout_url,
+                    use_container_width=True,
+                )
+            except Exception:
+                print("[account] create_checkout_session (early add) failed:")
+                traceback.print_exc()
+                st.error(_t("billing.err_checkout_failed"))
+        elif status == "trial_expired":
+            st.caption(_t("account.billing_trial_expired_caption"))
+        elif status in ("trialing", "active") and billing.get("stripe_customer_id"):
+            # trialing here means a card is already on file (subscription
+            # exists but Stripe itself still reports a trialing status) --
+            # same portal link as a fully active subscriber either way.
+            st.caption(_t("account.billing_active_caption"))
+            try:
+                portal_url = billing_engine.create_billing_portal_session(
+                    billing["stripe_customer_id"], APP_URL
+                )
+                st.link_button(_t("billing.manage_button"), portal_url, use_container_width=True)
+            except Exception:
+                print("[account] create_billing_portal_session failed:")
+                traceback.print_exc()
+                st.warning(_t("billing.warn_portal_failed"))
+        else:
+            # past_due / canceled / legacy 'none' -- render_dashboard()'s
+            # gate would normally have already redirected these statuses to
+            # render_billing_gate() before this code ever runs, but shown
+            # defensively rather than silently rendering nothing.
+            reason = (
+                _t("billing.reason_past_due") if status == "past_due"
+                else _t("billing.reason_canceled") if status == "canceled"
+                else status
+            )
+            st.error(_t("billing.err_needs_attention", status=reason))
+
 
 def render_trading_run(user_id):
     st.subheader(_t("trading.header"))
@@ -1618,13 +1676,32 @@ def render_billing_gate(user):
                 traceback.print_exc()
                 st.warning(_t("billing.warn_portal_failed"))
     else:
-        st.subheader(_t("billing.trial_header"))
-        st.write(_t("billing.trial_body"))
+        # REDESIGNED 2026-09-15 (card-optional trial): render_dashboard()'s
+        # gate lets billing_status == "trialing" straight through to the
+        # real dashboard now (see create_user() in tenant_engine.py -- every
+        # new signup gets a 14-day trial with NO Stripe interaction), so a
+        # user only ever lands on THIS branch once their locally-tracked
+        # trial has actually run out (status == "trial_expired", set by
+        # tenant.expire_stale_trials() on a scheduler tick) or, for a
+        # handful of pre-migration rows with no trial recorded at all
+        # (status == "none"). Either way there's no free time left to
+        # honor, so create_checkout_session() is called with NO
+        # trial_ends_at -- Stripe starts charging immediately.
+        if status == "trial_expired":
+            st.subheader(_t("billing.trial_expired_header"))
+            st.write(_t("billing.trial_expired_body"))
+        else:
+            st.subheader(_t("billing.trial_header"))
+            st.write(_t("billing.trial_body"))
         try:
             checkout_url = billing_engine.create_checkout_session(
                 user["user_id"], user["email"], APP_URL
             )
-            st.link_button(_t("billing.start_trial_button"), checkout_url, use_container_width=True)
+            button_label = (
+                _t("billing.subscribe_button") if status == "trial_expired"
+                else _t("billing.start_trial_button")
+            )
+            st.link_button(button_label, checkout_url, use_container_width=True)
         except Exception:
             print("[billing] create_checkout_session failed:")
             traceback.print_exc()
@@ -1650,6 +1727,22 @@ def render_dashboard():
     if not is_admin_user and billing.get("billing_status") not in ("trialing", "active"):
         render_billing_gate(user)
         return
+
+    # ADDED 2026-09-15 (card-optional trial redesign, Phase 2 in-app
+    # banner): shown for the last few days of a still-card-free trial,
+    # using the same tenant.get_trial_days_remaining() the email reminder
+    # and Account Settings' Billing section both rely on. Deliberately NOT
+    # gated on trial_reminder_sent -- that flag controls the one-time
+    # EMAIL only (see saas_scheduler.py); this banner is just a passive
+    # notice and is fine to show on every relevant page load.
+    if (
+        not is_admin_user
+        and billing.get("billing_status") == "trialing"
+        and not billing.get("stripe_subscription_id")
+    ):
+        _days_left = tenant.get_trial_days_remaining(user["user_id"])
+        if _days_left is not None and _days_left <= 3:
+            st.warning(_t("billing.banner_trial_ending", days=_days_left))
 
     # FIX 2026-09-10: used to also show st.caption(_t("dash.signed_in_as",
     # email=user['email'])) right here -- the user's real email in

@@ -27,6 +27,20 @@ undecryptable (by design -- there is no backdoor). Passwords are hashed
 with bcrypt, never stored or logged in plaintext, never encrypted
 (hashing and encryption are different for a reason: passwords should
 never be recoverable, even by us).
+
+FIX 2026-09-03 (post-launch-audit Moderate finding): key rotation.
+Encryption now goes through cryptography's MultiFernet (see
+_get_fernet() below) instead of a single bare Fernet instance --
+SAAS_ENCRYPTION_KEY is always the CURRENT key (used for all new
+encryption), and an optional SAAS_ENCRYPTION_KEY_PREVIOUS
+(comma-separated) holds retired keys that are still accepted for
+decrypting rows that haven't been migrated yet. Previously there was
+no way to rotate this key at all -- changing SAAS_ENCRYPTION_KEY would
+have instantly made every already-stored credential permanently
+undecryptable, which meant the key could never actually be rotated in
+practice (e.g. after a suspected leak) without forcing every user to
+re-enter their broker credentials. See reencrypt_all_credentials()
+below for the migration step that completes a rotation.
 """
 
 import os
@@ -36,7 +50,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet, MultiFernet, InvalidToken
 from dotenv import load_dotenv
 
 # Loaded here directly (not just relied on transitively via some other
@@ -45,6 +59,26 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SAAS_DB_NAME = "saas_platform.db"
+
+# FIX 2026-09-02 (post-launch-audit): moved here from saas_app.py's own
+# module-level _ADMIN_EMAILS/_is_admin() so the SAME admin definition can
+# be used by engines/saas_decision_engine.py's billing gate below --
+# previously "is this user exempt from the billing gate" only existed in
+# the Streamlit UI layer, which the background scheduler never runs
+# through. saas_app.py's _is_admin() now delegates here instead of
+# keeping its own separate copy, so there is exactly one definition of
+# "admin" platform-wide. Empty by default (no ADMIN_EMAILS set means no
+# one is admin), fail-closed rather than fail-open. Set in .env, e.g.
+# ADMIN_EMAILS=you@example.com
+_ADMIN_EMAILS = {
+    e.strip().lower()
+    for e in os.environ.get("ADMIN_EMAILS", "").split(",")
+    if e.strip()
+}
+
+
+def is_admin_email(email):
+    return bool(email) and email.strip().lower() in _ADMIN_EMAILS
 
 
 def _get_connection():
@@ -155,6 +189,79 @@ def _get_connection():
     except sqlite3.OperationalError:
         pass  # column already exists
 
+    # Migration for databases created before 2026-09-03 (no login
+    # brute-force protection -- post-launch-audit Moderate finding).
+    # failed_login_attempts counts consecutive wrong-password attempts
+    # for an EXISTING account only (there's no row to increment for an
+    # unknown email, so this can't be used to enumerate accounts any
+    # more than authenticate_user() already allows -- see its
+    # docstring). locked_until is NULL until the threshold is hit, then
+    # holds an ISO8601 UTC timestamp; both reset to their defaults on a
+    # successful login or once the lock naturally expires.
+    try:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN locked_until TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+    # Migration for databases created before 2026-09-07 (multi-language
+    # UI support -- see engines/saas_i18n.py). NULL means "never chosen",
+    # which saas_app.py treats as English (DEFAULT_LANGUAGE), not a
+    # separate "unset" state that needs its own handling anywhere else.
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN language TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+    # Migration for databases created before 2026-09-15 (card-optional
+    # trial redesign -- see CARD-OPTIONAL TRIAL section below). Every
+    # signup used to be forced through Stripe Checkout (card required)
+    # before ever seeing the dashboard -- billing_status stayed 'none'
+    # until that completed. trial_ends_at is this platform's OWN record
+    # of when a card-optional trial runs out, independent of Stripe,
+    # since Stripe knows nothing about a trial no subscription has been
+    # created for yet. NULL for every pre-migration account (they either
+    # already have a real Stripe subscription, in which case this column
+    # is simply never consulted -- see billing_status precedence notes
+    # below -- or they're stuck at billing_status='none' and will see
+    # the same "start your trial" gate as before, now card-optional).
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN trial_ends_at TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    # Sent-once flag for the "your trial ends in 3 days" email -- separate
+    # from trial_ends_at itself so expire_stale_trials() below can be
+    # called as often as convenient (every scheduler tick) without ever
+    # re-sending the reminder.
+    try:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN trial_reminder_sent INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    # Referral system (task requested 2026-09-15, see REFERRALS section
+    # below). referral_code is this user's own shareable code -- assigned
+    # once, at signup, never reused across accounts (UNIQUE). referred_by
+    # records which code THIS account signed up with, if any -- write-once,
+    # NULL if they signed up without a code or the code didn't match
+    # anyone. Kept as two plain columns on users rather than a separate
+    # join table: the relationship is exactly one referrer per account,
+    # decided once at signup and never changed, so there's no many-to-many
+    # shape here that would justify a separate table.
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN referral_code TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN referred_by_code TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS password_reset_tokens (
             token TEXT PRIMARY KEY,
@@ -214,7 +321,144 @@ def _get_connection():
             FOREIGN KEY(user_id) REFERENCES users(user_id)
         )
     """)
+    # FIX 2026-09-02 (post-launch-audit CRITICAL finding): see
+    # acquire_execution_lock()/release_execution_lock() below for why
+    # this exists -- one row per user_id currently mid-execution.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS execution_locks (
+            user_id TEXT PRIMARY KEY,
+            acquired_at TEXT NOT NULL
+        )
+    """)
+    # Added 2026-09-08 for the live-trading switch (real-money rollout):
+    # every time a user's allow_live_trading flag changes, one row goes
+    # here -- separate from user_settings itself, which only ever holds
+    # CURRENT state, not history. This table is the audit trail proving
+    # when/why real-money trading was turned on or off for a given
+    # account. save_user_settings() deliberately cannot touch
+    # allow_live_trading (see that function's docstring), so
+    # set_live_trading_status() below is the only code path that writes
+    # here, and it always updates user_settings and inserts this row in
+    # the same transaction -- the two can never desync.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS live_trading_audit_log (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            allow_live_trading INTEGER NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        )
+    """)
     return conn
+
+
+# ============================================================
+# EXECUTION LOCK (added 2026-09-02, post-launch-audit CRITICAL finding):
+# saas_scheduler.py's background tick and saas_app.py's manual "Execute
+# These Trades" button both end up calling engines/saas_decision_engine.py's
+# run_decision_loop_for_user(user_id, dry_run=False) for the SAME user_id
+# from two ENTIRELY SEPARATE OS processes (the scheduler and the
+# Streamlit dashboard), with no coordination between them. If both land
+# on the same user around the same moment, both can pass the position-
+# cap/cooldown checks before either writes an order -- a real duplicated
+# position with doubled exposure, found live in the pre-launch audit.
+#
+# This is a CROSS-PROCESS lock -- an in-memory threading.Lock would not
+# help here at all, since the scheduler and the dashboard are different
+# processes. Implemented as a row in this same SQLite DB, which both
+# processes already share: the row's PRIMARY KEY constraint is the real
+# atomic gate (a second INSERT for the same user_id fails immediately,
+# guaranteed by SQLite itself, not by any check-then-act logic in this
+# Python code). Self-healing against a crashed lock holder (a Streamlit
+# worker killed mid-execution, a scheduler tick OOM-killed, etc.) via a
+# staleness timeout, rather than needing a separate cleanup process to
+# ever run -- see _EXECUTION_LOCK_STALE_AFTER_SECONDS.
+#
+# run_decision_loop_for_user() acquires this for its ENTIRE run (both
+# dry_run=True and dry_run=False) rather than only around the actual
+# order-placement calls -- simpler to reason about ("only one call in
+# flight per user_id, period") than trying to lock just the minimal
+# critical section, and the position-cap/cooldown checks that create the
+# race are spread across the function, not confined to one spot.
+# ============================================================
+
+_EXECUTION_LOCK_STALE_AFTER_SECONDS = 600  # generous vs. any single
+# user's realistic run duration (seconds, per this project's own
+# scheduler-timing findings) -- long enough that a genuinely-still-
+# running execution is never falsely preempted by a concurrent caller,
+# short enough that a crashed holder doesn't block a user indefinitely.
+
+
+def acquire_execution_lock(user_id):
+    """
+    Attempts to acquire this user's execution lock. Returns True if
+    acquired -- the caller now owns it and MUST call
+    release_execution_lock(user_id) in a finally block, no matter how
+    the run ends. Returns False if someone else already holds a
+    non-stale lock for this user_id -- the caller must skip this
+    execution entirely (not proceed, not retry inline) -- see the
+    module section docstring above for why this exists.
+    """
+    conn = _get_connection()
+    try:
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+
+        def _try_insert():
+            try:
+                conn.execute(
+                    "INSERT INTO execution_locks (user_id, acquired_at) VALUES (?, ?)",
+                    (user_id, now),
+                )
+                conn.commit()
+                return True
+            except sqlite3.IntegrityError:
+                return False
+
+        if _try_insert():
+            return True
+
+        # A lock row already exists. If it's stale (a previous holder
+        # crashed without releasing it), reclaim it -- but only if it's
+        # STILL the exact stale row we just read (the DELETE's WHERE
+        # clause guards against a second process racing to reclaim the
+        # same stale lock at the same instant; only one DELETE can
+        # actually remove a row with a matching acquired_at).
+        row = conn.execute(
+            "SELECT acquired_at FROM execution_locks WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if row is None:
+            # Released between our failed INSERT and this SELECT -- one retry.
+            return _try_insert()
+
+        age_seconds = (now_dt - datetime.fromisoformat(row[0])).total_seconds()
+        if age_seconds < _EXECUTION_LOCK_STALE_AFTER_SECONDS:
+            return False
+
+        cur = conn.execute(
+            "DELETE FROM execution_locks WHERE user_id = ? AND acquired_at = ?",
+            (user_id, row[0]),
+        )
+        if cur.rowcount == 0:
+            # Someone else already reclaimed/released/refreshed it first.
+            return False
+        conn.commit()
+        return _try_insert()
+    finally:
+        conn.close()
+
+
+def release_execution_lock(user_id):
+    """Always safe to call even if the lock was never actually held by
+    this caller (e.g. acquire_execution_lock() returned False) -- a
+    plain DELETE, not an error if no matching row exists."""
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM execution_locks WHERE user_id = ?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ============================================================
@@ -223,20 +467,51 @@ def _get_connection():
 
 def _get_fernet():
     """
-    Loads SAAS_ENCRYPTION_KEY from the environment. Raises a clear error
-    rather than silently falling back to some default key -- a default/
-    hardcoded encryption key would defeat the entire point of encrypting
-    other users' broker secrets in the first place.
+    Loads SAAS_ENCRYPTION_KEY (the CURRENT key -- used for all new
+    encryption) plus the optional, comma-separated
+    SAAS_ENCRYPTION_KEY_PREVIOUS (retired keys still accepted when
+    decrypting rows that predate the most recent rotation), and
+    returns a MultiFernet over all of them. Raises a clear error rather
+    than silently falling back to some default key -- a default/
+    hardcoded encryption key would defeat the entire point of
+    encrypting other users' broker secrets in the first place.
+
+    HOW TO ROTATE SAAS_ENCRYPTION_KEY:
+      1. Generate a new key (same command as below).
+      2. Move the CURRENT SAAS_ENCRYPTION_KEY value into
+         SAAS_ENCRYPTION_KEY_PREVIOUS (comma-separate if it already has
+         older keys from a prior rotation you haven't cleaned up yet).
+      3. Set SAAS_ENCRYPTION_KEY to the new key.
+      4. Restart every process that imports this module (ordertrade-ai,
+         saas-app, saas-scheduler, saas-webhook).
+      5. Run reencrypt_all_credentials() (below) once, live -- this
+         re-writes every stored credential using the new current key.
+      6. Once that completes with zero failures, SAAS_ENCRYPTION_KEY_PREVIOUS
+         can be cleared (the old key is no longer needed by anything).
     """
-    key = os.environ.get("SAAS_ENCRYPTION_KEY")
-    if not key:
+    primary_key = os.environ.get("SAAS_ENCRYPTION_KEY")
+    if not primary_key:
         raise RuntimeError(
             "SAAS_ENCRYPTION_KEY is not set. Generate one with "
             "`python3 -c \"from cryptography.fernet import Fernet; "
             "print(Fernet.generate_key().decode())\"` and add it to "
             ".env (never commit it, never reuse it across environments)."
         )
-    return Fernet(key.encode() if isinstance(key, str) else key)
+    previous_keys = [
+        k.strip()
+        for k in os.environ.get("SAAS_ENCRYPTION_KEY_PREVIOUS", "").split(",")
+        if k.strip()
+    ]
+    all_keys = [primary_key] + previous_keys
+    try:
+        return MultiFernet(
+            [Fernet(k.encode() if isinstance(k, str) else k) for k in all_keys]
+        )
+    except ValueError as e:
+        raise RuntimeError(
+            f"Invalid Fernet key in SAAS_ENCRYPTION_KEY or "
+            f"SAAS_ENCRYPTION_KEY_PREVIOUS: {e}"
+        )
 
 
 def encrypt_secret(plaintext):
@@ -251,13 +526,73 @@ def decrypt_secret(ciphertext):
     try:
         return _get_fernet().decrypt(ciphertext.encode()).decode()
     except InvalidToken:
-        # Wrong/rotated key, or corrupted data -- never guess, never
-        # return a partial/garbled secret to a broker API call.
+        # Doesn't match SAAS_ENCRYPTION_KEY or any key listed in
+        # SAAS_ENCRYPTION_KEY_PREVIOUS, or corrupted data -- never
+        # guess, never return a partial/garbled secret to a broker API
+        # call.
         raise RuntimeError(
-            "Could not decrypt stored credential -- SAAS_ENCRYPTION_KEY "
-            "may have changed since this was saved. Re-enter broker "
-            "credentials for this user."
+            "Could not decrypt stored credential -- it may have been "
+            "encrypted with a key no longer in SAAS_ENCRYPTION_KEY or "
+            "SAAS_ENCRYPTION_KEY_PREVIOUS. Re-enter broker credentials "
+            "for this user, or add the missing key back to "
+            "SAAS_ENCRYPTION_KEY_PREVIOUS temporarily and run "
+            "reencrypt_all_credentials()."
         )
+
+
+def reencrypt_all_credentials():
+    """
+    Key-rotation migration helper: re-encrypts every stored broker
+    credential field (api_key_encrypted, api_secret_encrypted,
+    extra_encrypted) onto the CURRENT SAAS_ENCRYPTION_KEY. Decryption
+    tries every key in SAAS_ENCRYPTION_KEY + SAAS_ENCRYPTION_KEY_PREVIOUS
+    (via _get_fernet()'s MultiFernet), so this works whether a given
+    row is still on an old key or already on the current one -- run it
+    once after rotating (see _get_fernet()'s docstring for the full
+    steps) and every row ends up back on a single key.
+
+    Safe to run more than once -- a row already on the current key is
+    just re-encrypted with the same key again (fresh ciphertext, same
+    plaintext). A row that fails to decrypt with ANY known key is left
+    completely untouched (never corrupted, never silently dropped) and
+    counted in the returned failed total instead.
+
+    Returns (migrated_count, failed_count).
+    """
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, api_key_encrypted, api_secret_encrypted, extra_encrypted "
+            "FROM user_broker_credentials"
+        ).fetchall()
+        migrated = 0
+        failed = 0
+        for row_id, api_key_enc, api_secret_enc, extra_enc in rows:
+            try:
+                new_api_key = (
+                    encrypt_secret(decrypt_secret(api_key_enc)) if api_key_enc else None
+                )
+                new_api_secret = (
+                    encrypt_secret(decrypt_secret(api_secret_enc)) if api_secret_enc else None
+                )
+                new_extra = (
+                    encrypt_secret(decrypt_secret(extra_enc)) if extra_enc else None
+                )
+            except RuntimeError as e:
+                failed += 1
+                print(f"   Row {row_id}: could not decrypt with any known key -- "
+                      f"left untouched. ({e})")
+                continue
+            conn.execute(
+                "UPDATE user_broker_credentials SET api_key_encrypted = ?, "
+                "api_secret_encrypted = ?, extra_encrypted = ? WHERE id = ?",
+                (new_api_key, new_api_secret, new_extra, row_id),
+            )
+            migrated += 1
+        conn.commit()
+        return migrated, failed
+    finally:
+        conn.close()
 
 
 # ============================================================
@@ -275,6 +610,22 @@ def create_user(email, password, phone=None, country=None):
     compliance logic tied to country. Blank strings are stored as NULL
     rather than "" so an unset field reads the same whether it came
     from signup or an old pre-migration account.
+
+    FIX 2026-09-15 (card-optional trial redesign): every new account now
+    starts billing_status='trialing' with trial_ends_at = now + TRIAL_
+    LENGTH_DAYS, set directly here -- no Stripe Checkout involved at all.
+    Previously billing_status defaulted to 'none' and the very next thing
+    a new user saw was render_billing_gate() demanding a card before they
+    could see the dashboard (see saas_app.py's render_dashboard() gate),
+    which is exactly the signup friction real prospective users pushed
+    back on. render_dashboard()'s gate already treats 'trialing' as full
+    access, so simply granting it here -- with no stripe_customer_id/
+    stripe_subscription_id yet -- is enough to drop a brand-new user
+    straight into the working product. See expire_stale_trials() below
+    for what happens when trial_ends_at passes with no card added, and
+    engines/billing_engine.py for how a user who DOES want to add a card
+    early gets a Checkout session that honors whatever's left of this
+    same trial_ends_at rather than resetting the clock.
     """
     email = str(email).strip().lower()
     phone = phone.strip() if phone and phone.strip() else None
@@ -291,12 +642,15 @@ def create_user(email, password, phone=None, country=None):
         password_hash = bcrypt.hashpw(
             password.encode(), bcrypt.gensalt()
         ).decode()
-        now = datetime.now(timezone.utc).isoformat()
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        trial_ends_at = (now_dt + timedelta(days=TRIAL_LENGTH_DAYS)).isoformat()
 
         conn.execute(
-            "INSERT INTO users (user_id, email, password_hash, created_at, is_active, phone, country) "
-            "VALUES (?, ?, ?, ?, 1, ?, ?)",
-            (user_id, email, password_hash, now, phone, country),
+            "INSERT INTO users (user_id, email, password_hash, created_at, is_active, "
+            "phone, country, billing_status, trial_ends_at) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?, 'trialing', ?)",
+            (user_id, email, password_hash, now, phone, country, trial_ends_at),
         )
         # Every new user starts with paper/demo-only enforced -- see
         # allow_live_trading default and module docstring.
@@ -311,27 +665,86 @@ def create_user(email, password, phone=None, country=None):
         conn.close()
 
 
+# Brute-force lockout params for authenticate_user() below (post-launch-
+# audit Moderate finding: login had no rate-limiting/lockout at all).
+_LOGIN_LOCKOUT_THRESHOLD = 5
+_LOGIN_LOCKOUT_MINUTES = 15
+
+
 def authenticate_user(email, password):
     """
-    Returns the user_id if email/password match an active account,
-    otherwise None. Deliberately returns the same "None" for both
-    "no such email" and "wrong password" -- distinguishing the two in
-    the response would let an attacker enumerate registered emails.
+    Returns the user_id if email/password match an active, non-locked-
+    out account, otherwise None. Deliberately returns the same "None"
+    for "no such email", "wrong password", AND "account temporarily
+    locked out" -- distinguishing any of these in the response would
+    let an attacker enumerate registered emails (this is the same
+    anti-enumeration reasoning as before, just extended to cover the
+    new lockout state too).
+
+    Brute-force protection: after _LOGIN_LOCKOUT_THRESHOLD consecutive
+    wrong-password attempts against an EXISTING account, that account
+    is locked for _LOGIN_LOCKOUT_MINUTES minutes -- further attempts
+    return None even with the correct password until the lock expires.
+    Failed-attempt tracking only happens for accounts that exist
+    (there's no row to increment for an unknown email), so an attacker
+    probing random emails never triggers a lock either way.
     """
     email = str(email).strip().lower()
     conn = _get_connection()
     try:
         row = conn.execute(
-            "SELECT user_id, password_hash, is_active FROM users WHERE email = ?",
+            "SELECT user_id, password_hash, is_active, failed_login_attempts, "
+            "locked_until FROM users WHERE email = ?",
             (email,),
         ).fetchone()
         if not row:
             return None
-        user_id, password_hash, is_active = row
+        user_id, password_hash, is_active, failed_attempts, locked_until = row
         if not is_active:
             return None
+
+        now = datetime.now(timezone.utc)
+        if locked_until:
+            locked_until_dt = datetime.fromisoformat(locked_until)
+            if now < locked_until_dt:
+                return None  # still locked out -- don't even check the password
+            # Lock has expired: give the account a fresh attempt window
+            # rather than leaving a stale counter hanging around.
+            failed_attempts = 0
+            conn.execute(
+                "UPDATE users SET failed_login_attempts = 0, locked_until = NULL "
+                "WHERE user_id = ?",
+                (user_id,),
+            )
+            conn.commit()
+
         if bcrypt.checkpw(password.encode(), password_hash.encode()):
+            if failed_attempts:
+                conn.execute(
+                    "UPDATE users SET failed_login_attempts = 0, locked_until = NULL "
+                    "WHERE user_id = ?",
+                    (user_id,),
+                )
+                conn.commit()
             return user_id
+
+        # Wrong password -- bump the counter, lock if threshold reached.
+        failed_attempts += 1
+        if failed_attempts >= _LOGIN_LOCKOUT_THRESHOLD:
+            lock_until = (
+                now + timedelta(minutes=_LOGIN_LOCKOUT_MINUTES)
+            ).isoformat()
+            conn.execute(
+                "UPDATE users SET failed_login_attempts = ?, locked_until = ? "
+                "WHERE user_id = ?",
+                (failed_attempts, lock_until, user_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE users SET failed_login_attempts = ? WHERE user_id = ?",
+                (failed_attempts, user_id),
+            )
+        conn.commit()
         return None
     finally:
         conn.close()
@@ -341,7 +754,7 @@ def get_user(user_id):
     conn = _get_connection()
     try:
         row = conn.execute(
-            "SELECT user_id, email, created_at, is_active, email_verified, phone, country "
+            "SELECT user_id, email, created_at, is_active, email_verified, phone, country, language "
             "FROM users WHERE user_id = ?",
             (user_id,),
         ).fetchone()
@@ -355,7 +768,27 @@ def get_user(user_id):
             "email_verified": bool(row[4]),
             "phone": row[5],
             "country": row[6],
+            "language": row[7],
         }
+    finally:
+        conn.close()
+
+
+def set_user_language(user_id, language):
+    """
+    Updates the display-language preference for an existing account.
+    `language` must be one of engines.saas_i18n.SUPPORTED_LANGUAGES'
+    keys -- validated by the caller (saas_app.py), not here, to keep
+    this module from needing to import the UI-layer i18n module.
+    """
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            "UPDATE users SET language = ? WHERE user_id = ?",
+            (language, user_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()
 
@@ -512,6 +945,60 @@ def list_active_users():
         conn.close()
 
 
+def delete_broker_credentials(user_id, broker):
+    """
+    Removes this user's saved credentials for one broker entirely.
+
+    Added 2026-09-03 alongside the credential-validation-at-save-time
+    fix (post-launch-audit Moderate finding) -- saas_app.py's save flow
+    now test-connects immediately after saving, and calls this to roll
+    back to "not connected" if that user never had working credentials
+    for this broker before (i.e. this was their first attempt and it
+    failed) rather than leaving known-bad credentials sitting in the
+    database where the scheduler would keep retrying them every tick.
+    """
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM user_broker_credentials WHERE user_id = ? AND broker = ?",
+            (user_id, broker.upper()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_broker_environment(user_id, broker, environment):
+    """
+    Updates ONLY the stored environment label for an existing credential
+    row -- added 2026-09-08 (task #305) for mt_broker.py, which cannot
+    know whether a connected MT4/5 account is demo or real until it
+    actually connects and reads MetaApi's own account_information.type
+    (there is no user-chosen environment flag for MT4/5 the way there is
+    for Alpaca/Binance/eToro -- see mt_broker.py's module docstring LIVE
+    TRADING GATE section). Deliberately does NOT touch api_key_encrypted/
+    api_secret_encrypted/extra_encrypted -- unlike save_broker_credentials()
+    above, which would need those re-supplied or it overwrites them with
+    None. This is purely a display-label correction; it is NEVER
+    consulted for the actual live/demo execution decision (mt_broker.py
+    re-derives that fresh from MetaApi on every single trade attempt, not
+    from this stored value) -- a stale or not-yet-corrected label here
+    can never cause a real order to be misrouted, only a momentarily
+    inaccurate status line in the UI. No-op if this user has no saved
+    credential row for this broker yet.
+    """
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE user_broker_credentials SET environment = ?, updated_at = ? "
+            "WHERE user_id = ? AND broker = ?",
+            (environment, datetime.now(timezone.utc).isoformat(), user_id, broker.upper()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def list_connected_brokers(user_id):
     """Broker names this user has saved credentials for, no secrets included."""
     conn = _get_connection()
@@ -605,6 +1092,104 @@ def save_user_settings(
         conn.close()
 
 
+def set_live_trading_status(user_id, allow_live_trading, reason=""):
+    """
+    The ONLY code path allowed to change user_settings.allow_live_trading
+    -- see save_user_settings()'s docstring just above for why that
+    function deliberately excludes this column as a parameter. Updates
+    user_settings and inserts a row into live_trading_audit_log in the
+    SAME transaction, so the audit trail can never desync from the
+    actual flag (either both commit or neither does).
+
+    Called from exactly one place: the explicit "Switch to live
+    trading" / "Switch back to demo" confirmation flow in saas_app.py,
+    after the user has stepped through the risk-acknowledgment
+    checklist and typed the confirmation phrase -- never from a plain
+    settings form, never automatically.
+
+    Flipping this to True does NOT by itself let any order reach a real
+    broker account. That is gated separately, broker-by-broker, by the
+    hardcoded paper=True / testnet / demo constants in
+    engines/saas_broker_factory.py (see that file's SAFETY docstring) --
+    left deliberately independent of this flag as defense-in-depth, so
+    this function turning on account-level permission and a broker
+    function actually routing to real money are always two separate,
+    individually-reviewed changes.
+    """
+    conn = _get_connection()
+    try:
+        existing = get_user_settings(user_id)
+        if existing is None:
+            return False
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE user_settings SET allow_live_trading = ?, updated_at = ? WHERE user_id = ?",
+            (int(bool(allow_live_trading)), now, user_id),
+        )
+        conn.execute(
+            "INSERT INTO live_trading_audit_log (id, user_id, allow_live_trading, reason, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), user_id, int(bool(allow_live_trading)), reason, now),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def get_live_trading_enabled_since(user_id):
+    """
+    Returns the datetime this user's account most recently switched
+    live trading ON, or None if they are not currently live (either
+    they've never enabled it, or their latest audit-log entry is an
+    OFF/revert). Added 2026-09-09 (task #306) for saas_decision_
+    engine.py's live-trading position-size probation -- a temporary,
+    tighter position-size ceiling for the first few days after a user
+    goes live, on top of (never instead of) their own configured
+    max_position_size, so an undiscovered bug or an unlucky first
+    signal has a smaller blast radius while a user is still building
+    confidence in real-money execution. Read-only, never touches
+    allow_live_trading or the audit log itself.
+
+    NOTE: live_trading_audit_log.created_at is written by set_live_
+    trading_status() using an offset-AWARE datetime.now(timezone.utc)
+    -- unlike most other timestamps in this codebase (see saas_order_
+    manager.py's naive datetime.now()). Returned as-is (aware); callers
+    must compare against datetime.now(timezone.utc), not a naive
+    datetime.now() -- see the "can't compare offset-naive and
+    offset-aware datetimes" incident in task #310 for exactly what
+    goes wrong if that's not respected.
+    """
+    log = get_live_trading_audit_log(user_id)  # newest first
+    if not log or not log[0]["allow_live_trading"]:
+        return None
+    try:
+        return datetime.fromisoformat(log[0]["created_at"])
+    except (TypeError, ValueError):
+        return None
+
+
+def get_live_trading_audit_log(user_id):
+    """
+    This user's live-trading on/off history, newest first. Read-only --
+    never called from the switch flow itself, only for display (account
+    settings, and the admin view in saas_app.py's admin panel).
+    """
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT allow_live_trading, reason, created_at FROM live_trading_audit_log "
+            "WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [
+            {"allow_live_trading": bool(r[0]), "reason": r[1], "created_at": r[2]}
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
 # ============================================================
 # PASSWORD RESET (added 2026-08-28, engines/email_engine.py sends the
 # actual email via Resend; this file only manages the tokens)
@@ -681,7 +1266,19 @@ def verify_password_reset_token(token):
 def reset_password(token, new_password):
     """Consumes the token and sets the new password in one step. Returns
     False (and changes nothing) if the token is missing, expired, or
-    already used."""
+    already used.
+
+    FIX 2026-09-03 (post-launch-audit Moderate finding): also revokes
+    every existing login_sessions row for this account, so a password
+    reset actually forces re-authentication everywhere -- previously an
+    attacker who'd already stolen a session cookie (or an old device
+    still logged in) would stay logged in indefinitely even after the
+    legitimate owner reset the password. This is the whole point of a
+    password reset as an incident-response tool, not just a convenience
+    feature. Also clears any lockout state (see authenticate_user()'s
+    _LOGIN_LOCKOUT_THRESHOLD) -- a successful reset proves ownership, so
+    there's no reason to leave the account locked out afterward.
+    """
     conn = _get_connection()
     try:
         row = conn.execute(
@@ -696,11 +1293,14 @@ def reset_password(token, new_password):
 
         password_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
         conn.execute(
-            "UPDATE users SET password_hash = ? WHERE user_id = ?", (password_hash, user_id)
+            "UPDATE users SET password_hash = ?, failed_login_attempts = 0, "
+            "locked_until = NULL WHERE user_id = ?",
+            (password_hash, user_id),
         )
         conn.execute(
             "UPDATE password_reset_tokens SET used = 1 WHERE token = ?", (token,)
         )
+        conn.execute("DELETE FROM login_sessions WHERE user_id = ?", (user_id,))
         conn.commit()
         return True
     finally:
@@ -929,25 +1529,54 @@ def delete_login_session(token):
 # webhook events. Nothing in saas_app.py ever sets billing_status
 # directly: Stripe is the single source of truth for whether someone
 # is actually paying, and this table just mirrors it.
+#
+# REDESIGNED 2026-09-15 (card-optional trial): that "Stripe is the
+# single source of truth" rule now has one deliberate exception --
+# billing_status='trialing' with stripe_subscription_id still NULL
+# means this platform granted the trial itself (see create_user()),
+# and trial_ends_at (this file's own column, never Stripe's) is what
+# that state's expiry is measured against. The moment a real Stripe
+# subscription exists (stripe_subscription_id is set), Stripe goes
+# back to being the only thing that changes billing_status, exactly as
+# before -- trial_ends_at simply stops being consulted from that point
+# on (see expire_stale_trials()'s WHERE clause below, which explicitly
+# excludes any user with a stripe_subscription_id already on file).
 # ============================================================
+
+TRIAL_LENGTH_DAYS = 14
+
 
 def link_stripe_customer(user_id, stripe_customer_id, stripe_subscription_id):
     """
     Called from the webhook handler when checkout.session.completed
     fires -- ties this user's account to the Stripe customer/
-    subscription Stripe just created, and marks them 'trialing'
-    immediately (every Checkout Session this platform creates includes
-    a 7-day trial, so a just-completed session is trialing by
-    definition). The subscription's own customer.subscription.updated
-    webhook -- which Stripe sends around the same time -- is what
-    keeps this in sync from here on as the subscription's real status
-    changes (active, past_due, canceled, ...).
+    subscription Stripe just created.
+
+    FIX 2026-09-15: this used to also hardcode billing_status='trialing'
+    here, on the assumption that every Checkout Session this platform
+    creates includes a trial, so a just-completed session was trialing
+    by definition. That assumption no longer holds -- billing_engine.
+    create_checkout_session() now sometimes creates a card-collection-
+    only session with NO Stripe-side trial at all (a user adding a card
+    after their card-optional trial already expired should be charged
+    immediately, not handed a second trial), which would land as
+    'active' or 'incomplete', not 'trialing'. Deliberately leaves
+    billing_status untouched here rather than guessing -- the
+    customer.subscription.created webhook Stripe sends within the same
+    round-trip (see saas_webhook_server.py's dispatch table, which
+    already handles that event type) sets the real status moments
+    later via update_billing_status_by_customer() below. Leaving this
+    user's PRE-existing billing_status in place for that brief gap
+    (still 'trialing' from their card-optional trial, or 'trial_expired'
+    if they were already locked out) is harmless either way -- both
+    read as "not yet a confirmed paying subscriber", which is exactly
+    what's still true until the next webhook lands.
     """
     conn = _get_connection()
     try:
         conn.execute(
-            "UPDATE users SET stripe_customer_id = ?, stripe_subscription_id = ?, "
-            "billing_status = 'trialing' WHERE user_id = ?",
+            "UPDATE users SET stripe_customer_id = ?, stripe_subscription_id = ? "
+            "WHERE user_id = ?",
             (stripe_customer_id, stripe_subscription_id, user_id),
         )
         conn.commit()
@@ -985,13 +1614,17 @@ def update_billing_status_by_customer(stripe_customer_id, status, stripe_subscri
 
 
 def get_billing_info(user_id):
-    """Returns {"billing_status", "stripe_customer_id", "stripe_subscription_id"}
-    for this user, or None if the user doesn't exist. billing_status is
-    'none' until they complete Stripe Checkout at least once."""
+    """Returns {"billing_status", "stripe_customer_id", "stripe_subscription_id",
+    "trial_ends_at"} for this user, or None if the user doesn't exist.
+    billing_status is 'none' for pre-2026-09-15 accounts that never
+    started a trial or Checkout; every account created since then starts
+    'trialing' with trial_ends_at set (see create_user()). trial_ends_at
+    is only meaningful while stripe_subscription_id is still NULL -- see
+    this file's BILLING section docstring above link_stripe_customer()."""
     conn = _get_connection()
     try:
         row = conn.execute(
-            "SELECT billing_status, stripe_customer_id, stripe_subscription_id "
+            "SELECT billing_status, stripe_customer_id, stripe_subscription_id, trial_ends_at "
             "FROM users WHERE user_id = ?",
             (user_id,),
         ).fetchone()
@@ -1001,6 +1634,121 @@ def get_billing_info(user_id):
             "billing_status": row[0],
             "stripe_customer_id": row[1],
             "stripe_subscription_id": row[2],
+            "trial_ends_at": row[3],
         }
+    finally:
+        conn.close()
+
+
+def get_trial_days_remaining(user_id):
+    """
+    Returns the number of whole days left in this user's CARD-OPTIONAL
+    trial (rounded up, so "a few hours left" still reads as 1, not 0),
+    or None if there's nothing meaningful to show -- no trial_ends_at at
+    all (pre-migration account), or they already have a real Stripe
+    subscription (stripe_subscription_id set), in which case Stripe's
+    own status is what matters, not this platform's trial clock. Never
+    negative -- a trial that's already expired returns 0, not a
+    negative number that would read strangely in a UI banner.
+    """
+    billing = get_billing_info(user_id)
+    if not billing or not billing.get("trial_ends_at") or billing.get("stripe_subscription_id"):
+        return None
+    try:
+        trial_ends_at = datetime.fromisoformat(billing["trial_ends_at"])
+    except (TypeError, ValueError):
+        return None
+    remaining = trial_ends_at - datetime.now(timezone.utc)
+    if remaining.total_seconds() <= 0:
+        return 0
+    # Ceiling division on whole days -- "23 hours left" should still say
+    # "1 day left", not "0 days left", right up until it actually expires.
+    import math
+    return math.ceil(remaining.total_seconds() / 86400)
+
+
+def expire_stale_trials():
+    """
+    Finds every user whose card-optional trial (billing_status='trialing',
+    stripe_subscription_id still NULL -- see this file's BILLING section
+    docstring) has passed trial_ends_at with no card ever added, and
+    flips them to billing_status='trial_expired'.
+
+    'trial_expired' is a value neither engines/saas_decision_engine.py's
+    billing gate nor saas_app.py's render_dashboard() gate has ever
+    special-cased -- both already block anything outside ('trialing',
+    'active') from opening new positions / seeing the dashboard, and
+    both already leave exit protection on existing positions completely
+    unaffected (see saas_decision_engine.py's own comment on why exit
+    protection runs before the billing check). Introducing a new status
+    string here needed zero changes to either gate -- only
+    render_billing_gate()'s copy (a past_due/canceled/trial_expired
+    three-way branch, see saas_app.py) needed to learn the new word so
+    it shows the right message and the right Checkout button (no trial
+    this time -- see billing_engine.create_checkout_session()).
+
+    Meant to be called once per scheduler tick (see saas_scheduler.py) --
+    cheap (one indexed-ish WHERE clause), idempotent, and safe to call
+    as often as convenient. Returns the list of user_ids just expired,
+    for the caller's own log line.
+    """
+    conn = _get_connection()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        rows = conn.execute(
+            "SELECT user_id FROM users WHERE billing_status = 'trialing' "
+            "AND stripe_subscription_id IS NULL AND trial_ends_at IS NOT NULL "
+            "AND trial_ends_at <= ?",
+            (now,),
+        ).fetchall()
+        expired_user_ids = [r[0] for r in rows]
+        if expired_user_ids:
+            conn.executemany(
+                "UPDATE users SET billing_status = 'trial_expired' WHERE user_id = ?",
+                [(uid,) for uid in expired_user_ids],
+            )
+            conn.commit()
+        return expired_user_ids
+    finally:
+        conn.close()
+
+
+def get_users_needing_trial_reminder(days_before=3):
+    """
+    Finds every user whose card-optional trial ends within the next
+    `days_before` days, has never been sent the reminder (trial_reminder_
+    sent=0), and hasn't already added a card (stripe_subscription_id
+    still NULL -- someone who already paid doesn't need a "your trial is
+    ending" nudge). Returns [{"user_id", "email", "trial_ends_at"}, ...]
+    so the caller (saas_scheduler.py, via engines/email_engine.py) can
+    send the email and then call mark_trial_reminder_sent() per user --
+    deliberately two separate steps rather than this function marking
+    them itself, so a caller whose email send fails can simply not call
+    mark_trial_reminder_sent() and the user is picked up again next tick
+    instead of silently never being reminded.
+    """
+    conn = _get_connection()
+    try:
+        now_dt = datetime.now(timezone.utc)
+        cutoff = (now_dt + timedelta(days=days_before)).isoformat()
+        rows = conn.execute(
+            "SELECT user_id, email, trial_ends_at FROM users "
+            "WHERE billing_status = 'trialing' AND stripe_subscription_id IS NULL "
+            "AND trial_reminder_sent = 0 AND trial_ends_at IS NOT NULL "
+            "AND trial_ends_at <= ? AND trial_ends_at > ?",
+            (cutoff, now_dt.isoformat()),
+        ).fetchall()
+        return [{"user_id": r[0], "email": r[1], "trial_ends_at": r[2]} for r in rows]
+    finally:
+        conn.close()
+
+
+def mark_trial_reminder_sent(user_id):
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET trial_reminder_sent = 1 WHERE user_id = ?", (user_id,)
+        )
+        conn.commit()
     finally:
         conn.close()

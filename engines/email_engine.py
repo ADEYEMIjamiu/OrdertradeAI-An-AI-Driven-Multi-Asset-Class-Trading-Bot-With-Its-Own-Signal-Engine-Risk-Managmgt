@@ -66,8 +66,8 @@ def send_password_reset_email(to_email, reset_url):
             </a>
         </p>
         <p style="color: #666; font-size: 13px;">
-            If you didn't request this, you can safely ignore this email --
-            your password will not be changed.
+            If you didn't request this, you can safely ignore this email.
+            Your password will not be changed.
         </p>
     </div>
     """
@@ -113,9 +113,45 @@ def send_email_change_confirmation(to_email, confirm_url):
             </a>
         </p>
         <p style="color: #666; font-size: 13px;">
-            If you didn't request this, you can safely ignore this email -- the
-            account's email address will not change.
+            If you didn't request this, you can safely ignore this email.
+            The account's email address will not change.
         </p>
     </div>
     """
     return _send_email(to_email, "Confirm your new email for OrderTrade AI", html)
+
+
+def send_trial_ending_reminder(to_email, days_left, app_url):
+    """
+    ADDED 2026-09-15 (card-optional trial redesign, Phase 2): sent once
+    per user, a few days before their locally-tracked trial_ends_at (see
+    engines/tenant_engine.py's get_users_needing_trial_reminder() /
+    mark_trial_reminder_sent() -- both called from saas_scheduler.py,
+    which is what actually decides WHEN this fires and makes sure it
+    only fires once per user, not every tick). Deliberately plain English
+    only, unlike the UI strings in saas_i18n.py -- every other
+    transactional email in this file (password reset, verification,
+    email change) is English-only too, and a trial reminder isn't worth
+    breaking that existing pattern for.
+    """
+    plural = "s" if days_left != 1 else ""
+    html = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto;">
+        <h2>Your OrderTrade AI trial ends in {days_left} day{plural}</h2>
+        <p>You've got {days_left} day{plural} left on your free trial. Add a payment method
+           now to keep trading without interruption -- you won't be charged until your
+           trial actually ends, and you can cancel anytime.</p>
+        <p style="margin: 24px 0;">
+            <a href="{app_url}/" style="background: #10b981; color: #fff; padding: 12px 24px;
+               text-decoration: none; border-radius: 6px; display: inline-block;">
+               Add Payment Method
+            </a>
+        </p>
+        <p style="color: #666; font-size: 13px;">
+            If you don't add a payment method, trading will pause automatically when your
+            trial ends -- your account and existing positions stay safe, and you can resume
+            anytime by adding a card.
+        </p>
+    </div>
+    """
+    return _send_email(to_email, f"Your OrderTrade AI trial ends in {days_left} day{plural}", html)

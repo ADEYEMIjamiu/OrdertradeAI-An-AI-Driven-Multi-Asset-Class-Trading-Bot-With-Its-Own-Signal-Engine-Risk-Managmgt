@@ -339,6 +339,15 @@ def render_auth_screen():
                         st.success(_t("auth.forgot.success"))
 
         with signup_tab:
+            # ADDED 2026-09-15 (referral system): a shared link like
+            # /app/?ref=CODE prefills the referral field below so the
+            # person clicking it doesn't have to type or remember an
+            # 8-character code -- reading it via st.query_params follows
+            # the same pattern already used for verify_token/change_email_
+            # token elsewhere in this file. The field stays editable
+            # either way (someone can still type a code they heard about
+            # by voice, or clear it).
+            _ref_from_link = (st.query_params.get("ref") or "").strip().upper()
             with st.form("signup_form"):
                 new_email = st.text_input(_t("auth.signup.email_label"), key="signup_email")
                 new_password = st.text_input(_t("auth.signup.password_label"), type="password", key="signup_password")
@@ -350,6 +359,11 @@ def render_auth_screen():
                 )
                 new_country = st.selectbox(
                     _t("auth.signup.country_label"), options=COUNTRY_OPTIONS, key="signup_country"
+                )
+                referral_code_input = st.text_input(
+                    _t("auth.signup.referral_code_label"),
+                    value=_ref_from_link,
+                    key="signup_referral_code",
                 )
                 agreed_to_terms = st.checkbox(
                     _t("auth.signup.agree_terms"),
@@ -374,6 +388,7 @@ def render_auth_screen():
                         country=(
                             new_country if new_country != "Prefer not to say" else None
                         ),
+                        referred_by_code=(referral_code_input.strip() or None),
                     )
                     if user_id is None:
                         st.error(_t("auth.signup.err_exists"))
@@ -399,6 +414,20 @@ def render_auth_screen():
                         except Exception:
                             st.success(_t("auth.signup.success_plain"))
                             st.warning(_t("auth.signup.warn_email_failed"))
+                        # ADDED 2026-09-15: confirms the referral actually
+                        # took (as opposed to a mistyped/expired code that
+                        # create_user() silently ignored) -- re-reads from
+                        # the DB rather than trusting the raw form input,
+                        # since that's the only way to know whether it
+                        # matched a real account.
+                        _referral_info = tenant.get_referral_info(user_id)
+                        if _referral_info and _referral_info.get("referred_by_code"):
+                            st.success(
+                                _t(
+                                    "auth.signup.success_referral_applied",
+                                    days=tenant.TRIAL_LENGTH_DAYS + tenant.REFERRAL_BONUS_DAYS,
+                                )
+                            )
                         _log_in(user_id, new_email.strip().lower())
                         st.rerun()
 
@@ -1005,6 +1034,39 @@ def render_account_settings(user):
                 else status
             )
             st.error(_t("billing.err_needs_attention", status=reason))
+
+    # ADDED 2026-09-15 (referral system, Phase 4): every account has its
+    # own referral_code (generated at signup, or lazily backfilled by
+    # tenant.get_referral_info() for pre-existing accounts -- see that
+    # function's docstring), so this section always has something to
+    # show regardless of when the account was created. The share link
+    # embeds the code as a ?ref= query param that the signup form reads
+    # and prefills (see the signup_tab block above) -- someone clicking
+    # it still has to pick "Create Account" themselves, Streamlit's tabs
+    # here don't support deep-linking straight into a specific tab, but
+    # the code itself is one less thing they have to type or remember.
+    with st.expander(_t("account.referrals_expander")):
+        referral_info = tenant.get_referral_info(user["user_id"])
+        if referral_info:
+            st.write(
+                _t("account.referrals_body", days=tenant.REFERRAL_BONUS_DAYS)
+            )
+            share_url = f"{APP_URL}/?ref={referral_info['referral_code']}"
+            st.text_input(
+                _t("account.referrals_code_label"),
+                value=referral_info["referral_code"],
+                disabled=True,
+                key="referral_code_display",
+            )
+            st.text_input(
+                _t("account.referrals_link_label"),
+                value=share_url,
+                disabled=True,
+                key="referral_link_display",
+            )
+            st.caption(
+                _t("account.referrals_count", count=referral_info["referral_count"])
+            )
 
 
 def render_trading_run(user_id):

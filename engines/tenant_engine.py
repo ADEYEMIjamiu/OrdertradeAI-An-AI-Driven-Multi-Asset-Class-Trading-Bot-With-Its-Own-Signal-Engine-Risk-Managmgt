@@ -599,7 +599,7 @@ def reencrypt_all_credentials():
 # USERS
 # ============================================================
 
-def create_user(email, password, phone=None, country=None):
+def create_user(email, password, phone=None, country=None, referred_by_code=None):
     """
     Creates a new user account. Returns the new user_id, or None if the
     email is already registered (case-insensitive -- emails are
@@ -626,6 +626,20 @@ def create_user(email, password, phone=None, country=None):
     engines/billing_engine.py for how a user who DOES want to add a card
     early gets a Checkout session that honors whatever's left of this
     same trial_ends_at rather than resetting the clock.
+
+    ADDED 2026-09-15 (referral system): every account gets its OWN
+    referral_code generated here, whether or not they arrived via one --
+    everyone has something to share from day one, not just people who
+    were themselves referred. referred_by_code (optional) is whatever
+    code the SIGNUP FORM'S referral field held -- looked up via
+    get_user_by_referral_code() below; an unrecognized/blank code is
+    silently treated as "no referral" rather than blocking signup over a
+    typo. A valid code does two things: this new account's own trial
+    starts at TRIAL_LENGTH_DAYS + REFERRAL_BONUS_DAYS instead of the
+    plain length, and apply_referral_bonus() credits the REFERRER the
+    same bonus days on their own trial (see that function for what
+    happens if the referrer has already converted to a paying
+    subscriber, or already let their trial expire).
     """
     email = str(email).strip().lower()
     phone = phone.strip() if phone and phone.strip() else None
@@ -638,19 +652,37 @@ def create_user(email, password, phone=None, country=None):
         if existing:
             return None
 
+        referrer_user_id = None
+        referred_by_code = str(referred_by_code).strip().upper() if referred_by_code else None
+        if referred_by_code:
+            referrer_row = conn.execute(
+                "SELECT user_id FROM users WHERE referral_code = ?", (referred_by_code,)
+            ).fetchone()
+            if referrer_row:
+                referrer_user_id = referrer_row[0]
+            else:
+                # Unrecognized code -- don't fail signup over a typo or a
+                # stale/shared link; just don't apply a bonus either side.
+                referred_by_code = None
+
         user_id = str(uuid.uuid4())
         password_hash = bcrypt.hashpw(
             password.encode(), bcrypt.gensalt()
         ).decode()
         now_dt = datetime.now(timezone.utc)
         now = now_dt.isoformat()
-        trial_ends_at = (now_dt + timedelta(days=TRIAL_LENGTH_DAYS)).isoformat()
+        trial_days = TRIAL_LENGTH_DAYS + (REFERRAL_BONUS_DAYS if referrer_user_id else 0)
+        trial_ends_at = (now_dt + timedelta(days=trial_days)).isoformat()
+        own_referral_code = _generate_unique_referral_code(conn)
 
         conn.execute(
             "INSERT INTO users (user_id, email, password_hash, created_at, is_active, "
-            "phone, country, billing_status, trial_ends_at) "
-            "VALUES (?, ?, ?, ?, 1, ?, ?, 'trialing', ?)",
-            (user_id, email, password_hash, now, phone, country, trial_ends_at),
+            "phone, country, billing_status, trial_ends_at, referral_code, referred_by_code) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?, 'trialing', ?, ?, ?)",
+            (
+                user_id, email, password_hash, now, phone, country, trial_ends_at,
+                own_referral_code, referred_by_code,
+            ),
         )
         # Every new user starts with paper/demo-only enforced -- see
         # allow_live_trading default and module docstring.
@@ -660,6 +692,20 @@ def create_user(email, password, phone=None, country=None):
             (user_id, now, now),
         )
         conn.commit()
+
+        if referrer_user_id:
+            # Deliberately AFTER commit and on the same connection is fine
+            # here -- apply_referral_bonus() opens its own connection and
+            # is safe to fail independently of the signup itself (a
+            # referral-credit bug should never be able to block someone
+            # from creating an account).
+            try:
+                apply_referral_bonus(referrer_user_id)
+            except Exception:
+                print(f"[referrals] apply_referral_bonus failed for referrer={referrer_user_id}:")
+                import traceback
+                traceback.print_exc()
+
         return user_id
     finally:
         conn.close()
@@ -1545,6 +1591,16 @@ def delete_login_session(token):
 
 TRIAL_LENGTH_DAYS = 14
 
+# Referral bonus (added 2026-09-15, see REFERRALS section below) -- days
+# credited to BOTH sides of a referral: a new signup who used someone's
+# code gets TRIAL_LENGTH_DAYS + REFERRAL_BONUS_DAYS (16 total right now)
+# instead of the plain 14, and the referrer gets REFERRAL_BONUS_DAYS
+# added to their own trial_ends_at via apply_referral_bonus(). Kept as
+# its own constant rather than folded into TRIAL_LENGTH_DAYS math inline
+# everywhere it's used, so the "how much is a referral worth" answer
+# lives in exactly one place.
+REFERRAL_BONUS_DAYS = 2
+
 
 def link_stripe_customer(user_id, stripe_customer_id, stripe_subscription_id):
     """
@@ -1750,5 +1806,148 @@ def mark_trial_reminder_sent(user_id):
             "UPDATE users SET trial_reminder_sent = 1 WHERE user_id = ?", (user_id,)
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ============================================================
+# REFERRALS (added 2026-09-15). Every account has exactly one referral_
+# code (its own, generated once at signup in create_user()) and at most
+# one referred_by_code (write-once, set only at signup, NULL if they
+# signed up without one or typed one that didn't match anyone). See
+# create_user()'s docstring for how a code is applied at signup time,
+# and REFERRAL_BONUS_DAYS above for how many days a referral is worth.
+# Both sides get the same bonus: the new signup's own trial already
+# includes it (folded into trial_ends_at at INSERT time in create_user()
+# -- nothing more to do for them), and apply_referral_bonus() below is
+# what credits the REFERRER, called once from inside create_user()
+# right after the new account is committed.
+# ============================================================
+
+# Alphabet deliberately excludes visually-ambiguous characters (0/O,
+# 1/I/L) -- these codes are meant to be read off a screen and typed or
+# spoken aloud when someone shares theirs with a friend, not just
+# copy-pasted.
+_REFERRAL_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+_REFERRAL_CODE_LENGTH = 8
+
+
+def _generate_unique_referral_code(conn):
+    """
+    Generates an 8-character referral code and confirms no existing user
+    already has it, retrying on the (extremely unlikely, ~32^8 possible
+    codes) chance of a collision. Takes the caller's own connection
+    rather than opening one of its own -- called from inside create_
+    user()'s transaction, before that row is inserted, so it needs to see
+    the same connection's view of the table.
+    """
+    for _ in range(10):
+        code = "".join(secrets.choice(_REFERRAL_CODE_ALPHABET) for _ in range(_REFERRAL_CODE_LENGTH))
+        existing = conn.execute(
+            "SELECT 1 FROM users WHERE referral_code = ?", (code,)
+        ).fetchone()
+        if not existing:
+            return code
+    # Astronomically unlikely to ever be reached (would require ~10
+    # consecutive collisions in a 32-character-alphabet 8-char space) --
+    # raising rather than silently returning a possibly-duplicate code,
+    # since referral_code is relied on as a unique lookup key elsewhere.
+    raise RuntimeError("Could not generate a unique referral code after 10 attempts.")
+
+
+def apply_referral_bonus(referrer_user_id, days=None):
+    """
+    Credits `days` (default REFERRAL_BONUS_DAYS) of extra trial time to
+    the REFERRER's account -- called once from create_user() when a new
+    signup used their code. Extends from max(their current trial_ends_at,
+    now) rather than just adding to whatever's on file, so this always
+    reads as "N more days from today" even if their trial had already
+    expired -- which also REVIVES a 'trial_expired' account back to
+    'trialing' (and clears trial_reminder_sent, so the 3-day-before
+    reminder can fire again for the new, later end date) rather than
+    silently extending a date nobody can see anymore behind a lockout
+    screen that never re-checks it.
+
+    A no-op if the referrer already has a real Stripe subscription
+    (stripe_subscription_id set) -- they've already converted, Stripe
+    governs their billing now, and trial_ends_at isn't consulted for
+    them anywhere in this file (see this file's BILLING section
+    docstring). Returns True if a bonus was actually applied, False if
+    skipped (paying already, or the referrer_user_id doesn't exist).
+    """
+    days = days if days is not None else REFERRAL_BONUS_DAYS
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT billing_status, stripe_subscription_id, trial_ends_at "
+            "FROM users WHERE user_id = ?",
+            (referrer_user_id,),
+        ).fetchone()
+        if not row:
+            return False
+        billing_status, stripe_subscription_id, trial_ends_at = row
+        if stripe_subscription_id:
+            return False  # already a paying subscriber -- nothing to extend
+
+        now_dt = datetime.now(timezone.utc)
+        try:
+            current_end = datetime.fromisoformat(trial_ends_at) if trial_ends_at else now_dt
+        except (TypeError, ValueError):
+            current_end = now_dt
+        base = max(current_end, now_dt)
+        new_end = (base + timedelta(days=days)).isoformat()
+
+        new_status = "trialing" if billing_status == "trial_expired" else billing_status
+        conn.execute(
+            "UPDATE users SET trial_ends_at = ?, billing_status = ?, trial_reminder_sent = 0 "
+            "WHERE user_id = ?",
+            (new_end, new_status, referrer_user_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def get_referral_info(user_id):
+    """
+    Returns {"referral_code", "referred_by_code", "referral_count"} for
+    this user, or None if they don't exist -- referral_count is a live
+    COUNT of other accounts whose referred_by_code matches this user's
+    own code, computed on read rather than stored/incremented anywhere,
+    so it can never drift out of sync with the users table it's counting.
+
+    Backfills referral_code on the fly for any account that doesn't have
+    one yet -- every account created since this feature shipped gets one
+    at signup (see create_user()), but accounts created before that still
+    have NULL here. Generating it lazily on first read, rather than a
+    one-time migration script touching every existing row, means this
+    stays correct even for rows added between deploys with no extra step
+    to remember to run.
+    """
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT referral_code, referred_by_code FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return None
+        referral_code, referred_by_code = row
+        if not referral_code:
+            referral_code = _generate_unique_referral_code(conn)
+            conn.execute(
+                "UPDATE users SET referral_code = ? WHERE user_id = ?",
+                (referral_code, user_id),
+            )
+            conn.commit()
+        count_row = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE referred_by_code = ?", (referral_code,)
+        ).fetchone()
+        return {
+            "referral_code": referral_code,
+            "referred_by_code": referred_by_code,
+            "referral_count": count_row[0] if count_row else 0,
+        }
     finally:
         conn.close()

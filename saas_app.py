@@ -52,6 +52,7 @@ from engines import saas_admin_engine
 from engines import saas_performance_engine
 from engines import email_engine
 from engines import billing_engine
+from engines import geo_currency
 from engines import saas_i18n as i18n
 import mt_broker
 
@@ -64,6 +65,52 @@ import mt_broker
 # below calls this instead of hardcoding English strings directly.
 def _t(key, **kwargs):
     return i18n.t(key, st.session_state.get("lang", i18n.DEFAULT_LANGUAGE), **kwargs)
+
+
+def _get_client_ip():
+    """
+    Best-effort visitor IP for regional pricing (engines/geo_currency.py).
+    ADDED 2026-09-15. Streamlit's own st.context.ip_address always
+    returns None behind a reverse proxy (it depends on Tornado's
+    xheaders being enabled, which this deployment doesn't set -- see
+    deploy/nginx-ordertradeai-com.conf's comment on the /app location),
+    so this reads X-Forwarded-For directly instead, which nginx is now
+    configured to set to the real client address for both /app routes.
+    Falls back to st.context.ip_address (works when run locally with no
+    proxy in front, e.g. `streamlit run saas_app.py`), then to None,
+    which geo_currency.currency_for_ip() safely turns into USD.
+    """
+    try:
+        headers = st.context.headers
+        forwarded = headers.get("X-Forwarded-For") if headers else None
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    except Exception:
+        pass
+    try:
+        return st.context.ip_address
+    except Exception:
+        return None
+
+
+def _get_display_currency():
+    """
+    Detected once per browser session (session_state is per-tab, so a
+    fresh detection per Streamlit session is the right cache lifetime --
+    an outbound geolocation HTTP call on every single rerun would be
+    wasteful and slow the page down). Always returns a valid currency
+    code, never raises -- see geo_currency.py's module docstring for the
+    fail-safe-to-USD design.
+    """
+    if "display_currency" not in st.session_state:
+        st.session_state.display_currency = geo_currency.currency_for_ip(_get_client_ip())
+    return st.session_state.display_currency
+
+
+def _formatted_price():
+    """e.g. "$39", "£39", "€39" -- see geo_currency.PRICE_AMOUNT/currency_symbol()."""
+    currency = _get_display_currency()
+    return f"{geo_currency.currency_symbol(currency)}{geo_currency.PRICE_AMOUNT}"
 
 # Public product domain -- used to build the links inside password-reset
 # and verification emails. Deliberately a plain constant, not derived
@@ -1013,6 +1060,7 @@ def render_account_settings(user):
                 checkout_url = billing_engine.create_checkout_session(
                     user["user_id"], user["email"], APP_URL,
                     trial_ends_at=billing.get("trial_ends_at"),
+                    currency_code=_get_display_currency(),
                 )
                 st.link_button(
                     _t("account.billing_add_payment_button"), checkout_url,
@@ -1766,13 +1814,14 @@ def render_billing_gate(user):
         # trial_ends_at -- Stripe starts charging immediately.
         if status == "trial_expired":
             st.subheader(_t("billing.trial_expired_header"))
-            st.write(_t("billing.trial_expired_body"))
+            st.write(_t("billing.trial_expired_body", price=_formatted_price()))
         else:
             st.subheader(_t("billing.trial_header"))
-            st.write(_t("billing.trial_body"))
+            st.write(_t("billing.trial_body", price=_formatted_price()))
         try:
             checkout_url = billing_engine.create_checkout_session(
-                user["user_id"], user["email"], APP_URL
+                user["user_id"], user["email"], APP_URL,
+                currency_code=_get_display_currency(),
             )
             button_label = (
                 _t("billing.subscribe_button") if status == "trial_expired"

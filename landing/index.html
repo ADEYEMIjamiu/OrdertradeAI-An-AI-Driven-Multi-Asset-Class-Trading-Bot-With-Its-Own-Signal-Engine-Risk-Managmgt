@@ -711,7 +711,7 @@
     <div class="pricing-wrap">
       <div class="price-card">
         <div class="plan-name">OrderTrade AI</div>
-        <div class="price-amount"><span class="num mono">$39</span><span class="per" data-i18n="pricing.per_month">/ month</span></div>
+        <div class="price-amount"><span class="num mono" id="price-amount">$39</span><span class="per" data-i18n="pricing.per_month">/ month</span></div>
         <p class="trial-note" data-i18n="pricing.trial_note">14 day free trial, cancel anytime before it ends and you will not be charged.</p>
         <ul class="price-features">
           <li data-i18n="pricing.feature1">Stocks, crypto, forex and commodities signals</li>
@@ -2437,9 +2437,84 @@ ko: {
     var sel = document.getElementById("ota-lang-select");
     if (sel) sel.value = lang;
     try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
+    // Re-stamp the region-appropriate price into the DOM every time this
+    // runs (initial load + every language switch) -- applyLanguage() just
+    // reset every [data-i18n] element's text back to the dictionary's
+    // literal "$39", wiping out any earlier substitution. See
+    // otaApplyRegionalPrice() below.
+    otaApplyRegionalPrice();
   }
 
   window.otaSetLanguage = applyLanguage;
+
+  // ADDED 2026-09-15 (regional pricing): mirrors the country->currency
+  // mapping in engines/geo_currency.py -- see that file's module
+  // docstring for why only these 5 non-USD currencies are covered and
+  // why "Europe" means the Eurozone specifically, not every European
+  // country. Fixed 39-per-currency (not FX-converted), matching what
+  // saas_app.py's Stripe Checkout actually charges once someone signs
+  // up -- this is a display-only preview on the marketing page, using
+  // the same free ipwho.is geolocation lookup so a visitor sees the
+  // right currency before they ever reach the app.
+  var OTA_EUR_COUNTRIES = ["AT","BE","HR","CY","EE","FI","FR","DE","GR","IE","IT","LV","LT","LU","MT","NL","PT","SK","SI","ES"];
+  var OTA_PRICE_CACHE_KEY = "ota_currency_v1";
+  var otaPrice = { symbol: "$" };
+  var otaPriceResolved = false;
+
+  function otaCurrencyForCountry(cc) {
+    if (!cc) return { symbol: "$" };
+    cc = cc.toUpperCase();
+    if (cc === "GB") return { symbol: "£" };
+    if (OTA_EUR_COUNTRIES.indexOf(cc) !== -1) return { symbol: "€" };
+    if (cc === "AU") return { symbol: "A$" };
+    if (cc === "SG") return { symbol: "S$" };
+    if (cc === "CA") return { symbol: "C$" };
+    return { symbol: "$" };
+  }
+
+  function otaStampPrice() {
+    var priceStr = otaPrice.symbol + "39";
+    var amountEl = document.getElementById("price-amount");
+    if (amountEl) amountEl.textContent = priceStr;
+    var faqEl = document.querySelector('[data-i18n="faq.a5"]');
+    if (faqEl) faqEl.textContent = faqEl.textContent.replace(/\$39/, priceStr);
+  }
+
+  function otaApplyRegionalPrice() {
+    if (otaPriceResolved) {
+      otaStampPrice();
+      return;
+    }
+    try {
+      var cached = localStorage.getItem(OTA_PRICE_CACHE_KEY);
+      if (cached) {
+        otaPrice = JSON.parse(cached);
+        otaPriceResolved = true;
+        otaStampPrice();
+        return;
+      }
+    } catch (e) {}
+    // Fire-and-forget: the page renders with the default "$39" first
+    // (correct for most visitors anyway) and only updates once this
+    // resolves, rather than blocking the pricing section on a network
+    // call. Any failure (offline, ad blocker, rate limit) just leaves
+    // the USD default in place -- same fail-safe behavior as
+    // geo_currency.py's Python-side lookup for the actual app.
+    fetch("https://ipwho.is/", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.success !== false && data.country_code) {
+          otaPrice = otaCurrencyForCountry(data.country_code);
+        }
+        otaPriceResolved = true;
+        try { localStorage.setItem(OTA_PRICE_CACHE_KEY, JSON.stringify(otaPrice)); } catch (e) {}
+        otaStampPrice();
+      })
+      .catch(function () {
+        otaPriceResolved = true;
+        otaStampPrice();
+      });
+  }
 
   document.addEventListener("DOMContentLoaded", function () {
     applyLanguage(detectDefaultLang());

@@ -18,6 +18,19 @@ risk profile from money-transmission business lines, and mixing them
 under one Stripe account risks the SaaS billing getting swept into
 scrutiny/holds that have nothing to do with it.
 
+REDESIGNED 2026-09-15 (regional pricing): create_checkout_session() now
+takes an optional currency_code ("USD"/"GBP"/"EUR"/"AUD"/"SGD"/"CAD",
+from engines/geo_currency.py's IP-based detection in saas_app.py) and
+picks the matching STRIPE_PRICE_ID_<CCY> env var instead of always
+using the single flat STRIPE_PRICE_ID. Each of those Prices must be
+created in the Stripe Dashboard first, on the SAME Product, each a
+fixed 39.00 in its own currency (not an FX-converted equivalent -- see
+geo_currency.py's module docstring for why). STRIPE_PRICE_ID keeps
+working unchanged as the USD price (and as the fallback if a specific
+STRIPE_PRICE_ID_<CCY> was never configured for some reason), so an
+existing deployment with only STRIPE_PRICE_ID set keeps charging
+everyone USD exactly as before until the new env vars are added.
+
 REDESIGNED 2026-09-15 (card-optional trial): the 14-day free trial used
 to live entirely in Stripe -- every Checkout Session this file created
 included subscription_data.trial_period_days=14, so a card was required
@@ -76,7 +89,24 @@ def _configure():
     stripe.api_key = api_key
 
 
-def _price_id():
+_SUPPORTED_CHECKOUT_CURRENCIES = ("USD", "GBP", "EUR", "AUD", "SGD", "CAD")
+
+
+def _price_id(currency_code=None):
+    """
+    Returns the Stripe Price ID to charge in. currency_code (upper-case
+    "USD"/"GBP"/"EUR"/"AUD"/"SGD"/"CAD", see engines/geo_currency.py)
+    selects STRIPE_PRICE_ID_<CCY> when that env var is set; anything
+    else -- no currency_code, an unrecognized one, or a recognized one
+    whose env var was never configured -- falls back to the original
+    flat STRIPE_PRICE_ID (USD). This means a currency this platform
+    intends to support but whose Price hasn't been created in Stripe
+    yet degrades to charging USD rather than crashing checkout.
+    """
+    if currency_code and currency_code.upper() in _SUPPORTED_CHECKOUT_CURRENCIES:
+        specific = os.environ.get(f"STRIPE_PRICE_ID_{currency_code.upper()}")
+        if specific:
+            return specific
     price_id = os.environ.get("STRIPE_PRICE_ID")
     if not price_id:
         raise RuntimeError(
@@ -86,7 +116,7 @@ def _price_id():
     return price_id
 
 
-def create_checkout_session(user_id, email, base_url, trial_ends_at=None):
+def create_checkout_session(user_id, email, base_url, trial_ends_at=None, currency_code=None):
     """
     Creates a Stripe Checkout Session for a new subscription and returns
     the hosted checkout URL to redirect the user to. client_reference_id
@@ -94,6 +124,11 @@ def create_checkout_session(user_id, email, base_url, trial_ends_at=None):
     webhook -- that's how saas_webhook_server.py maps the completed
     session back to the right account (Stripe's own customer/
     subscription IDs don't exist yet at the point this function runs).
+
+    currency_code (added 2026-09-15, regional pricing): "USD"/"GBP"/
+    "EUR"/"AUD"/"SGD"/"CAD", normally engines/geo_currency.py's IP-based
+    detection of the visitor's region -- see _price_id() above for the
+    fallback behavior when omitted or not yet configured in Stripe.
 
     trial_ends_at (added 2026-09-15, card-optional trial redesign): an
     ISO8601 timestamp string -- normally tenant.get_billing_info(user_id)
@@ -124,7 +159,7 @@ def create_checkout_session(user_id, email, base_url, trial_ends_at=None):
         mode="subscription",
         customer_email=email,
         client_reference_id=user_id,
-        line_items=[{"price": _price_id(), "quantity": 1}],
+        line_items=[{"price": _price_id(currency_code), "quantity": 1}],
         subscription_data=subscription_data,
         success_url=f"{base_url}/?billing=success",
         cancel_url=f"{base_url}/?billing=cancelled",

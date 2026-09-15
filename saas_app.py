@@ -118,6 +118,20 @@ COUNTRY_OPTIONS = [
     "Chile", "Colombia", "Peru", "Other",
 ]
 
+
+def _country_label(name):
+    """
+    Display-only translation for a COUNTRY_OPTIONS entry -- see
+    engines/saas_i18n.py's "country.<English name>" keys, added
+    2026-09-15 alongside the Terms/Privacy translation pass. The
+    stored/compared value stays the canonical English string in
+    COUNTRY_OPTIONS (existing user rows already have English country
+    names saved, and the "Prefer not to say" sentinel comparisons
+    elsewhere in this file key off the English literal) -- only the
+    label shown in the selectbox changes per language.
+    """
+    return _t(f"country.{name}")
+
 st.set_page_config(
     page_title="OrderTrade AI | Sign In",
     page_icon="📈",
@@ -358,7 +372,8 @@ def render_auth_screen():
                     _t("auth.signup.phone_label"), key="signup_phone"
                 )
                 new_country = st.selectbox(
-                    _t("auth.signup.country_label"), options=COUNTRY_OPTIONS, key="signup_country"
+                    _t("auth.signup.country_label"), options=COUNTRY_OPTIONS,
+                    format_func=_country_label, key="signup_country"
                 )
                 referral_code_input = st.text_input(
                     _t("auth.signup.referral_code_label"),
@@ -913,7 +928,7 @@ def render_account_settings(user):
             )
             country = st.selectbox(
                 _t("account.country_label"), options=COUNTRY_OPTIONS,
-                index=country_index, key="profile_country",
+                index=country_index, format_func=_country_label, key="profile_country",
             )
             profile_saved = st.form_submit_button(_t("account.save_profile_button"))
 
@@ -2028,271 +2043,10 @@ def render_email_change_screen(token):
 # ============================================================
 _LEGAL_LAST_UPDATED = "September 9, 2026"
 
-_TERMS_MD = f"""
-*Last updated: {_LEGAL_LAST_UPDATED}*
-
-### 1. Acceptance of terms
-
-By creating an account or using OrderTrade AI ("the Service"), you
-agree to these Terms of Service ("Terms"). If you don't agree, don't
-use the Service.
-
-### 2. What the Service does
-
-OrderTrade AI generates AI-assisted trade signals and, at your
-explicit request, places orders through broker accounts that **you**
-connect using your own API credentials. The Service never holds,
-custodies, or has independent access to your funds. Every order is
-placed directly against your own connected broker account, and you
-must separately confirm ("Execute") before any live order is sent.
-
-**By default, every account is paper/demo trading only.** No order the
-Service places can reach a real broker account unless you take the
-separate, explicit steps described in Section 3 below to enable live
-trading for your account. Connecting a broker in demo/paper mode never
-risks real money, regardless of anything else in these Terms.
-
-### 3. Live trading and real-money risk
-
-The Service supports, as an opt-in feature, placing real orders
-against a real-money broker account you connect. This section applies
-only if and when you enable it.
-
-**How it's enabled.** Live trading is off by default for every
-account. To turn it on, you must go through a dedicated confirmation
-flow in your account settings: reading a risk disclosure, checking
-each of several individual acknowledgment boxes (including that
-results aren't guaranteed, that you're solely responsible for your own
-account, and that a software bug or broker outage could cause a real
-loss), and typing a confirmation phrase. Enabling live trading for
-your account does not, by itself, connect any broker in live mode.
-You separately choose "live" instead of "demo" when connecting each
-individual broker. Every live/demo change is logged with a timestamp
-and reason, visible to you in your account settings.
-
-**The risk is real and it is yours.** Once live trading is enabled and
-a broker is connected in live mode, the Service will place real orders
-using real money in that account, without asking for your confirmation
-on each individual trade. You can lose some or all of the money in any
-connected live broker account. This can happen even if the Service,
-your broker, and your internet connection all work exactly as intended,
-since trading itself carries risk, independent of any bug. It can also
-happen because of a software defect in the Service, an error or outage
-at your broker, a market data delay, a connectivity failure between
-the Service and your broker, or any other technical failure, expected
-or not. **The Service, its operator, and anyone associated with it are
-not liable for trading losses in a live account, including losses
-caused in whole or in part by a bug or defect in the Service.** See
-Section 10 (Limitation of liability) for how this interacts with our
-overall liability cap. This risk allocation, not any promise of
-correctness or uptime, is what makes it acceptable for you to use this
-feature at all: you are compensated for taking on this risk by paying
-a flat subscription fee regardless of trading outcome, not by any
-share of profits, and we do not price, underwrite, or otherwise treat
-your live trading risk as something we've agreed to absorb.
-
-**You can turn it off, but not undo what already happened.** You may
-revert to demo trading at any time from your account settings. Doing
-so stops the Service from placing new orders against your real
-account, but it does not close any position already open at your
-broker. You're responsible for managing those directly with your
-broker afterward. It also does not reverse any trade already placed.
-
-**Only enable this with money you can afford to lose,** in an amount
-you've deliberately decided to risk, using a broker account you
-actively monitor. If you are not willing to accept the possibility of
-losing everything in a connected live account, do not enable live
-trading.
-
-### 4. Not investment advice, no guaranteed results
-
-Nothing generated or displayed by the Service, including signals, scores,
-grades, backtests, or any other output, is investment, financial,
-tax, or legal advice, and none of it is a recommendation to buy or
-sell any security, currency, commodity, or crypto asset. Trading and
-investing involve substantial risk of loss, including total loss of
-principal. Past performance (including any backtested or paper-traded
-results shown in the Service) is not indicative of future results.
-You are solely responsible for every trading decision made through
-your account, whether initiated by you or executed by the Service at
-your direction.
-
-### 5. Eligibility and your account
-
-You must be at least 18 years old (or the age of majority in your
-jurisdiction) to use the Service. You're responsible for keeping your
-password confidential and for all activity under your account. Tell
-us promptly if you believe your account has been compromised.
-
-### 6. Your broker credentials
-
-You provide your own broker/exchange API keys. We encrypt them at
-rest and only ever decrypt them to place orders you've directed
-through the Service. You're responsible for complying with your
-broker's own terms of service, and for any fees, restrictions, or
-consequences your broker applies to API-driven trading on your
-account.
-
-### 7. Subscription and billing
-
-After a 14-day free trial, continued use of the Service requires a
-paid subscription, billed monthly in advance through our payment
-processor (Stripe). Your subscription renews automatically each month
-until you cancel. You can cancel at any time from your account
-billing settings; cancellation takes effect at the end of your
-current billing period, and we don't provide refunds for partial
-periods already paid for. We may change our pricing with reasonable
-advance notice; continuing to use the Service after a price change
-takes effect means you accept the new price.
-
-### 8. Acceptable use
-
-You agree not to: use the Service for anything illegal; attempt to
-reverse-engineer, scrape, or resell access to the Service; interfere
-with or overload the Service's infrastructure; or use the Service to
-violate any broker's or exchange's own terms of service.
-
-### 9. Disclaimers
-
-The Service is provided "as is" and "as available," without warranty
-of any kind, express or implied, including warranties of
-merchantability, fitness for a particular purpose, or
-non-infringement. We don't warrant that the Service will be
-uninterrupted, error-free, or that any signal, price, or position
-data shown will always be accurate or current. Broker/exchange
-outages, market data delays, and third-party API failures are outside
-our control.
-
-### 10. Limitation of liability
-
-To the maximum extent permitted by law, OrderTrade AI and its
-operator will not be liable for any indirect, incidental, special,
-consequential, or punitive damages, or for any trading losses, lost
-profits, or lost data, arising from your use of the Service. Our
-total liability for any claim relating to the Service is limited to
-the amount you paid us in the 12 months before the claim arose.
-
-### 11. Termination
-
-We may suspend or terminate your access if you violate these Terms or
-if we reasonably believe your use of the Service poses a risk to the
-platform or other users. You may stop using the Service and cancel
-your subscription at any time.
-
-### 12. Changes to these terms
-
-We may update these Terms from time to time. We'll update the "Last
-updated" date above when we do; continued use of the Service after a
-change takes effect means you accept the updated Terms.
-
-### 13. Governing law
-
-These Terms are governed by the laws of Malta, without regard to its
-conflict-of-laws principles.
-
-### 14. Contact
-
-Questions about these Terms? Contact us at
-support@ordertradeai.com.
-"""
-
-_PRIVACY_MD = f"""
-*Last updated: {_LEGAL_LAST_UPDATED}*
-
-### 1. What we collect
-
-- **Account info:** your email address and a securely hashed (bcrypt)
-  password. We never store your password in plain text.
-- **Broker credentials:** the API key/secret you provide for each
-  broker you connect, encrypted at rest (Fernet symmetric encryption)
-  and decrypted only at the moment we place a trade you've directed.
-- **Trading activity:** positions, orders, and settings associated
-  with your account, so the Service can function and so you can see
-  your own history.
-- **Billing info:** handled directly by our payment processor,
-  Stripe. We never see or store your full card number. We keep only
-  what Stripe tells us (subscription status, plan, renewal date).
-- **Basic technical logs:** standard web server logs (IP address,
-  timestamp, request path) kept for security and troubleshooting.
-
-### 2. How we use it
-
-To operate the Service (including placing trades you direct), send
-you transactional email (password resets, email verification, billing
-notices), respond to support requests, and improve the Service. We do
-not use your data for advertising, and we do not sell your personal
-data to anyone.
-
-### 3. Who we share it with
-
-Only the third parties needed to run the Service:
-
-- **Your connected brokers** (e.g. Alpaca, Binance, eToro): to place
-  the orders you direct.
-- **Stripe**: to process subscription billing.
-- **Resend**: to deliver transactional email (password reset,
-  verification, billing notices).
-
-We don't share your data with anyone else, and we don't sell it.
-
-### 4. Security
-
-Broker credentials are encrypted at rest; passwords are hashed, never
-stored in plain text; all traffic to the Service is encrypted in
-transit (HTTPS); and access to the servers that store this data is
-restricted. No system is perfectly secure, but we treat your broker
-credentials with the same care we'd want for our own.
-
-### 5. Data retention
-
-We keep your account data for as long as your account is active. If
-you'd like your account and associated data deleted, contact us at
-the address below and we'll process the request.
-
-### 6. Your rights
-
-Depending on where you live, you may have rights to access, correct,
-or delete your personal data, or to object to certain processing.
-Contact us at the address below to exercise any of these rights.
-
-### 7. Cookies
-
-The Service itself (this dashboard, at /app) uses only a session
-cookie needed to keep you logged in. No advertising or tracking
-cookies here.
-
-Our marketing site at ordertradeai.com/ uses Google Analytics (GA4) to
-understand visitor traffic, which sets a cookie and shares data with
-Google. This only runs after you accept it in the cookie banner shown
-on that page. Declining, or not choosing, means it never loads. You
-can change your choice at any time using the "Cookie preferences" link
-in that page's footer. See Google's own privacy policy for how Google
-processes this data: https://policies.google.com/privacy
-
-### 8. Children
-
-The Service isn't directed at anyone under 18, and we don't knowingly
-collect data from children.
-
-### 9. Where your data is processed
-
-Our servers are located in the EU. Some of our third-party processors
-(brokers you connect, Stripe, Resend) may process data in other
-regions as part of providing their services.
-
-### 10. Changes to this policy
-
-We may update this Privacy Policy from time to time. We'll update the
-"Last updated" date above when we do.
-
-### 11. Contact
-
-Questions about this policy, or want to exercise a data right? Contact
-us at support@ordertradeai.com.
-"""
 
 
-def render_legal_page(title, body_markdown):
+
+def render_legal_page(page_key):
     # Added 2026-08-29: a top-of-page way out, not just the "Back" button
     # at the very bottom -- someone who lands here from a search engine
     # (rather than clicking through from the signup checkbox) shouldn't
@@ -2301,7 +2055,12 @@ def render_legal_page(title, body_markdown):
         st.query_params.clear()
         st.rerun()
     st.title(_t("legal.title"))
-    st.header(title)
+    st.header(_t(f"legal.{page_key}_title"))
+    _updated_label = _t("legal.last_updated_label")
+    st.caption(f"*{_updated_label}: {_LEGAL_LAST_UPDATED}*")
+    _notice = _t("legal.authoritative_notice")
+    if _notice:
+        st.caption(_notice)
     # Readability pass 2026-09-04: full-container-width paragraphs made
     # every line stretch the whole page, so line length varied a lot
     # (short line next to a long one) and just looked ragged. Considered
@@ -2327,7 +2086,7 @@ def render_legal_page(title, body_markdown):
         unsafe_allow_html=True,
     )
     with st.container(key="legal-body"):
-        st.markdown(body_markdown)
+        st.markdown(_t(f"legal.{page_key}_body"))
     st.divider()
     if st.button(_t("legal.back_button_bottom"), key="legal_back_bottom"):
         st.query_params.clear()
@@ -2346,9 +2105,9 @@ elif "verify_token" in _query_params:
 elif "change_email_token" in _query_params:
     render_email_change_screen(_query_params["change_email_token"])
 elif _query_params.get("page") == "terms":
-    render_legal_page("Terms of Service", _TERMS_MD)
+    render_legal_page("terms")
 elif _query_params.get("page") == "privacy":
-    render_legal_page("Privacy Policy", _PRIVACY_MD)
+    render_legal_page("privacy")
 elif st.session_state.saas_user_id is None:
     render_auth_screen()
 else:

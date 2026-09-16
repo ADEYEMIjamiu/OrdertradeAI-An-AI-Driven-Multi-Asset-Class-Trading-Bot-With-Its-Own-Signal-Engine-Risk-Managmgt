@@ -199,6 +199,14 @@ _EN = {
     "live.env_live_option": "Live (real money)",
     "live.env_live_warning": "This will connect your REAL {broker} account. Orders placed after saving will use real money, not paper/demo funds.",
     "broker.kraken_no_demo_warning": "Kraken does not offer a demo or paper trading account for API keys. Any Kraken account you connect here is always your real account. No trades will be placed on it, however, until you turn on Live Trading in Account Settings.",
+    # Generalized 2026-09-16 (task #378, Luno) from the Kraken-only key
+    # above (kept as-is so nothing that already references it breaks) --
+    # same underlying fact (no demo/sandbox) now also applies to Luno,
+    # so new callers should use this {broker}-parametrized version
+    # instead of adding another broker-specific copy.
+    "broker.no_demo_warning": "{broker} does not offer a demo or paper trading account for API keys. Any {broker} account you connect here is always your real account. No trades will be placed on it, however, until you turn on Live Trading in Account Settings.",
+    "broker.luno_currency_label": "Account Currency",
+    "broker.luno_currency_help": "The currency your Luno account is denominated in. This determines which trading pairs are used and how your balance is converted for sizing trades.",
     "live.audit_expander": "View your live trading history ({count})",
     "live.audit_status_on": "Live trading turned ON",
     "live.audit_status_off": "Live trading turned OFF",

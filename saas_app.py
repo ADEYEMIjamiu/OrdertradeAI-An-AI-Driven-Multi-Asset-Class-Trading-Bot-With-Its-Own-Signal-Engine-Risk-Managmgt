@@ -764,6 +764,7 @@ def render_broker_connections(user_id):
                         st.error(result.get("error"))
 
     render_kraken_connection(user_id, connected)
+    render_luno_connection(user_id, connected)
     render_mt_bridge_connection(user_id, connected)
 
 
@@ -800,7 +801,7 @@ def render_kraken_connection(user_id, connected):
     )
 
     with st.expander(_t("broker.expander_title", broker="Kraken (Crypto, Real Funds Only)", status=status_text)):
-        st.warning(_t("broker.kraken_no_demo_warning"))
+        st.warning(_t("broker.no_demo_warning", broker="Kraken"))
 
         with st.form("broker_form_KRAKEN"):
             api_key = st.text_input("API Key", type="password", key="KRAKEN_key")
@@ -850,6 +851,132 @@ def render_kraken_connection(user_id, connected):
         if status:
             if st.button(_t("broker.test_connection"), key="test_KRAKEN"):
                 result = saas_broker_factory.check_user_broker_connection(user_id, "KRAKEN")
+                if result.get("connected"):
+                    st.success(
+                        _t(
+                            "broker.success_connected",
+                            cash=f"{result.get('cash', 0):,.2f}",
+                            equity=f"{result.get('equity', result.get('cash', 0)):,.2f}",
+                        )
+                    )
+                elif result.get("status") == "unavailable":
+                    st.warning(result.get("error"))
+                else:
+                    st.error(result.get("error"))
+
+
+_LUNO_CURRENCY_OPTIONS = ["ZAR", "NGN", "KES", "MYR", "IDR", "EUR", "GBP"]
+
+
+def render_luno_connection(user_id, connected):
+    """
+    Luno connect form -- added task #378 (2026-09-16), a third CRYPTO
+    broker (alongside Binance/Kraken) to serve customers in Nigeria,
+    Kenya, South Africa, Malaysia, and Indonesia, where Binance has no
+    functional local-currency on/off-ramp (Binance halted all naira
+    services in Nigeria in March 2024, amid an ongoing dispute with the
+    CBN, on top of the regulatory-exit pattern that motivated Kraken for
+    Canada/UK).
+
+    Kept separate from the _BROKER_FIELDS-driven loop above -- same
+    reason as render_kraken_connection() just above: Luno's ccxt adapter
+    has no confirmed sandbox/testnet support either (see saas_broker_
+    factory.py's LUNO section docstring), so a connected Luno account is
+    ALWAYS real money, environment is always saved as "live", and the
+    same permanent (not allow_live_trading-gated) warning applies.
+
+    UNLIKE Kraken, this form has ONE extra field: an Account Currency
+    selector. Luno quotes its pairs in the user's own local fiat (ZAR/
+    NGN/KES/MYR/IDR/EUR/GBP), not uniformly USD -- see that same
+    docstring -- so saas_broker_factory.py's Luno functions need to know
+    which local currency this user's account actually uses before they
+    can build the right trading pair or convert a balance to USD. Saved
+    into this credential's `extra` field (tenant.save_broker_
+    credentials()'s existing generic third-secret slot, repurposed here
+    to hold a plain currency code rather than a secret -- see
+    _get_user_luno_quote_currency()'s docstring in saas_broker_
+    factory.py). Defaults to "ZAR", Luno's original and most liquid
+    market, but every user should actively confirm this matches their
+    real Luno account -- picking the wrong one won't fail loudly, it
+    will just try to trade a pair that doesn't match their actual
+    holdings.
+    """
+    status = connected.get("LUNO")
+    status_text = (
+        _t("broker.status_connected", environment=status['environment'], date=status['updated_at'][:10])
+        if status else _t("broker.status_not_connected")
+    )
+
+    with st.expander(_t("broker.expander_title", broker="Luno (Crypto, Real Funds Only)", status=status_text)):
+        st.warning(_t("broker.no_demo_warning", broker="Luno"))
+
+        # Outside the form, like the live/demo radio above -- Streamlit
+        # form widgets don't trigger a rerun on change, and there's no
+        # reason this particular choice needs to be batched with the
+        # credential fields anyway.
+        existing_currency = (status.get("extra") if status else None) or "ZAR"
+        # NOTE: list_connected_brokers() (which populates `connected`)
+        # does not currently return `extra` -- only broker/environment/
+        # updated_at (no secrets). This falls back to "ZAR" every render
+        # until that's extended, same last-resort default saas_broker_
+        # factory.py's _get_user_luno_quote_currency() uses server-side.
+        currency = st.selectbox(
+            _t("broker.luno_currency_label"),
+            options=_LUNO_CURRENCY_OPTIONS,
+            index=_LUNO_CURRENCY_OPTIONS.index(existing_currency) if existing_currency in _LUNO_CURRENCY_OPTIONS else 0,
+            help=_t("broker.luno_currency_help"),
+            key="LUNO_currency",
+        )
+
+        with st.form("broker_form_LUNO"):
+            api_key = st.text_input("API Key", type="password", key="LUNO_key")
+            api_secret = st.text_input("Secret Key", type="password", key="LUNO_secret")
+            save_clicked = st.form_submit_button(_t("broker.save_button"))
+
+        if save_clicked:
+            if not api_key or not api_secret:
+                st.error(_t("broker.err_required"))
+            else:
+                previous_creds = tenant.get_broker_credentials(user_id, "LUNO")
+                tenant.save_broker_credentials(
+                    user_id,
+                    broker="LUNO",
+                    environment="live",
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    extra=currency,
+                )
+                with st.spinner(_t("broker.verifying_spinner", label="Luno")):
+                    check = saas_broker_factory.check_user_broker_connection(user_id, "LUNO")
+                if check.get("connected"):
+                    st.success(_t("broker.success_saved", broker="Luno"))
+                    st.rerun()
+                elif check.get("status") == "unavailable":
+                    st.warning(
+                        _t("broker.warn_temp_issue", icon=check.get('error'), broker="Luno")
+                    )
+                else:
+                    if previous_creds is not None:
+                        tenant.save_broker_credentials(
+                            user_id,
+                            broker="LUNO",
+                            environment=previous_creds["environment"],
+                            api_key=previous_creds["api_key"],
+                            api_secret=previous_creds["api_secret"],
+                            extra=previous_creds["extra"],
+                        )
+                        st.error(
+                            _t("broker.err_kept_unchanged", icon=check.get('error'), broker="Luno")
+                        )
+                    else:
+                        tenant.delete_broker_credentials(user_id, "LUNO")
+                        st.error(
+                            _t("broker.err_nothing_saved", icon=check.get('error'))
+                        )
+
+        if status:
+            if st.button(_t("broker.test_connection"), key="test_LUNO"):
+                result = saas_broker_factory.check_user_broker_connection(user_id, "LUNO")
                 if result.get("connected"):
                     st.success(
                         _t(
@@ -1337,6 +1464,7 @@ _BROKER_DISPLAY_NAMES = {
     "ALPACA": "Alpaca",
     "BINANCE": "Binance",
     "KRAKEN": "Kraken",
+    "LUNO": "Luno",
     "ETORO": "eToro",
     "MT_BRIDGE": "MT4/5",
 }

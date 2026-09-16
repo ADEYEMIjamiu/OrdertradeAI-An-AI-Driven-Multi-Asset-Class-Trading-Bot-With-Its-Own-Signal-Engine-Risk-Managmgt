@@ -105,8 +105,15 @@ from config import MAX_HOLD_DAYS_HARD
 # list rather than an asset_class -> broker dict. KRAKEN added task #365
 # (2026-09-15) -- CRYPTO gained the same two-broker shape (Binance or
 # Kraken) once Kraken was added -- see saas_broker_factory.py's KRAKEN
-# section docstring.
-_BROKERS = ("ALPACA", "BINANCE", "KRAKEN", "ETORO", "MT_BRIDGE")
+# section docstring. LUNO added task #378, same shape again (now three
+# CRYPTO brokers) -- see that file's LUNO section docstring. Note this
+# file's `current_price`/`filled_price` throughout stay the shared USD
+# yfinance price regardless of broker (see _get_current_price() below),
+# so Luno's local-currency settlement (see LUNO section docstring) never
+# needs conversion here -- stop-loss/take-profit levels stored on the
+# entry order were already computed against this same USD price series
+# at BUY time, and the dust-notional check just below reuses it too.
+_BROKERS = ("ALPACA", "BINANCE", "KRAKEN", "LUNO", "ETORO", "MT_BRIDGE")
 
 
 def _get_current_price(ticker):
@@ -526,6 +533,57 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
                     factory.sell_kraken_for_user(user_id, ticker, quantity)
                     # No separate fill price returned -- use the price
                     # already fetched above, same as the BINANCE branch.
+                elif broker == "LUNO":
+                    # Luno (task #378) -- same wallet-before-journal and
+                    # dust-notional checks as the KRAKEN branch above.
+                    # filled_price here is still the shared USD yfinance
+                    # price (see _BROKERS comment above), NOT Luno's own
+                    # local-currency price, so the $1 dust threshold means
+                    # the same thing it does for every other broker in
+                    # this loop. sell_luno_for_user() calls _require_luno_
+                    # live_trading_enabled() first, which raises
+                    # LiveTradingNotEnabledError (caught by the except
+                    # block below, same generic handling as Kraken/
+                    # MT_BRIDGE) if this user's Lock 1 is off.
+                    real_qty = factory.get_user_luno_held_qty(user_id, ticker)
+                    if real_qty <= 0:
+                        results.append({
+                            "ticker": ticker,
+                            "asset_class": asset_class,
+                            "action": "error",
+                            "message": f"Exit triggered ({exit_reason}) but "
+                                       f"the wallet shows zero {ticker} "
+                                       f"held -- position may already be "
+                                       f"closed outside this journal. "
+                                       f"Reconciling the journal to closed "
+                                       f"rather than retrying a doomed sell.",
+                        })
+                        journal.reduce_remaining_quantity(entry_order["order_id"], quantity)
+                        continue
+                    quantity = min(quantity, real_qty)
+
+                    _dust_notional = quantity * filled_price if filled_price else 0
+                    if _dust_notional < 1.0:
+                        results.append({
+                            "ticker": ticker,
+                            "asset_class": asset_class,
+                            "action": "error",
+                            "message": f"Exit triggered ({exit_reason}) but only "
+                                       f"{real_qty} {ticker} (~${_dust_notional:.4f}) "
+                                       f"remains in the wallet -- below any exchange's "
+                                       f"minimum sell size. Most of this position was "
+                                       f"likely sold outside this journal. Reconciling "
+                                       f"to closed rather than retrying an unsellable "
+                                       f"dust amount forever.",
+                        })
+                        journal.reduce_remaining_quantity(entry_order["order_id"], quantity)
+                        continue
+
+                    is_confirmed_filled = True
+                    factory.sell_luno_for_user(user_id, ticker, quantity)
+                    # No separate fill price returned -- use the price
+                    # already fetched above, same as the BINANCE/KRAKEN
+                    # branches.
                 else:
                     # Defensive only -- _BROKERS above is the sole source
                     # of what this loop iterates, so this should be

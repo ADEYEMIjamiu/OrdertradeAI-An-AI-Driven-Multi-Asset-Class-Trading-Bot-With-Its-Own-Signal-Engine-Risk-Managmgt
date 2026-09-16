@@ -438,6 +438,7 @@ def _order_age_minutes(order):
 _CRYPTO_ORDER_LOOKUP = {
     "BINANCE": factory.get_binance_order_by_client_id_for_user,
     "KRAKEN": factory.get_kraken_order_by_client_id_for_user,
+    "LUNO": factory.get_luno_order_by_client_id_for_user,
 }
 
 
@@ -464,6 +465,10 @@ def reconcile_user_crypto_orders(user_id, broker="BINANCE"):
     NOT yet live-verified for Kraken specifically (see saas_broker_
     factory.get_kraken_order_by_client_id_for_user()'s docstring caveat
     on the 'clientOrderId' param).
+
+    FOLLOW-UP 2026-09-16 (task #378, Luno): added to _CRYPTO_ORDER_
+    LOOKUP the same way -- same unverified 'clientOrderId' caveat
+    applies (see get_luno_order_by_client_id_for_user()'s docstring).
 
     Three outcomes per pending order:
       1. Broker confirms it filled -> journal updated to FILLED with

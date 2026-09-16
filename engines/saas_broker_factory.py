@@ -689,10 +689,387 @@ def _get_kraken_exposure_percent(user_id):
         return 0.0
 
 
+# ============================================================
+# LUNO (third CRYPTO broker, task #378) -- added to serve customers in
+# Nigeria, Kenya, South Africa (and Malaysia/Indonesia) where Binance
+# has no functional local-currency on/off-ramp: Binance halted all
+# naira services in Nigeria in March 2024 amid an ongoing dispute with
+# the CBN, on top of the same regulatory-exit pattern that motivated
+# Kraken (task #365) for Canada/UK. Luno is ccxt-supported and already
+# licensed/pursuing licensing across these specific markets, letting
+# this platform close a real regional gap without a custom non-ccxt
+# connector (the Nigeria-SEC-licensed alternatives, Quidax/Busha,
+# would need one -- see task #378's research).
+#
+# CRITICAL DIFFERENCE FROM BOTH BINANCE AND KRAKEN: Luno's ccxt adapter
+# has no confirmed sandbox/testnet support (unlike Binance's real
+# testnet, and same absence as Kraken's spot API -- see KRAKEN section
+# above) -- treated the same conservative way: NO code-level sandbox,
+# single gate (Lock 1 only, via _require_luno_live_trading_enabled()
+# below), same as Kraken and MT4/5. If ccxt's Luno sandbox support is
+# later confirmed, this can be upgraded to a double gate like Binance's
+# -- until then, assuming "always real money" is the safe default, not
+# the risky one.
+#
+# CRITICAL DIFFERENCE FROM KRAKEN: Kraken quotes everything in USD, so
+# _to_kraken_symbol()/its balance checks hardcode "USD" outright. Luno
+# instead quotes in whatever LOCAL FIAT CURRENCY the user's own Luno
+# account is denominated in (confirmed via research: XBTZAR (South
+# Africa) and XBTMYR (Malaysia) exist as native pairs; XBTNGN, XBTIDR,
+# XBTEUR, XBTGBP follow the same pattern but weren't individually
+# confirmed live before this build -- verify via a real Test
+# Connection + exchange.load_markets() before trusting a specific pair
+# for a specific user). This platform's tracked asset universe,
+# balance math, and position sizing are all USD-denominated throughout
+# (see ASSET_UNIVERSE, calculate_trade_amount()) -- rather than thread
+# a second currency through every caller, this section keeps the SAME
+# usd_amount-in/USD-price-out contract as every other broker in this
+# file end to end -- not just at the buy_luno_for_user() call boundary,
+# but for every price this section ever hands back (check_user_luno_
+# connection()'s cash, buy_luno_for_user()'s fill price, and
+# _get_luno_open_positions()'s current_price are all converted to USD
+# via a live FX rate, _get_usd_fx_rate() below, before being returned),
+# so every downstream consumer (saas_position_lifecycle_engine.py's
+# break-even/partial-profit % math, saas_performance_engine.py's $ P&L,
+# saas_app.py's My Positions/Performance views) works unmodified,
+# exactly as if this were another USD-quoted broker. The FX rate itself
+# comes from a free, no-auth public API -- a genuinely new kind of
+# external dependency for this file (every other broker/exchange here
+# already prices in a currency this platform understands natively) --
+# if it can't be fetched, every function below fails CLOSED (0.0 cash /
+# 0.0 exposure / a blocked buy / a skipped position row), the same "a
+# bad external dependency blocks trading, it never silently mis-sizes
+# or mis-reports a real number" discipline as the rest of this file's
+# never-raise/fail-closed contracts. NOT yet live-verified against a
+# real Luno account (no network access at build time) -- confirm actual
+# pair availability, minimum order size, and the clientOrderId-
+# equivalent param name via a real Test Connection + a small real order
+# before trusting this for any live user, same discipline Kraken's
+# section above calls for.
+#
+# The user's own Luno account currency is stored in this credential's
+# `extra` field (tenant.save_broker_credentials()'s existing generic
+# third-secret slot, repurposed here to hold a plain currency code
+# like "NGN"/"ZAR"/"KES"/"MYR" rather than a secret -- chosen at
+# connect time in saas_app.py's render_luno_connection(), never
+# guessed there). The "ZAR" fallback below (Luno's original, most
+# liquid market) is a last resort only, for a credential saved before
+# `extra` was ever set -- every current connect path always sets it.
+# ============================================================
+
+
+_LUNO_FX_CACHE = {}  # {currency_code: (rate, fetched_at_epoch_seconds)}
+_LUNO_FX_CACHE_TTL_SECONDS = 300  # long enough that one decision-loop
+# tick's balance + sizing + exposure calls for one user don't each hit
+# the public FX API separately; short enough that a real FX move is
+# reflected within minutes.
+
+
+def _get_usd_fx_rate(currency_code):
+    """
+    Units of `currency_code` per 1 USD (e.g. ~1550 for NGN), used to
+    convert Luno's local-currency balances/order sizes to/from this
+    platform's USD-denominated sizing math. Uses the free, no-API-key
+    open.er-api.com endpoint (mid-market rates, updated daily) -- this
+    is an approximation, not the exact rate Luno itself would apply on
+    a real trade. That is an accepted, disclosed limitation (see LUNO
+    section docstring above), not a silent one.
+
+    Cached per currency for _LUNO_FX_CACHE_TTL_SECONDS to avoid hitting
+    the public API on every call. Returns None on ANY failure (network
+    error, unexpected response shape, unknown currency code) -- every
+    caller below MUST treat None as "cannot safely convert" and fail
+    closed, never assume a 1:1 rate.
+    """
+    currency_code = (currency_code or "").upper()
+    cached = _LUNO_FX_CACHE.get(currency_code)
+    if cached and (time.time() - cached[1]) < _LUNO_FX_CACHE_TTL_SECONDS:
+        return cached[0]
+
+    try:
+        resp = requests.get("https://open.er-api.com/v6/latest/USD", timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        rate = data.get("rates", {}).get(currency_code)
+        if not rate:
+            return None
+        rate = float(rate)
+        _LUNO_FX_CACHE[currency_code] = (rate, time.time())
+        return rate
+    except Exception:
+        return None
+
+
+def _get_user_luno_quote_currency(creds):
+    """This credential's local account currency (see LUNO section
+    docstring) -- "ZAR" fallback is a last resort only, see above."""
+    return (creds.get("extra") or "ZAR").upper()
+
+
+def _require_luno_live_trading_enabled(user_id):
+    """
+    THE single gate for Luno order execution -- see the LUNO section
+    docstring above for why this is a SINGLE gate (Lock 1 only), same
+    reasoning as _require_kraken_live_trading_enabled(). Raises
+    LiveTradingNotEnabledError (caught by the same generic except-
+    Exception handling saas_decision_engine.py/saas_exit_engine.py
+    already use for MT_BRIDGE/Kraken) if user_settings.allow_live_
+    trading is not on.
+    """
+    if not _user_has_live_trading_enabled(user_id):
+        raise LiveTradingNotEnabledError(
+            f"Luno account for user {user_id} is real-money by design "
+            f"(no confirmed sandbox/testnet for Luno's ccxt adapter) "
+            f"but allow_live_trading is not enabled."
+        )
+
+
+def check_user_luno_connection(user_id):
+    """
+    Builds a fresh ccxt Luno exchange instance from this user's OWN
+    stored credentials and validates it with a real balance call.
+    Mirrors check_user_kraken_connection()'s shape, but reads the
+    user's OWN local quote currency (not a hardcoded "USD") and
+    converts that free balance to a USD-equivalent "cash" figure via
+    _get_usd_fx_rate() so it composes with the rest of this platform's
+    USD-denominated balance/sizing math (see LUNO section docstring).
+    If the FX rate can't be fetched, fails CLOSED -- reports connected
+    but cash=0.0 with an explanatory error, rather than showing a
+    number in the wrong currency as if it were USD.
+    """
+    creds = tenant.get_broker_credentials(user_id, "LUNO")
+    if creds is None:
+        return {
+            "connected": False,
+            "error": "No Luno credentials saved for this user.",
+        }
+
+    quote_currency = _get_user_luno_quote_currency(creds)
+
+    try:
+        exchange = ccxt.luno({
+            "apiKey": creds["api_key"],
+            "secret": creds["api_secret"],
+            "enableRateLimit": True,
+        })
+        balance = exchange.fetch_balance()
+        local_cash = float(balance.get(quote_currency, {}).get("free", 0) or 0)
+
+        fx_rate = _get_usd_fx_rate(quote_currency)
+        if fx_rate is None:
+            return {
+                "connected": True,
+                "status": "connected",
+                "cash": 0.0,
+                "error": (
+                    f"Connected, but could not fetch a live {quote_currency}/USD "
+                    f"rate to show your balance -- try again shortly."
+                ),
+            }
+
+        return {
+            "connected": True,
+            "status": "connected",
+            "cash": round(local_cash / fx_rate, 2),
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "connected": False,
+            "status": broker_error_status(e),  # see #258 note above check_user_alpaca_connection()
+            "cash": 0.0,
+            "error": friendly_broker_error_message("Luno", e),
+        }
+
+
+def _require_luno_exchange(user_id):
+    """
+    Used by every order-placing/order-status/balance-reading Luno call
+    below. Returns (exchange, quote_currency) since -- unlike Kraken's
+    fixed USD -- Luno's quote currency is per-user (see LUNO section
+    docstring). Real execution is gated separately by _require_luno_
+    live_trading_enabled(), called explicitly by buy_luno_for_user()/
+    sell_luno_for_user() before this, never inlined here.
+    """
+    creds = tenant.get_broker_credentials(user_id, "LUNO")
+    if creds is None:
+        raise ValueError("No Luno credentials saved for this user.")
+    exchange = ccxt.luno({
+        "apiKey": creds["api_key"],
+        "secret": creds["api_secret"],
+        "enableRateLimit": True,
+    })
+    return exchange, _get_user_luno_quote_currency(creds)
+
+
+def _to_luno_symbol(ticker, quote_currency):
+    """See LUNO section docstring above -- Luno's native pairs are
+    quoted in the user's own local fiat, not uniformly USD like
+    _to_kraken_symbol()."""
+    return f"{ticker.replace('-USD', '')}/{quote_currency}"
+
+
+def buy_luno_for_user(user_id, ticker, usd_amount, client_order_id=None):
+    """
+    Per-user Luno REAL market BUY, sized by dollar amount -- SAME
+    usd_amount-in/USD-price-out contract as buy_kraken_for_user()/
+    buy_crypto_for_user() so saas_decision_engine.py's CRYPTO branch
+    doesn't need Luno-specific sizing logic AND so every downstream
+    consumer of the journaled filled_price (saas_position_lifecycle_
+    engine.py's break-even/partial-profit % math, saas_performance_
+    engine.py's $ P&L) keeps working unmodified. Converts usd_amount to
+    the user's local quote currency via _get_usd_fx_rate() before
+    placing the order (Luno's own API only understands its native fiat
+    amount, not USD -- see LUNO section docstring), then converts the
+    fill price BACK to USD before returning it -- the local price is
+    used only internally, to size the order correctly against Luno's
+    own order book. Raises if the FX rate can't be fetched -- refusing
+    to guess a conversion for a REAL order is the only safe option here
+    (unlike the read-only balance check above, which can fail closed to
+    a merely-uninformative 0.0).
+    """
+    _require_luno_live_trading_enabled(user_id)
+    exchange, quote_currency = _require_luno_exchange(user_id)
+
+    fx_rate = _get_usd_fx_rate(quote_currency)
+    if fx_rate is None:
+        raise ValueError(
+            f"Could not fetch a live {quote_currency}/USD rate -- "
+            f"refusing to size a real Luno order without it."
+        )
+    local_amount = usd_amount * fx_rate
+
+    symbol = _to_luno_symbol(ticker, quote_currency)
+    ticker_data = exchange.fetch_ticker(symbol)
+    local_price = ticker_data["last"]
+    quantity = local_amount / local_price
+
+    params = {"clientOrderId": client_order_id} if client_order_id else {}
+    order = exchange.create_market_buy_order(symbol, quantity, params=params)
+    usd_price = local_price / fx_rate
+    return order, usd_price, quantity
+
+
+def get_luno_order_by_client_id_for_user(user_id, ticker, client_order_id):
+    """
+    Luno equivalent of get_kraken_order_by_client_id_for_user() -- used
+    by reconcile_user_crypto_orders() to resolve a Luno BUY whose
+    original create_market_buy_order() response was lost to a network
+    error. Not gated by _require_luno_live_trading_enabled() -- a
+    lookup is read-only and safe regardless.
+
+    Returns ccxt's order dict with "average"/"price" converted to USD
+    (same currency-consistency reasoning as buy_luno_for_user() --
+    reconcile_user_crypto_orders() journals whichever of those two
+    fields ccxt populates directly as filled_price, with no broker-
+    specific handling of its own, so the conversion has to happen here
+    rather than there). Raises (caught by reconcile_user_crypto_orders()'s
+    existing generic except-Exception handling, same as any other
+    lookup failure) if the FX rate can't be fetched -- left for a later
+    pass to retry rather than journaling an unconverted local-currency
+    number as if it were USD.
+
+    NOT yet live-verified -- confirm ccxt's Luno fetchOrder() actually
+    accepts 'clientOrderId' in params the same way Kraken's is assumed
+    to (itself also unverified, see KRAKEN section) before relying on
+    this for real duplicate-order protection.
+    """
+    exchange, quote_currency = _require_luno_exchange(user_id)
+    symbol = _to_luno_symbol(ticker, quote_currency)
+    order = exchange.fetch_order(None, symbol, params={"clientOrderId": client_order_id})
+
+    fx_rate = _get_usd_fx_rate(quote_currency)
+    if fx_rate is None:
+        raise ValueError(
+            f"Could not fetch a live {quote_currency}/USD rate -- "
+            f"refusing to reconcile a Luno order without it."
+        )
+    order = dict(order)
+    for price_field in ("average", "price"):
+        if order.get(price_field):
+            order[price_field] = float(order[price_field]) / fx_rate
+    return order
+
+
+def sell_luno_for_user(user_id, ticker, quantity):
+    """Per-user Luno REAL market SELL. Mirrors sell_kraken_for_user() --
+    gated first by _require_luno_live_trading_enabled(). quantity is
+    always in the base crypto asset (e.g. XBT), same as every other
+    broker's sell_*_for_user() -- no currency conversion needed here,
+    only buy-side sizing (usd_amount -> local_amount) needs the FX
+    rate."""
+    _require_luno_live_trading_enabled(user_id)
+    exchange, quote_currency = _require_luno_exchange(user_id)
+    symbol = _to_luno_symbol(ticker, quote_currency)
+    return exchange.create_market_sell_order(symbol, quantity)
+
+
+def get_user_luno_held_qty(user_id, ticker):
+    """
+    Luno equivalent of get_user_kraken_held_qty() -- live wallet check
+    used by saas_exit_engine.py to cap a SELL at what's actually held.
+    Never raises -- returns 0.0 on any failure, same never-raise
+    contract. Not gated by live-trading-enabled -- read-only.
+    """
+    try:
+        exchange, _quote_currency = _require_luno_exchange(user_id)
+    except Exception:
+        return 0.0
+
+    try:
+        base_asset = ticker.replace("-USD", "")
+        balance = exchange.fetch_balance()
+        return float(balance.get("free", {}).get(base_asset, 0) or 0)
+    except Exception:
+        return 0.0
+
+
+def _get_luno_exposure_percent(user_id):
+    """
+    Luno equivalent of _get_kraken_exposure_percent() -- values only
+    TRACKED_ASSETS at a fresh per-coin Luno ticker price, entirely in
+    the user's own local currency. The invested/portfolio ratio is
+    currency-independent as long as both sides use the same currency
+    (which they do here), so -- unlike the balance/buy paths above --
+    no FX conversion is needed for this one number. Never raises --
+    returns 0.0 on any failure, same contract as the Kraken/Binance
+    versions.
+    """
+    try:
+        exchange, quote_currency = _require_luno_exchange(user_id)
+    except Exception:
+        return 0.0
+
+    try:
+        from data.asset_universe import ASSET_UNIVERSE
+        tracked = {t.replace("-USD", "") for t in ASSET_UNIVERSE["CRYPTO"]["symbols"]}
+
+        balance = exchange.fetch_balance()
+        free_local = float(balance.get(quote_currency, {}).get("free", 0) or 0)
+
+        crypto_value_local = 0.0
+        for asset, total_qty in balance.get("total", {}).items():
+            if asset not in tracked or not total_qty:
+                continue
+            try:
+                price = float(exchange.fetch_ticker(f"{asset}/{quote_currency}").get("last") or 0)
+            except Exception:
+                continue
+            crypto_value_local += float(total_qty) * price
+
+        portfolio_value_local = free_local + crypto_value_local
+        if portfolio_value_local <= 0:
+            return 0.0
+        return (crypto_value_local / portfolio_value_local) * 100
+    except Exception:
+        return 0.0
+
+
 _CHECKERS = {
     "ALPACA": check_user_alpaca_connection,
     "BINANCE": check_user_binance_connection,
     "KRAKEN": check_user_kraken_connection,
+    "LUNO": check_user_luno_connection,
     "ETORO": check_user_etoro_connection,
     "MT_BRIDGE": check_user_mt_bridge_connection,
 }
@@ -740,6 +1117,13 @@ def get_user_account_balance(user_id, asset_class, broker=None):
             result = check_user_kraken_connection(user_id)
             if not result.get("connected"):
                 return 0.0
+            return float(result.get("cash", 0) or 0)
+        if broker == "LUNO":
+            result = check_user_luno_connection(user_id)
+            if not result.get("connected"):
+                return 0.0
+            # Already USD-converted by check_user_luno_connection() --
+            # see LUNO section docstring.
             return float(result.get("cash", 0) or 0)
         result = check_user_binance_connection(user_id)
         if not result.get("connected"):
@@ -824,6 +1208,8 @@ def get_user_exposure_percent(user_id, asset_class, broker=None):
     if asset_class == "CRYPTO":
         if broker == "KRAKEN":
             return _get_kraken_exposure_percent(user_id)
+        if broker == "LUNO":
+            return _get_luno_exposure_percent(user_id)
         return _get_binance_exposure_percent(user_id)
 
     if asset_class in ("FOREX", "COMMODITIES"):
@@ -1604,6 +1990,8 @@ def get_user_open_positions(user_id, broker):
         return _get_binance_open_positions(user_id)
     if broker == "KRAKEN":
         return _get_kraken_open_positions(user_id)
+    if broker == "LUNO":
+        return _get_luno_open_positions(user_id)
     if broker == "ETORO":
         return _get_etoro_open_positions(user_id)
     if broker == "MT_BRIDGE":
@@ -1866,6 +2254,65 @@ def _get_binance_open_positions(user_id):
                 "unrealized_pnl_pct": pnl_pct,
                 # Real unit count * real entry price -- same reasoning as
                 # _get_alpaca_open_positions()'s invested_amount above.
+                "invested_amount": round(real_qty * entry_price, 2) if entry_price > 0 else None,
+                "stop_loss": entry_order.get("stop_loss"),
+                "take_profit": entry_order.get("take_profit"),
+            })
+        except Exception:
+            continue
+    return result
+
+
+def _get_luno_open_positions(user_id):
+    """
+    Luno equivalent of _get_kraken_open_positions() -- same real-
+    wallet-balance sizing, same "silently skip a ghost journal entry
+    the wallet doesn't back" logic. entry_price on the journal is
+    already USD (buy_luno_for_user() converts before returning -- see
+    its docstring), so current_price here is converted to USD too via
+    the same live FX rate before computing P&L, keeping this
+    apples-to-apples with every other broker's open-positions view. If
+    the FX rate can't be fetched, this ticker is skipped for this pass
+    (fails toward "not shown" rather than showing a wrong number) --
+    same fail-closed contract as check_user_luno_connection().
+    """
+    try:
+        tickers = journal.list_open_tickers_for_user(user_id, "LUNO")
+    except Exception:
+        return []
+
+    result = []
+    for ticker in tickers:
+        try:
+            real_qty = get_user_luno_held_qty(user_id, ticker)
+            if real_qty <= 0:
+                continue
+
+            entry_order = journal.get_most_recent_filled_buy_for_user(user_id, ticker, "LUNO")
+            if entry_order is None:
+                continue
+            entry_price = float(entry_order.get("filled_price") or entry_order.get("price") or 0)
+
+            exchange, quote_currency = _require_luno_exchange(user_id)
+            fx_rate = _get_usd_fx_rate(quote_currency)
+            if fx_rate is None:
+                continue
+            symbol = _to_luno_symbol(ticker, quote_currency)
+            current_price = float(exchange.fetch_ticker(symbol)["last"]) / fx_rate
+
+            pnl = None
+            pnl_pct = None
+            if entry_price > 0:
+                pnl = round((current_price - entry_price) * real_qty, 2)
+                pnl_pct = round((current_price - entry_price) / entry_price * 100, 2)
+
+            result.append({
+                "ticker": ticker,
+                "quantity": real_qty,
+                "entry_price": round(entry_price, 4),
+                "current_price": round(current_price, 4),
+                "unrealized_pnl": pnl,
+                "unrealized_pnl_pct": pnl_pct,
                 "invested_amount": round(real_qty * entry_price, 2) if entry_price > 0 else None,
                 "stop_loss": entry_order.get("stop_loss"),
                 "take_profit": entry_order.get("take_profit"),

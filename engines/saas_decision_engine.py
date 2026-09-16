@@ -297,12 +297,15 @@ _FOREX_COMMODITIES_ASSET_CLASSES = ("FOREX", "COMMODITIES")
 _FOREX_COMMODITIES_BROKER_PREFERENCE = ("MT_BRIDGE", "ETORO")
 
 # BINANCE checked first when a user has BOTH connected -- it has a real
-# testnet a new user can try during their trial, unlike Kraken (no spot
-# sandbox at all, see saas_broker_factory.py's KRAKEN section docstring)
-# -- so it stays the default a user falls into unless they've
-# specifically connected Kraken (e.g. because Binance isn't legally
-# available to them).
-_CRYPTO_BROKER_PREFERENCE = ("BINANCE", "KRAKEN")
+# testnet a new user can try during their trial, unlike Kraken or Luno
+# (neither has a confirmed spot sandbox, see saas_broker_factory.py's
+# KRAKEN and LUNO section docstrings) -- so it stays the default a user
+# falls into unless they've specifically connected Kraken or Luno (e.g.
+# because Binance isn't legally/functionally available to them). Luno
+# is checked after Kraken, not before -- no strong reason either way
+# between the two non-Binance brokers, this just matches build order
+# (task #365 then #378).
+_CRYPTO_BROKER_PREFERENCE = ("BINANCE", "KRAKEN", "LUNO")
 
 _MULTI_BROKER_ASSET_CLASS_PREFERENCE = {
     "CRYPTO": _CRYPTO_BROKER_PREFERENCE,
@@ -583,6 +586,7 @@ def _run_decision_loop_for_user_impl(user_id, dry_run=True):
         "ALPACA" in connected_brokers
         or "BINANCE" in connected_brokers
         or "KRAKEN" in connected_brokers
+        or "LUNO" in connected_brokers
         or "ETORO" in connected_brokers
         or "MT_BRIDGE" in connected_brokers
     ):
@@ -630,6 +634,7 @@ def _run_decision_loop_for_user_impl(user_id, dry_run=True):
         "ALPACA" in connected_brokers
         or "BINANCE" in connected_brokers
         or "KRAKEN" in connected_brokers
+        or "LUNO" in connected_brokers
     ):
         lifecycle_results = lifecycle_engine.apply_position_lifecycle_for_user(user_id, dry_run=dry_run)
         results.extend(lifecycle_results)
@@ -762,7 +767,7 @@ def _run_decision_loop_for_user_impl(user_id, dry_run=True):
                     "action": "reconciled",
                     "message": r["message"],
                 })
-        elif broker in ("BINANCE", "KRAKEN") and broker not in reconciled_brokers:
+        elif broker in ("BINANCE", "KRAKEN", "LUNO") and broker not in reconciled_brokers:
             reconciled_brokers.add(broker)
             reconcile_results = reconcile.reconcile_user_crypto_orders(user_id, broker=broker)
             for r in reconcile_results:
@@ -1032,6 +1037,26 @@ def _run_decision_loop_for_user_impl(user_id, dry_run=True):
                     _order, filled_price, filled_quantity = factory.buy_kraken_for_user(
                         user_id, ticker, trade_amount, client_order_id=client_order_id
                     )
+                elif asset_class == "CRYPTO" and broker == "LUNO":
+                    # Luno (task #378) -- same client-order-id-first
+                    # discipline and same LiveTradingNotEnabledError-on-
+                    # no-Lock-1 behavior as the KRAKEN branch above (no
+                    # demo/sandbox to fall back to -- see saas_broker_
+                    # factory.py's LUNO section docstring). filled_price
+                    # returned here is in the user's LOCAL currency (NGN/
+                    # ZAR/etc.), NOT USD, unlike every other branch in
+                    # this function -- see buy_luno_for_user()'s docstring.
+                    # trade_amount itself is still USD-denominated going
+                    # in; the conversion happens inside buy_luno_for_user()
+                    # itself via a live FX rate, which can raise ValueError
+                    # if that rate can't be fetched -- caught by the
+                    # generic except block below like any other failed buy.
+                    client_order_id = uuid.uuid4().hex
+                    broker_order_id = client_order_id
+                    is_confirmed_filled = True
+                    _order, filled_price, filled_quantity = factory.buy_luno_for_user(
+                        user_id, ticker, trade_amount, client_order_id=client_order_id
+                    )
                 elif broker == "MT_BRIDGE":
                     # FOREX/COMMODITIES via MT4/5 (MetaApi) -- added
                     # 2026-09-02, alongside eToro (see this function's
@@ -1120,14 +1145,15 @@ def _run_decision_loop_for_user_impl(user_id, dry_run=True):
                 # asset class's block on the NEXT tick) can definitively
                 # resolve what actually happened on Binance.
                 if asset_class == "CRYPTO" and isinstance(e, LiveTradingNotEnabledError):
-                    # KRAKEN-specific (task #365): this error means NO
-                    # order was ever attempted -- it's raised by
-                    # _require_kraken_live_trading_enabled() as the very
-                    # first thing buy_kraken_for_user() does, before any
-                    # exchange call. Journaling a SUBMITTED row here (the
-                    # branch below, for a genuine lost-response case)
-                    # would be actively wrong: there is nothing on
-                    # Kraken's side to reconcile, and client_order_id was
+                    # KRAKEN/LUNO-specific (tasks #365/#378): this error
+                    # means NO order was ever attempted -- it's raised by
+                    # _require_kraken_live_trading_enabled()/_require_luno_
+                    # live_trading_enabled() as the very first thing buy_
+                    # kraken_for_user()/buy_luno_for_user() does, before
+                    # any exchange call. Journaling a SUBMITTED row here
+                    # (the branch below, for a genuine lost-response case)
+                    # would be actively wrong: there is nothing on Kraken's
+                    # or Luno's side to reconcile, and client_order_id was
                     # never sent anywhere. Treat this exactly like
                     # MT_BRIDGE's identical error -- a clean rejection,
                     # same friendly_broker_error_message() special-case

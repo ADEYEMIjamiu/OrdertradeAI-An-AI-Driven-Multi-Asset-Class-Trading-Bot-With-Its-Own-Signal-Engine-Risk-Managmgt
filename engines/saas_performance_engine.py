@@ -17,7 +17,7 @@ aren't captured anywhere in this journal, only the notional
 quantity/price the CFD tracks. Realized $ figures below (total_pnl,
 gross_profit/loss, profit_factor, expectancy, average_win/loss, max
 drawdown, and every per-group $ breakdown) are therefore computed ONLY
-from ALPACA (stocks) and BINANCE/KRAKEN (crypto) fills, which trade
+from ALPACA (stocks) and BINANCE/KRAKEN/LUNO (crypto) fills, which trade
 real, unleveraged share/coin quantities -- see _PRICED_BROKERS below. ETORO/
 MT_BRIDGE closed trades are still counted, shown in the closed-trades
 table, and included in win/loss/win-rate (a simple price-direction
@@ -41,8 +41,11 @@ from engines import saas_order_manager as journal
 # Brokers whose fills represent real, unleveraged quantities -- see
 # module docstring's LEVERAGED-BROKER CAVEAT. KRAKEN added task #365
 # (2026-09-15) -- real unleveraged spot quantities, same as BINANCE, not
-# a leveraged CFD like ETORO/MT_BRIDGE.
-_PRICED_BROKERS = {"ALPACA", "BINANCE", "KRAKEN"}
+# a leveraged CFD like ETORO/MT_BRIDGE. LUNO added task #378 (2026-09-16)
+# -- same real spot quantities; its journaled fill prices are already
+# converted to USD by buy_luno_for_user() (see saas_broker_factory.py's
+# LUNO section docstring), so no different treatment is needed here.
+_PRICED_BROKERS = {"ALPACA", "BINANCE", "KRAKEN", "LUNO"}
 
 _EXIT_STRATEGY_LABELS = {
     "EXIT_PROTECTION": "Stop-Loss / Take-Profit / Time Exit",
@@ -161,8 +164,8 @@ def calculate_performance_metrics_for_user(user_id):
     included -- price-direction win/loss is valid regardless of
     leverage). Every dollar figure (total_pnl, gross_profit/loss,
     profit_factor, expectancy, average_win/loss, max_drawdown) is
-    computed ONLY from the "priced" (ALPACA/BINANCE/KRAKEN) subset --
-    see module docstring's LEVERAGED-BROKER CAVEAT.
+    computed ONLY from the "priced" (ALPACA/BINANCE/KRAKEN/LUNO) subset
+    -- see module docstring's LEVERAGED-BROKER CAVEAT.
     """
     closed_trades, _ = get_closed_trades_for_user(user_id)
     priced_trades = [t for t in closed_trades if t["priced"]]

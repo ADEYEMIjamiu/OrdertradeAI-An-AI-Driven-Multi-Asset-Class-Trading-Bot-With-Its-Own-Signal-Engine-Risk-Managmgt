@@ -80,6 +80,7 @@ _ASSET_CLASS_BROKER_PAIRS = (
     ("US_STOCKS", "ALPACA"),
     ("CRYPTO", "BINANCE"),
     ("CRYPTO", "KRAKEN"),
+    ("CRYPTO", "LUNO"),
 )
 
 
@@ -272,7 +273,7 @@ def _execute_sell(user_id, ticker, broker, requested_qty):
             # -- same established assumption as sell_crypto_for_user()'s
             # other callers. No separate fill price returned.
             return {"quantity": actual_qty, "price": None}
-        else:  # KRAKEN (task #365) -- see saas_broker_factory.py's
+        elif broker == "KRAKEN":  # task #365 -- see saas_broker_factory.py's
             # KRAKEN section docstring: sell_kraken_for_user() calls
             # _require_kraken_live_trading_enabled() first, which raises
             # LiveTradingNotEnabledError (caught by the except block
@@ -289,6 +290,20 @@ def _execute_sell(user_id, ticker, broker, requested_qty):
                 return _STRANDED
             actual_qty = min(requested_qty, real_qty)
             factory.sell_kraken_for_user(user_id, ticker, actual_qty)
+            return {"quantity": actual_qty, "price": None}
+        else:  # LUNO (task #378) -- same shape as KRAKEN above, see
+            # saas_broker_factory.py's LUNO section docstring. quantity
+            # here is always base-asset units (e.g. XBT), no currency
+            # conversion needed for a sell -- only buy-side sizing needs
+            # Luno's FX rate (see buy_luno_for_user()'s docstring).
+            real_qty = factory.get_user_luno_held_qty(user_id, ticker)
+            if real_qty <= 0:
+                print(f"[saas_position_lifecycle_engine] {ticker} (LUNO): wallet shows "
+                      f"zero real balance -- journal thinks {requested_qty} is open. "
+                      f"Treating as stranded/already-closed-elsewhere.")
+                return _STRANDED
+            actual_qty = min(requested_qty, real_qty)
+            factory.sell_luno_for_user(user_id, ticker, actual_qty)
             return {"quantity": actual_qty, "price": None}
     except Exception as e:
         print(f"[saas_position_lifecycle_engine] sell failed for {ticker} ({broker}): {e}")

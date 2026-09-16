@@ -102,8 +102,11 @@ from engines import saas_order_manager as journal
 from config import MAX_HOLD_DAYS_HARD
 
 # See module docstring's 2026-09-02 FOLLOW-UP for why this is now a flat
-# list rather than an asset_class -> broker dict.
-_BROKERS = ("ALPACA", "BINANCE", "ETORO", "MT_BRIDGE")
+# list rather than an asset_class -> broker dict. KRAKEN added task #365
+# (2026-09-15) -- CRYPTO gained the same two-broker shape (Binance or
+# Kraken) once Kraken was added -- see saas_broker_factory.py's KRAKEN
+# section docstring.
+_BROKERS = ("ALPACA", "BINANCE", "KRAKEN", "ETORO", "MT_BRIDGE")
 
 
 def _get_current_price(ticker):
@@ -186,8 +189,29 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
     (one of "would_sell", "sold", "submitted", "error"), "message"}.
     An empty list means nothing needed closing. Never raises for an
     individual ticker's failure.
+
+    FIX 2026-09-03: a position can be closed at the real broker (manual
+    close, prior liquidation, testnet reset, anything outside this app's
+    own sell flow) without this journal ever finding out -- previously
+    only the BINANCE branch defended against this (checking the real
+    wallet balance before selling), and even that branch only SKIPPED
+    the doomed sell without ever reconciling the journal, so it kept
+    re-detecting and re-skipping the same stale lot every single tick
+    forever. Confirmed live: a user's journal held 6 "open" positions
+    across ALPACA/BINANCE/ETORO that were all already fully closed at
+    their real brokers -- ALPACA's blind sell attempts failed loudly
+    every tick with a raw "fractional orders cannot be sold short"
+    error, ETORO's with "No open position found", and BINANCE's silent
+    skip never actually cleared the stale state. ALPACA and ETORO now
+    get the same real-position check BINANCE already had, and all three
+    branches now call journal.reduce_remaining_quantity() to zero out a
+    confirmed-already-closed lot instead of leaving it to retry forever.
     """
     results = []
+    # Per-call cache only (not persisted across ticks) -- avoids one
+    # Alpaca API call per open Alpaca ticker when several are being
+    # checked in the same pass.
+    _real_alpaca_positions = None
 
     for broker in _BROKERS:
         open_tickers = journal.list_open_tickers_for_user(user_id, broker)
@@ -247,11 +271,58 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
 
             try:
                 if broker == "ALPACA":
+                    if _real_alpaca_positions is None:
+                        try:
+                            _real_alpaca_positions = {
+                                p["ticker"]: p["quantity"]
+                                for p in factory.get_user_open_positions(user_id, "ALPACA")
+                            }
+                        except Exception:
+                            _real_alpaca_positions = {}
+                    real_qty = _real_alpaca_positions.get(ticker, 0)
+                    if real_qty <= 0:
+                        results.append({
+                            "ticker": ticker,
+                            "asset_class": asset_class,
+                            "action": "error",
+                            "message": f"Exit triggered ({exit_reason}) but Alpaca shows "
+                                       f"zero {ticker} shares held -- position may already "
+                                       f"be closed outside this journal. Reconciling the "
+                                       f"journal to closed rather than retrying a doomed sell.",
+                        })
+                        journal.reduce_remaining_quantity(entry_order["order_id"], quantity)
+                        continue
+                    quantity = min(quantity, real_qty)
+
                     alpaca_response = factory.sell_stock_for_user(user_id, ticker, quantity)
                     broker_order_id = str(getattr(alpaca_response, "id", "") or "") or None
                     response_status = str(getattr(alpaca_response, "status", "") or "").lower()
 
-                    if "filled" in response_status:
+                    # FIX 2026-09-08 (found live, user 2aff7644, AMZN):
+                    # `"filled" in response_status` also matches Alpaca's
+                    # "partially_filled" status, since it's a substring.
+                    # A large/illiquid sell that only partially fills
+                    # immediately (rest resting as a still-open order at
+                    # Alpaca) was being treated as is_confirmed_filled=True
+                    # -- this SELL then got journaled FILLED (terminal,
+                    # dropped from reconcile_user_alpaca_orders()'s pending
+                    # queue below) using the full requested `quantity`, not
+                    # the actual (smaller) filled amount, and
+                    # reduce_remaining_quantity() below zeroed out the BUY
+                    # lot's remaining size even though real shares were
+                    # still held at Alpaca. Every later scheduler tick then
+                    # re-submitted a SELL for the (still journaled-as-open
+                    # via the live Alpaca position cross-check above)
+                    # leftover shares, which Alpaca rejected every time
+                    # with "insufficient qty available" -- those shares
+                    # were already held_for_orders by the FIRST, still-open
+                    # sell order, an infinite retry loop. Exact match only:
+                    # a genuinely partial fill now falls through to
+                    # is_confirmed_filled=False below, leaving this SELL
+                    # SUBMITTED so reconcile_user_alpaca_orders() (also
+                    # fixed the same way, see that file) re-checks it on
+                    # the next tick until it's actually done.
+                    if response_status == "filled":
                         is_confirmed_filled = True
                         response_filled_price = getattr(alpaca_response, "filled_avg_price", None)
                         if response_filled_price:
@@ -267,6 +338,20 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
                                        f"position_id on record yet -- will retry once "
                                        f"reconciliation catches the BUY up.",
                         })
+                        continue
+                    live_position = factory.find_etoro_position_by_ticker_for_user(user_id, ticker)
+                    if live_position is None:
+                        results.append({
+                            "ticker": ticker,
+                            "asset_class": asset_class,
+                            "action": "error",
+                            "message": f"Exit triggered ({exit_reason}) but eToro shows no "
+                                       f"open position for {ticker} (position_id {position_id}) "
+                                       f"-- position may already be closed outside this "
+                                       f"journal. Reconciling the journal to closed rather "
+                                       f"than retrying a doomed close.",
+                        })
+                        journal.reduce_remaining_quantity(entry_order["order_id"], quantity)
                         continue
                     # eToro's close-position endpoint is synchronous --
                     # see module docstring / sell_etoro_for_user()'s own
@@ -331,11 +416,51 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
                                        f"the wallet shows zero {ticker} "
                                        f"held -- position may already be "
                                        f"closed outside this journal. "
-                                       f"Skipped to avoid a doomed sell; "
-                                       f"investigate if this persists.",
+                                       f"Reconciling the journal to closed "
+                                       f"rather than retrying a doomed sell.",
                         })
+                        journal.reduce_remaining_quantity(entry_order["order_id"], quantity)
                         continue
                     quantity = min(quantity, real_qty)
+
+                    # FIX 2026-09-08 (found live, user 2aff7644, DOT-USD):
+                    # the real_qty<=0 check above only catches a wallet
+                    # that's fully empty. It missed the far more common
+                    # case on a bring-your-own-broker account: the user
+                    # sells most of a position manually outside this bot
+                    # (their Binance account, their call), leaving a tiny
+                    # unsellable dust remainder -- here, wallet held 0.01
+                    # DOT (~$0.01) while the journal still believed
+                    # 903.867052 DOT was open. `quantity = min(quantity,
+                    # real_qty)` correctly capped the sell to 0.01, but
+                    # Binance then rejected it with "Filter failure:
+                    # NOTIONAL" (0.01 DOT is far below any pair's minimum
+                    # order value) -- caught by the broad except Exception
+                    # below, which never reduces remaining_quantity, so
+                    # this repeated forever on every scheduler tick.
+                    # Treat a sell whose value rounds to functionally
+                    # nothing as the same "already closed outside this
+                    # journal" case as real_qty<=0, rather than attempting
+                    # a sell that will never succeed. $1 is well under
+                    # every Binance spot pair's real minNotional (commonly
+                    # $5-$10), so this only ever catches genuine dust, not
+                    # a legitimate small position.
+                    _dust_notional = quantity * filled_price if filled_price else 0
+                    if _dust_notional < 1.0:
+                        results.append({
+                            "ticker": ticker,
+                            "asset_class": asset_class,
+                            "action": "error",
+                            "message": f"Exit triggered ({exit_reason}) but only "
+                                       f"{real_qty} {ticker} (~${_dust_notional:.4f}) "
+                                       f"remains in the wallet -- below any exchange's "
+                                       f"minimum sell size. Most of this position was "
+                                       f"likely sold outside this journal. Reconciling "
+                                       f"to closed rather than retrying an unsellable "
+                                       f"dust amount forever.",
+                        })
+                        journal.reduce_remaining_quantity(entry_order["order_id"], quantity)
+                        continue
 
                     # Binance testnet market sells fill effectively
                     # synchronously -- same established assumption as
@@ -346,6 +471,61 @@ def check_and_apply_exits_for_user(user_id, dry_run=True):
                     # No separate fill price returned by sell_crypto_for_user
                     # -- use the price already fetched above for the exit
                     # decision, same source, seconds apart.
+                elif broker == "KRAKEN":
+                    # Kraken (task #365) -- same wallet-before-journal and
+                    # dust-notional checks as the BINANCE branch above,
+                    # just against Kraken's own wallet/USD notional
+                    # instead of Binance's USDT one. See saas_broker_
+                    # factory.py's KRAKEN section docstring: sell_kraken_
+                    # for_user() calls _require_kraken_live_trading_
+                    # enabled() first, which raises LiveTradingNotEnabled
+                    # Error (caught by the except block below, same
+                    # generic handling as MT_BRIDGE's identical error) if
+                    # this user's Lock 1 is off -- there is no demo/
+                    # sandbox fallback for Kraken to silently trade
+                    # against instead.
+                    real_qty = factory.get_user_kraken_held_qty(user_id, ticker)
+                    if real_qty <= 0:
+                        results.append({
+                            "ticker": ticker,
+                            "asset_class": asset_class,
+                            "action": "error",
+                            "message": f"Exit triggered ({exit_reason}) but "
+                                       f"the wallet shows zero {ticker} "
+                                       f"held -- position may already be "
+                                       f"closed outside this journal. "
+                                       f"Reconciling the journal to closed "
+                                       f"rather than retrying a doomed sell.",
+                        })
+                        journal.reduce_remaining_quantity(entry_order["order_id"], quantity)
+                        continue
+                    quantity = min(quantity, real_qty)
+
+                    # Same dust-notional guard as the BINANCE branch above
+                    # (see that branch's 2026-09-08 comment for the full
+                    # incident this was modeled on) -- $1 is well under
+                    # Kraken's minimum order value for any tracked pair.
+                    _dust_notional = quantity * filled_price if filled_price else 0
+                    if _dust_notional < 1.0:
+                        results.append({
+                            "ticker": ticker,
+                            "asset_class": asset_class,
+                            "action": "error",
+                            "message": f"Exit triggered ({exit_reason}) but only "
+                                       f"{real_qty} {ticker} (~${_dust_notional:.4f}) "
+                                       f"remains in the wallet -- below any exchange's "
+                                       f"minimum sell size. Most of this position was "
+                                       f"likely sold outside this journal. Reconciling "
+                                       f"to closed rather than retrying an unsellable "
+                                       f"dust amount forever.",
+                        })
+                        journal.reduce_remaining_quantity(entry_order["order_id"], quantity)
+                        continue
+
+                    is_confirmed_filled = True
+                    factory.sell_kraken_for_user(user_id, ticker, quantity)
+                    # No separate fill price returned -- use the price
+                    # already fetched above, same as the BINANCE branch.
                 else:
                     # Defensive only -- _BROKERS above is the sole source
                     # of what this loop iterates, so this should be

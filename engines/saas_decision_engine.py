@@ -65,15 +65,32 @@ comment) -- this file just hadn't inherited the fix. Now only a response
 status containing "filled" is trusted; anything else stays SUBMITTED
 with the real broker_order_id recorded, and the result action is
 "submitted" rather than "bought" so the UI can say so honestly. CRYPTO
-is unaffected -- buy_crypto_for_user() mirrors binance_broker.py's own
-buy_crypto(), which has always treated Binance testnet market orders as
-filled immediately (they fill near-synchronously in practice), matching
-established production behavior rather than a new assumption.
+was originally believed unaffected -- buy_crypto_for_user() mirrors
+binance_broker.py's own buy_crypto(), which treats Binance testnet
+market orders as filled immediately on the happy path -- but the
+2026-09-02 pre-launch audit found a real gap on the FAILURE path (see
+FIX 2026-09-02 below).
 
 The reconciliation gap that fix initially left open (a SUBMITTED order
 that fills later would stay SUBMITTED forever) is now closed -- see
-engines/saas_reconcile_engine.py, called at the top of the US_STOCKS
-branch below.
+engines/saas_reconcile_engine.py, called at the top of each asset
+class's branch below (ALPACA/ETORO/BINANCE all reconcile now; MT_BRIDGE
+confirms synchronously, see that branch's own comment).
+
+FIX 2026-09-02 (post-launch-audit CRITICAL finding): CRYPTO's "filled
+immediately" assumption only holds if create_market_buy_order() itself
+returns successfully. If that call raised AFTER Binance had already
+executed the order (a network timeout or dropped connection), the old
+code journaled NOTHING at all -- no SUBMITTED row, no way to ever learn
+the order went through, leaving the position invisible to has_open_
+position_for_user() and open to being bought again on a later tick (a
+real duplicated position, confirmed in that audit). Fixed by always
+generating a client-side order id (Binance's newClientOrderId) before
+calling buy_crypto_for_user(), and journaling a SUBMITTED order using
+that id if the call raises, so reconcile_user_crypto_orders() can
+definitively resolve it on the next pass -- see that function's
+docstring in saas_reconcile_engine.py and get_binance_order_by_client_
+id_for_user()'s docstring in saas_broker_factory.py.
 
 RISK GATES applied per candidate, in order: asset class enabled for this
 user -> broker connected -> user has a nonzero real balance -> signal is
@@ -162,7 +179,8 @@ MAX_POSITION_SIZE per trade) and the per-asset-class position-count cap
 remain the other real safety rails for this version.
 """
 
-from datetime import datetime, timedelta
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import joblib
 
@@ -180,6 +198,7 @@ from engines import saas_exit_engine as exit_engine
 from engines import saas_etoro_trailing_engine as etoro_trailing_engine
 from engines import saas_position_lifecycle_engine as lifecycle_engine
 from engines import saas_emergency_stop
+from engines.broker_error_messages import friendly_broker_error_message, LiveTradingNotEnabledError
 from data.asset_universe import ASSET_UNIVERSE
 
 from config import (
@@ -197,6 +216,52 @@ from config import (
 MODEL_PATH = "models/trading_model.pkl"
 FEATURES_PATH = "models/features.pkl"
 
+# FEATURE 2026-09-09 (task #306, live-trading safety rails): for a
+# user's first few days with live trading enabled, cap real order
+# sizing to LIVE_TRADING_PROBATION_MAX_POSITION_SIZE regardless of
+# their own configured max_position_size (Account Settings allows up
+# to 50%) -- a smaller blast radius while a user is still building
+# confidence that real-money execution behaves the way demo/paper did
+# for them. This is IN ADDITION to (never a replacement for) the
+# user's own setting: _effective_max_position_size() below always
+# takes whichever is smaller. Purely a sizing cap -- does not touch
+# allow_live_trading, does not block trading, does not require any
+# user action; it just relaxes back to the user's own setting once
+# LIVE_TRADING_PROBATION_DAYS have passed since they went live (per
+# tenant.get_live_trading_enabled_since()).
+LIVE_TRADING_PROBATION_DAYS = 3
+LIVE_TRADING_PROBATION_MAX_POSITION_SIZE = 0.10
+
+
+def _effective_max_position_size(user_id, settings):
+    """
+    Returns the max_position_size to actually use for this user's real
+    order sizing this tick: their own configured setting, further
+    capped (never raised) by the live-trading probation ceiling above
+    if they're within their first LIVE_TRADING_PROBATION_DAYS of going
+    live. See the module-level comment above for the full reasoning.
+    Falls back to the user's own setting (or None, letting calculate_
+    trade_amount() use its own global default) on any lookup failure --
+    a probation-check problem should never block a trade outright.
+    """
+    user_max = settings.get("max_position_size")
+    try:
+        enabled_since = tenant.get_live_trading_enabled_since(user_id)
+    except Exception:
+        enabled_since = None
+    if enabled_since is None:
+        return user_max
+    try:
+        now = datetime.now(timezone.utc) if enabled_since.tzinfo is not None else datetime.now()
+        days_live = (now - enabled_since).total_seconds() / 86400
+    except Exception:
+        return user_max
+    if days_live < LIVE_TRADING_PROBATION_DAYS:
+        if user_max is None:
+            return LIVE_TRADING_PROBATION_MAX_POSITION_SIZE
+        return min(user_max, LIVE_TRADING_PROBATION_MAX_POSITION_SIZE)
+    return user_max
+
 # All four asset classes now have real per-user execution (eToro
 # follow-up landed 2026-08-26 -- see saas_broker_factory.py's module
 # docstring for the known gaps: no trailing-lock ratchet, no exit-engine
@@ -208,11 +273,18 @@ FEATURES_PATH = "models/features.pkl"
 # EITHER eToro OR an MT4/5 account (via MetaApi) for these two asset
 # classes, so the broker has to be resolved PER USER, per run, based on
 # what they've actually connected -- see _resolve_broker_for_asset_class()
-# below. US_STOCKS/CRYPTO are untouched (still exactly one broker each,
-# platform-wide) -- only FOREX/COMMODITIES gained a second option.
+# below. US_STOCKS was untouched (still exactly one broker, platform-
+# wide) at the time.
+#
+# FOLLOW-UP 2026-09-15 (task #365, Kraken): CRYPTO gained the exact same
+# shape once Kraken was added as a second crypto broker (see
+# saas_broker_factory.py's KRAKEN section docstring for why -- Binance
+# is unavailable/restricted for customers in Canada and the UK, two
+# currencies this platform already bills in). CRYPTO moved OUT of
+# _ASSET_CLASS_BROKER (now US_STOCKS only) and into the same multi-
+# broker preference pattern FOREX/COMMODITIES already established.
 _ASSET_CLASS_BROKER = {
     "US_STOCKS": "ALPACA",
-    "CRYPTO": "BINANCE",
 }
 
 _FOREX_COMMODITIES_ASSET_CLASSES = ("FOREX", "COMMODITIES")
@@ -224,16 +296,31 @@ _FOREX_COMMODITIES_ASSET_CLASSES = ("FOREX", "COMMODITIES")
 # integration at all), so it gets first look.
 _FOREX_COMMODITIES_BROKER_PREFERENCE = ("MT_BRIDGE", "ETORO")
 
+# BINANCE checked first when a user has BOTH connected -- it has a real
+# testnet a new user can try during their trial, unlike Kraken (no spot
+# sandbox at all, see saas_broker_factory.py's KRAKEN section docstring)
+# -- so it stays the default a user falls into unless they've
+# specifically connected Kraken (e.g. because Binance isn't legally
+# available to them).
+_CRYPTO_BROKER_PREFERENCE = ("BINANCE", "KRAKEN")
+
+_MULTI_BROKER_ASSET_CLASS_PREFERENCE = {
+    "CRYPTO": _CRYPTO_BROKER_PREFERENCE,
+    "FOREX": _FOREX_COMMODITIES_BROKER_PREFERENCE,
+    "COMMODITIES": _FOREX_COMMODITIES_BROKER_PREFERENCE,
+}
+
 _ALL_ASSET_CLASSES = ("US_STOCKS", "CRYPTO") + _FOREX_COMMODITIES_ASSET_CLASSES
 
 
 def _resolve_broker_for_asset_class(asset_class, connected_brokers):
     """
-    Returns which broker THIS user's FOREX/COMMODITIES trades should
-    route through this run, or the fixed single broker for US_STOCKS/
-    CRYPTO. For FOREX/COMMODITIES, checks _FOREX_COMMODITIES_BROKER_
-    PREFERENCE in order and returns the first one this user actually has
-    connected; if neither is connected, returns eToro's code anyway so
+    Returns which broker THIS user's CRYPTO/FOREX/COMMODITIES trades
+    should route through this run, or the fixed single broker for
+    US_STOCKS. For the three multi-broker asset classes, checks
+    _MULTI_BROKER_ASSET_CLASS_PREFERENCE[asset_class] in order and
+    returns the first one this user actually has connected; if none is
+    connected, returns the LAST entry in that preference list anyway so
     the existing "not connected" skip message below names a real broker
     rather than "none" -- purely cosmetic, doesn't change behavior (the
     `broker not in connected_brokers` check right after this call is
@@ -242,10 +329,11 @@ def _resolve_broker_for_asset_class(asset_class, connected_brokers):
     if asset_class in _ASSET_CLASS_BROKER:
         return _ASSET_CLASS_BROKER[asset_class]
 
-    for candidate in _FOREX_COMMODITIES_BROKER_PREFERENCE:
+    preference = _MULTI_BROKER_ASSET_CLASS_PREFERENCE[asset_class]
+    for candidate in preference:
         if candidate in connected_brokers:
             return candidate
-    return _FOREX_COMMODITIES_BROKER_PREFERENCE[-1]
+    return preference[-1]
 
 _POSITION_CAPS = {
     "CRYPTO": MAX_CRYPTO_POSITIONS,
@@ -285,6 +373,20 @@ def _trades_today_and_last_trade_time(user_id, ticker, asset_class, broker):
         timestamp_text = order.get("updated_at") or order.get("created_at")
         try:
             ts = datetime.fromisoformat(timestamp_text) if timestamp_text else None
+            # FIX 2026-09-08 (found live, user 2aff7644): every timestamp
+            # this codebase writes is naive (datetime.now().isoformat(),
+            # see saas_order_manager.py) -- but a one-off manual DB
+            # correction written with an offset-aware datetime.now(
+            # timezone.utc).isoformat() crashed this entire function with
+            # "can't compare offset-naive and offset-aware datetimes" the
+            # moment `ts > last_trade_for_ticker` below compared it
+            # against a naive row for the same ticker, which crashed this
+            # user's whole decision-loop tick. Normalizing to naive here
+            # defensively -- any future write (manual or otherwise) that
+            # includes a UTC offset should degrade to "treated as naive",
+            # never crash the loop for every other user's tick too.
+            if ts is not None and ts.tzinfo is not None:
+                ts = ts.replace(tzinfo=None)
         except Exception:
             ts = None
 
@@ -322,10 +424,87 @@ def _daily_limit_or_cooldown_hit(user_id, ticker, asset_class, broker):
     return False, ""
 
 
+def _signal_snapshot(row):
+    """Read-only signal-engine fields attached to EVERY per-ticker result
+    row below, regardless of what happens to it next (skipped/rejected/
+    would_buy) -- added 2026-09-05.
+
+    Before this, the SaaS "Preview AI Signals" table only ever carried a
+    bare "message" string for anything that wasn't an approved BUY, so a
+    user whose account already had open positions maxed out (a real,
+    working safety cap -- see the position_cap check below) saw nothing
+    but a wall of "skipped: Maximum positions reached" rows and no
+    visibility into what the AI actually found, even though it was
+    actively scoring dozens of tickers per click. The single-owner bot's
+    own dashboard (app.py) never has this problem: it always shows a raw
+    "Live Market Watchlist" of every scanned ticker's price/confidence/
+    trend/signal, separate from and in addition to the filtered
+    "executable" table. This gives the SaaS table the same transparency,
+    reusing data already computed in this loop -- no extra AI/API calls.
+
+    Uses .get() throughout because not every field is populated for every
+    row: a non-BUY signal short-circuits before Strategy/Trade Plan/AI
+    Trade Score are computed (no point building a full trade plan for a
+    HOLD), so those simply come back None rather than triggering a
+    second, wasted computation pass just to fill them in.
+    """
+    return {
+        "price": row.get("Price ($)"),
+        "daily_change_pct": row.get("Daily Change %"),
+        "confidence": row.get("AI Confidence %"),
+        "signal": row.get("Signal"),
+        "trend_score": row.get("Trend Score"),
+        "trend_details": row.get("Trend Details"),
+        "strategy": row.get("Strategy"),
+        "strategy_score": row.get("Strategy Score"),
+        "ai_trade_score": row.get("AI Trade Score"),
+        "risk_reward": row.get("Risk Reward"),
+        "trade_grade": row.get("Trade Grade"),
+        "stop_loss": row.get("Stop Loss"),
+        "take_profit": row.get("Take Profit"),
+    }
+
+
 def run_decision_loop_for_user(user_id, dry_run=True):
     """
+    Public entry point -- acquires this user's cross-process execution
+    lock (see tenant_engine.py's acquire_execution_lock() docstring for
+    the full "why": saas_scheduler.py's background tick and this
+    dashboard's manual Execute button are separate OS processes that
+    used to be able to race on the same user_id with no coordination at
+    all, a real double-order risk found in the pre-launch audit), then
+    delegates to _run_decision_loop_for_user_impl() below for the actual
+    work, guaranteeing the lock is released via finally no matter how
+    that call ends (return, or an exception escaping despite the
+    per-ticker try/except inside it).
+
+    If the lock can't be acquired (another run is already in flight for
+    this user_id -- e.g. the scheduler's tick and a manual Execute click
+    landed at the same moment), returns immediately with a single
+    "skipped" result rather than proceeding -- never partially runs.
+    """
+    if not tenant.acquire_execution_lock(user_id):
+        return [{
+            "ticker": None,
+            "asset_class": None,
+            "action": "skipped",
+            "message": "Another operation is already running for your "
+                       "account (likely the automatic scheduler) -- "
+                       "please wait a moment and try again.",
+        }]
+    try:
+        return _run_decision_loop_for_user_impl(user_id, dry_run=dry_run)
+    finally:
+        tenant.release_execution_lock(user_id)
+
+
+def _run_decision_loop_for_user_impl(user_id, dry_run=True):
+    """
     Runs the full signal -> approval -> sizing -> (optionally) execution
-    pipeline for one user, across US_STOCKS and CRYPTO.
+    pipeline for one user, across US_STOCKS and CRYPTO. Only ever called
+    from run_decision_loop_for_user() above, which holds this user's
+    execution lock for the duration of this call -- do not call this
+    directly from anywhere else.
 
     dry_run=True (the default): generates signals and runs every gate
     including sizing, but never calls a broker or writes to the journal
@@ -403,6 +582,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
     if (
         "ALPACA" in connected_brokers
         or "BINANCE" in connected_brokers
+        or "KRAKEN" in connected_brokers
         or "ETORO" in connected_brokers
         or "MT_BRIDGE" in connected_brokers
     ):
@@ -446,7 +626,11 @@ def run_decision_loop_for_user(user_id, dry_run=True):
     # (tightens a stop, banks partial profit, or force-closes on a stale
     # hold), never opens a new one, so a platform-wide halt on new BUYs
     # shouldn't strand it without this protection either.
-    if "ALPACA" in connected_brokers or "BINANCE" in connected_brokers:
+    if (
+        "ALPACA" in connected_brokers
+        or "BINANCE" in connected_brokers
+        or "KRAKEN" in connected_brokers
+    ):
         lifecycle_results = lifecycle_engine.apply_position_lifecycle_for_user(user_id, dry_run=dry_run)
         results.extend(lifecycle_results)
 
@@ -479,14 +663,55 @@ def run_decision_loop_for_user(user_id, dry_run=True):
         })
         return results
 
+    # FIX 2026-09-02 (post-launch-audit CRITICAL finding): billing status
+    # was never checked here -- only the Streamlit UI's render_dashboard()
+    # gated access on billing_status being "trialing"/"active", and the
+    # background scheduler (saas_scheduler.py) never goes through that UI
+    # code at all. A user whose card failed (past_due) or who cancelled
+    # was locked out of the WEBSITE but the 5-minute tick kept opening new
+    # real positions on their connected broker indefinitely -- this is the
+    # actual enforcement point that matters, not the UI. Same placement
+    # and "block new BUYs only" semantics as the kill-switch checks above:
+    # exit protection/trailing/lifecycle management already ran before
+    # this point and are NOT gated on billing, same reasoning as why they
+    # aren't gated on the kill switches either -- a churned user shouldn't
+    # lose stop-loss/take-profit coverage on a position they already
+    # opened while paying, only the ability to open NEW ones. Admins are
+    # exempt (tenant.is_admin_email(), same definition saas_app.py's
+    # billing gate itself already exempts them from) so the founder's own
+    # test/demo account isn't blocked by not having a real subscription.
+    user = tenant.get_user(user_id)
+    is_admin = user is not None and tenant.is_admin_email(user.get("email"))
+    if not is_admin:
+        billing = tenant.get_billing_info(user_id) or {}
+        billing_status = billing.get("billing_status", "none")
+        if billing_status not in ("trialing", "active"):
+            reason = {
+                "past_due": "your last payment failed",
+                "canceled": "your subscription was canceled",
+                "none": "you haven't started a subscription yet",
+            }.get(billing_status, f"your subscription status is '{billing_status}'")
+            results.append({
+                "ticker": None,
+                "asset_class": None,
+                "action": "skipped",
+                "message": f"No new BUYs will be evaluated -- {reason}. "
+                           f"Your existing open positions still have full "
+                           f"exit protection regardless of billing status.",
+            })
+            return results
+
     try:
         model, features = _load_model()
     except Exception as e:
+        # FIX 2026-09-03 (#257): don't show raw exception text (file
+        # paths, internal load errors) to users in this table row.
+        print(f"[saas_decision_engine] Could not load AI model (raw, server-side only): {e}")
         return [{
             "ticker": None,
             "asset_class": None,
             "action": "error",
-            "message": f"Could not load AI model: {e}",
+            "message": "Could not load the AI model right now. Please try again in a moment.",
         }]
 
     # FOREX and COMMODITIES may both resolve to the SAME broker for a
@@ -514,8 +739,10 @@ def run_decision_loop_for_user(user_id, dry_run=True):
         # Catch up any orders from a previous run that submitted but
         # hadn't confirmed filled yet -- must happen before open_count/
         # has_open_position_for_user checks below, otherwise a since-
-        # filled order would still read as "not open" this run. CRYPTO
-        # doesn't need this (see saas_reconcile_engine.py's docstring).
+        # filled order would still read as "not open" this run. FIX
+        # 2026-09-02: CRYPTO now needs this too -- see saas_reconcile_
+        # engine.py's module docstring for why the original "nothing to
+        # reconcile" assumption was wrong on the failure path.
         if broker == "ALPACA":
             reconcile_results = reconcile.reconcile_user_alpaca_orders(user_id)
             for r in reconcile_results:
@@ -528,6 +755,16 @@ def run_decision_loop_for_user(user_id, dry_run=True):
         elif broker == "ETORO" and broker not in reconciled_brokers:
             reconciled_brokers.add(broker)
             reconcile_results = reconcile.reconcile_user_etoro_orders(user_id)
+            for r in reconcile_results:
+                results.append({
+                    "ticker": r["ticker"],
+                    "asset_class": asset_class,
+                    "action": "reconciled",
+                    "message": r["message"],
+                })
+        elif broker in ("BINANCE", "KRAKEN") and broker not in reconciled_brokers:
+            reconciled_brokers.add(broker)
+            reconcile_results = reconcile.reconcile_user_crypto_orders(user_id, broker=broker)
             for r in reconcile_results:
                 results.append({
                     "ticker": r["ticker"],
@@ -578,11 +815,16 @@ def run_decision_loop_for_user(user_id, dry_run=True):
             try:
                 row = get_ai_signal(ticker, model, features)
             except Exception as e:
+                # FIX 2026-09-03 (#257): don't show raw exception text
+                # (yfinance/internal errors) to users in this table row.
+                print(f"[saas_decision_engine] Signal generation failed for {ticker} "
+                      f"(raw, server-side only): {e}")
                 results.append({
                     "ticker": ticker,
                     "asset_class": asset_class,
                     "action": "error",
-                    "message": f"Signal generation failed: {e}",
+                    "message": "Signal generation failed for this ticker. It will be "
+                               "retried next pass.",
                 })
                 continue
 
@@ -596,6 +838,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     "action": "skipped",
                     "message": f"Not a BUY signal ({row.get('Signal', 'HOLD')}); "
                                f"SELL-side automation not built yet, see module docstring.",
+                    **_signal_snapshot(row),
                 })
                 continue
 
@@ -614,6 +857,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     "asset_class": asset_class,
                     "action": "rejected",
                     "message": reason,
+                    **_signal_snapshot(row),
                 })
                 continue
 
@@ -623,6 +867,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     "asset_class": asset_class,
                     "action": "skipped",
                     "message": "Already holding this ticker (per SaaS journal).",
+                    **_signal_snapshot(row),
                 })
                 continue
 
@@ -632,6 +877,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     "asset_class": asset_class,
                     "action": "skipped",
                     "message": f"Maximum {asset_class} positions reached ({position_cap}).",
+                    **_signal_snapshot(row),
                 })
                 continue
 
@@ -644,6 +890,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     "asset_class": asset_class,
                     "action": "skipped",
                     "message": limit_reason,
+                    **_signal_snapshot(row),
                 })
                 continue
 
@@ -653,6 +900,15 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                 stop_loss=row.get("Stop Loss"),
                 leverage=1,
                 account_balance=balance,
+                # FIX 2026-09-09 (task #306): previously omitted entirely,
+                # which meant every SaaS user's real order sizing silently
+                # used calculate_trade_amount()'s flat global 20% default
+                # regardless of what they'd configured in Account Settings
+                # (5%-50% slider) -- see that function's updated docstring.
+                # Also applies a temporary, tighter cap during a new live
+                # trader's first few days (see _effective_max_position_
+                # size() above).
+                max_position_size=_effective_max_position_size(user_id, settings),
             )
             if trade_amount <= 0:
                 results.append({
@@ -660,6 +916,7 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     "asset_class": asset_class,
                     "action": "skipped",
                     "message": "Balance too small to cover the minimum trade size.",
+                    **_signal_snapshot(row),
                 })
                 continue
 
@@ -676,10 +933,8 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     "asset_class": asset_class,
                     "action": "would_buy",
                     "trade_amount": trade_amount,
-                    "confidence": row["AI Confidence %"],
-                    "trade_grade": row.get("Trade Grade"),
-                    "risk_reward": row.get("Risk Reward"),
                     "message": f"Would BUY ${trade_amount:.2f} of {ticker}.",
+                    **_signal_snapshot(row),
                 })
                 continue
 
@@ -708,7 +963,25 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                     # still showed it pending. See buy_stock_for_user()'s
                     # docstring for why this check has to live here, not
                     # inside that function.
-                    if "filled" in response_status:
+                    # FIX 2026-09-08 (found live, user 2aff7644, AMZN --
+                    # same class of bug on the SELL side, see
+                    # saas_exit_engine.py's fix for the full incident
+                    # writeup): `"filled" in response_status` also
+                    # matches Alpaca's "partially_filled" status. On this
+                    # BUY side the immediate risk is different but still
+                    # real -- filled_quantity below IS captured correctly
+                    # from the actual response, but marking a partial
+                    # fill terminal FILLED here means the still-resting
+                    # unfilled remainder at Alpaca is silently forgotten:
+                    # if it fills later, that additional quantity is
+                    # never recorded, so the position's real size grows
+                    # beyond what this journal (and therefore stop-loss/
+                    # take-profit exit protection) believes it is. Exact
+                    # match only -- a genuine partial fill now falls
+                    # through to is_confirmed_filled=False, leaving this
+                    # BUY SUBMITTED so reconcile_user_alpaca_orders()
+                    # (also fixed) confirms the true final amount later.
+                    if response_status == "filled":
                         is_confirmed_filled = True
                         response_filled_price = getattr(alpaca_response, "filled_avg_price", None)
                         response_filled_qty = getattr(alpaca_response, "filled_qty", None)
@@ -716,16 +989,48 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                             filled_price = float(response_filled_price)
                         if response_filled_qty:
                             filled_quantity = float(response_filled_qty)
-                elif asset_class == "CRYPTO":
+                elif asset_class == "CRYPTO" and broker == "BINANCE":
                     # Binance testnet market orders fill effectively
-                    # synchronously -- same assumption the single-owner
-                    # bot's own binance_broker.buy_crypto() already makes
-                    # (see that file), so treating this as filled
-                    # immediately matches established, already-live
-                    # behavior rather than introducing a new one.
+                    # synchronously on the happy path -- same assumption
+                    # the single-owner bot's own binance_broker.
+                    # buy_crypto() already makes (see that file). FIX
+                    # 2026-09-02: a CLIENT-generated order id is always
+                    # generated and passed through now (newClientOrderId),
+                    # regardless of whether this call succeeds -- it's
+                    # what lets reconcile_user_crypto_orders() (see
+                    # saas_reconcile_engine.py) definitively look this
+                    # order up later if the response below is lost (e.g.
+                    # a network timeout AFTER Binance already executed
+                    # it). Stored as broker_order_id so it flows through
+                    # the shared journal.create_order()/mark_order_
+                    # submitted() call below like every other branch.
+                    client_order_id = uuid.uuid4().hex
+                    broker_order_id = client_order_id
                     is_confirmed_filled = True
                     _order, filled_price, filled_quantity = factory.buy_crypto_for_user(
-                        user_id, ticker, trade_amount
+                        user_id, ticker, trade_amount, client_order_id=client_order_id
+                    )
+                elif asset_class == "CRYPTO" and broker == "KRAKEN":
+                    # Kraken (task #365) -- same client-order-id-first
+                    # discipline as the BINANCE branch above, for the same
+                    # "response lost to a network error after Kraken
+                    # already executed it" reason -- see saas_broker_
+                    # factory.buy_kraken_for_user()'s docstring for the
+                    # one open caveat (clientOrderId param not yet
+                    # live-verified against a real Kraken account).
+                    # _require_kraken_live_trading_enabled() (called
+                    # inside buy_kraken_for_user() itself, first thing) is
+                    # what actually blocks this for a user who hasn't
+                    # flipped Lock 1 -- Kraken has no demo/sandbox to fall
+                    # back to instead (see that function's docstring), so
+                    # this raises LiveTradingNotEnabledError rather than
+                    # silently trading paper, caught by the generic except
+                    # block below same as MT_BRIDGE's identical error.
+                    client_order_id = uuid.uuid4().hex
+                    broker_order_id = client_order_id
+                    is_confirmed_filled = True
+                    _order, filled_price, filled_quantity = factory.buy_kraken_for_user(
+                        user_id, ticker, trade_amount, client_order_id=client_order_id
                     )
                 elif broker == "MT_BRIDGE":
                     # FOREX/COMMODITIES via MT4/5 (MetaApi) -- added
@@ -801,12 +1106,84 @@ def run_decision_loop_for_user(user_id, dry_run=True):
                             filled_price = float(etoro_result["executed_price"])
                             filled_quantity = trade_amount / filled_price if filled_price > 0 else estimated_quantity
             except Exception as e:
-                results.append({
-                    "ticker": ticker,
-                    "asset_class": asset_class,
-                    "action": "error",
-                    "message": f"Broker execution failed: {e}",
-                })
+                # FIX 2026-09-02: for CRYPTO specifically, this except
+                # firing does NOT mean the order never happened -- Binance
+                # may have executed it and the failure is just in getting
+                # the response back (network timeout/dropped connection).
+                # Discarding it here (the old behavior) meant NOTHING was
+                # journaled at all: has_open_position_for_user() would
+                # keep saying "not open" and a later tick could buy the
+                # same ticker again -- a real duplicated position, found
+                # in the 2026-09-02 pre-launch audit. Instead, journal it
+                # SUBMITTED using the client_order_id generated above, so
+                # reconcile_user_crypto_orders() (runs at the top of this
+                # asset class's block on the NEXT tick) can definitively
+                # resolve what actually happened on Binance.
+                if asset_class == "CRYPTO" and isinstance(e, LiveTradingNotEnabledError):
+                    # KRAKEN-specific (task #365): this error means NO
+                    # order was ever attempted -- it's raised by
+                    # _require_kraken_live_trading_enabled() as the very
+                    # first thing buy_kraken_for_user() does, before any
+                    # exchange call. Journaling a SUBMITTED row here (the
+                    # branch below, for a genuine lost-response case)
+                    # would be actively wrong: there is nothing on
+                    # Kraken's side to reconcile, and client_order_id was
+                    # never sent anywhere. Treat this exactly like
+                    # MT_BRIDGE's identical error -- a clean rejection,
+                    # same friendly_broker_error_message() special-case
+                    # text ("Live Trading is not enabled...").
+                    results.append({
+                        "ticker": ticker,
+                        "asset_class": asset_class,
+                        "action": "error",
+                        "message": friendly_broker_error_message(broker.title(), e),
+                    })
+                elif asset_class == "CRYPTO":
+                    saas_order = journal.create_order(
+                        user_id=user_id,
+                        ticker=ticker,
+                        side="BUY",
+                        quantity=estimated_quantity,
+                        trade_amount=trade_amount,
+                        price=estimated_price,
+                        asset_class=asset_class,
+                        broker=broker,
+                        strategy=row.get("Strategy"),
+                        confidence=row["AI Confidence %"],
+                        ai_trade_score=row["AI Trade Score"],
+                        priority=None,
+                        stop_loss=row.get("Stop Loss"),
+                        take_profit=row.get("Take Profit"),
+                    )
+                    saas_order = journal.mark_order_submitted(
+                        saas_order, broker_order_id=client_order_id
+                    )
+                    journal.save_order(saas_order)
+                    # FIX 2026-09-03 (#257): don't show raw exception
+                    # text (raw ccxt error) to users -- log server-side,
+                    # keep the user-facing message plain.
+                    print(f"[saas_decision_engine] {ticker}: {broker.title()} execution "
+                          f"raised an error (raw, server-side only): {e}")
+                    results.append({
+                        "ticker": ticker,
+                        "asset_class": asset_class,
+                        "action": "submitted",
+                        "trade_amount": trade_amount,
+                        "message": f"Broker execution hit an error, but the order may "
+                                   f"still have reached {broker.title()} -- journaled as "
+                                   f"SUBMITTED (client_order_id={client_order_id}) so "
+                                   f"it will be confirmed or cancelled on the next "
+                                   f"reconciliation pass rather than risking a "
+                                   f"duplicate buy.",
+                    })
+                else:
+                    broker_label = {"MT_BRIDGE": "MT4/5"}.get(broker, broker.title())
+                    results.append({
+                        "ticker": ticker,
+                        "asset_class": asset_class,
+                        "action": "error",
+                        "message": friendly_broker_error_message(broker_label, e),
+                    })
                 continue
 
             if lot_size_too_small:

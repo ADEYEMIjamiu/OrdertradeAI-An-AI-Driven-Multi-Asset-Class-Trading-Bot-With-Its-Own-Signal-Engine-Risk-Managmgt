@@ -68,10 +68,19 @@ from engines.position_lifecycle_engine import (
 
 DB_NAME = "saas_platform.db"
 
-_ASSET_CLASS_BROKER = {
-    "US_STOCKS": "ALPACA",
-    "CRYPTO": "BINANCE",
-}
+# FOLLOW-UP 2026-09-15 (task #365, Kraken): was a dict {asset_class:
+# broker} -- CRYPTO now has two possible brokers (Binance or Kraken, see
+# saas_broker_factory.py's KRAKEN section docstring), so a single dict
+# can no longer say which broker(s) actually have open positions for a
+# given user. Changed to a flat list of (asset_class, broker) pairs,
+# same "check every broker regardless of which is currently preferred
+# for new BUYs" reasoning saas_exit_engine.py's module docstring already
+# established for its own _BROKERS list.
+_ASSET_CLASS_BROKER_PAIRS = (
+    ("US_STOCKS", "ALPACA"),
+    ("CRYPTO", "BINANCE"),
+    ("CRYPTO", "KRAKEN"),
+)
 
 
 def _get_connection():
@@ -158,22 +167,69 @@ def _get_current_price(ticker):
         return None
 
 
+_STRANDED = "STRANDED"  # sentinel: real broker/wallet balance is confirmed
+# zero, so this isn't a transient sell failure -- see _execute_sell's
+# BINANCE branch and the FIX 2026-09-03 (#266) note there.
+
+
 def _execute_sell(user_id, ticker, broker, requested_qty):
     """
     Executes a real SELL (callers must gate dry_run themselves) and
-    returns {"quantity", "price"} for what ACTUALLY sold, or None on any
-    failure. Mirrors saas_exit_engine.py's own per-broker execution
-    exactly, including the 2026-08-27 real-wallet-balance cap for crypto
-    (the fix for the SOL-USD 'insufficient balance' failure) -- a
-    partial-profit or time-exit sell here has the identical exposure to
-    that same bug class if it blindly trusted the journal's quantity.
+    returns {"quantity", "price"} for what ACTUALLY sold, the _STRANDED
+    sentinel if the broker/wallet confirms zero real balance, or None on
+    any other failure. Mirrors saas_exit_engine.py's own per-broker
+    execution exactly, including the 2026-08-27 real-wallet-balance cap
+    for crypto (the fix for the SOL-USD 'insufficient balance' failure)
+    -- a partial-profit or time-exit sell here has the identical exposure
+    to that same bug class if it blindly trusted the journal's quantity.
     Never raises.
     """
     try:
         if broker == "ALPACA":
+            # FIX 2026-09-09 (found live, user 2aff7644, QQQ): this branch
+            # blindly trusted the journal's requested_qty, unlike this
+            # same function's BINANCE branch just below (task #266) and
+            # unlike saas_exit_engine.py's own ALPACA branch (which caps
+            # to a live Alpaca position query). Confirmed live: Alpaca
+            # rejected a max-hold-time close with {"code":42210000,
+            # "message":"fractional orders cannot be sold short"} --
+            # Alpaca's error for "you're asking to sell more of this
+            # fractional position than you actually hold", i.e. the exact
+            # same journal-vs-broker drift class as everywhere else in
+            # this codebase. Capping to the real held quantity here too,
+            # and treating a confirmed-zero real position as _STRANDED
+            # (already-closed-elsewhere) rather than attempting a doomed
+            # sell -- mirrors the BINANCE branch's handling exactly, and
+            # the caller below already knows how to reconcile _STRANDED
+            # for either broker.
+            try:
+                real_positions = {
+                    p["ticker"]: p["quantity"]
+                    for p in factory.get_user_open_positions(user_id, "ALPACA")
+                }
+            except Exception:
+                real_positions = {}
+            real_qty = real_positions.get(ticker, 0)
+            if real_qty <= 0:
+                print(f"[saas_position_lifecycle_engine] {ticker} (ALPACA): Alpaca shows "
+                      f"zero real shares held -- journal thinks {requested_qty} is open. "
+                      f"Treating as stranded/already-closed-elsewhere.")
+                return _STRANDED
+            requested_qty = min(requested_qty, real_qty)
+
             alpaca_response = factory.sell_stock_for_user(user_id, ticker, requested_qty)
             response_status = str(getattr(alpaca_response, "status", "") or "").lower()
-            if "filled" not in response_status:
+            # FIX 2026-09-09 (task #310, same class as the AMZN incident):
+            # `"filled" not in response_status` also matches
+            # "partially_filled" as a substring (it IS "filled" not-in
+            # "partially_filled" evaluates False, so a partial fill fell
+            # through to being treated as fully confirmed below, using
+            # whatever partial filled_qty had accumulated at this single
+            # snapshot). Exact match only -- a genuine partial fill now
+            # correctly falls through to the "not confirmed, retry next
+            # tick" path instead of being journaled as a complete sell
+            # while a resting remainder at Alpaca goes untracked forever.
+            if response_status != "filled":
                 # Not confirmed synchronously -- rather than guess, treat
                 # this pass as a no-op and let a future tick retry. This
                 # module has no reconciliation pass of its own (unlike
@@ -187,15 +243,52 @@ def _execute_sell(user_id, ticker, broker, requested_qty):
                 "quantity": float(filled_qty) if filled_qty else requested_qty,
                 "price": float(filled_price) if filled_price else None,
             }
-        else:  # BINANCE
+        elif broker == "BINANCE":
             real_qty = factory.get_user_crypto_held_qty(user_id, ticker)
             if real_qty <= 0:
-                return None
+                # FIX 2026-09-03 (#266): this used to return None with NO
+                # log line at all -- "return None" here never touches the
+                # except block below, so the caller's "...see logs" error
+                # message pointed at logs that had nothing in them, and
+                # because nothing ever reconciled the journal, the exact
+                # same ticker re-failed identically every single tick
+                # forever (confirmed live: SOL-USD/XRP-USD/DOGE-USD/
+                # XLM-USD/ETH-USD repeating every ~5 min for one user).
+                # Same root cause class as saas_exit_engine.py's own
+                # 2026-08-27 fix a few lines up in that file's BINANCE
+                # branch (stranded/already-closed-elsewhere wallet vs.
+                # stale journal quantity) -- that fix never got mirrored
+                # here when this module was built. Now: log it plainly,
+                # and hand the caller a distinguishable sentinel so it
+                # reconciles the journal instead of retrying a doomed
+                # sell forever.
+                print(f"[saas_position_lifecycle_engine] {ticker} (BINANCE): wallet shows "
+                      f"zero real balance -- journal thinks {requested_qty} is open. "
+                      f"Treating as stranded/already-closed-elsewhere.")
+                return _STRANDED
             actual_qty = min(requested_qty, real_qty)
             factory.sell_crypto_for_user(user_id, ticker, actual_qty)
             # Binance testnet market sells fill effectively synchronously
             # -- same established assumption as sell_crypto_for_user()'s
             # other callers. No separate fill price returned.
+            return {"quantity": actual_qty, "price": None}
+        else:  # KRAKEN (task #365) -- see saas_broker_factory.py's
+            # KRAKEN section docstring: sell_kraken_for_user() calls
+            # _require_kraken_live_trading_enabled() first, which raises
+            # LiveTradingNotEnabledError (caught by the except block
+            # below, same as any other broker failure here) if this
+            # user's Lock 1 is off -- there is no demo/sandbox for Kraken
+            # to silently fall back to instead.
+            real_qty = factory.get_user_kraken_held_qty(user_id, ticker)
+            if real_qty <= 0:
+                # Same stranded-position reasoning as the BINANCE branch
+                # above.
+                print(f"[saas_position_lifecycle_engine] {ticker} (KRAKEN): wallet shows "
+                      f"zero real balance -- journal thinks {requested_qty} is open. "
+                      f"Treating as stranded/already-closed-elsewhere.")
+                return _STRANDED
+            actual_qty = min(requested_qty, real_qty)
+            factory.sell_kraken_for_user(user_id, ticker, actual_qty)
             return {"quantity": actual_qty, "price": None}
     except Exception as e:
         print(f"[saas_position_lifecycle_engine] sell failed for {ticker} ({broker}): {e}")
@@ -222,7 +315,7 @@ def apply_position_lifecycle_for_user(user_id, dry_run=True):
     """
     results = []
 
-    for asset_class, broker in _ASSET_CLASS_BROKER.items():
+    for asset_class, broker in _ASSET_CLASS_BROKER_PAIRS:
         try:
             open_tickers = journal.list_open_tickers_for_user(user_id, broker)
         except Exception as e:
@@ -274,7 +367,23 @@ def apply_position_lifecycle_for_user(user_id, dry_run=True):
                         })
                     else:
                         sold = _execute_sell(user_id, ticker, broker, remaining_qty)
-                        if sold is None:
+                        if sold == _STRANDED:
+                            # FIX 2026-09-03 (#266): confirmed-zero real
+                            # balance -- reconcile the journal to closed
+                            # rather than reporting a generic failure and
+                            # retrying the same doomed sell every tick.
+                            # Mirrors saas_exit_engine.py's stranded-exit
+                            # reconciliation.
+                            results.append({
+                                "ticker": ticker, "asset_class": asset_class, "action": "error",
+                                "message": f"Max-hold-time close triggered for {ticker} but the "
+                                           f"wallet shows zero held -- position may already be "
+                                           f"closed outside this journal. Reconciling the journal "
+                                           f"to closed rather than retrying a doomed sell.",
+                            })
+                            journal.reduce_remaining_quantity(lot["order_id"], remaining_qty)
+                            clear_position_lifecycle_state(user_id, ticker, broker)
+                        elif sold is None:
                             results.append({
                                 "ticker": ticker, "asset_class": asset_class, "action": "error",
                                 "message": f"Max-hold-time close failed for {ticker} -- see logs.",
@@ -340,6 +449,25 @@ def apply_position_lifecycle_for_user(user_id, dry_run=True):
                         continue
 
                     sold = _execute_sell(user_id, ticker, broker, partial_qty)
+                    if sold == _STRANDED:
+                        # FIX 2026-09-03 (#266): confirmed-zero real
+                        # balance means the WHOLE position is already
+                        # gone, not just this partial slice -- reconcile
+                        # the entire remaining lot as closed (same as the
+                        # max-hold-time branch above / saas_exit_engine.py's
+                        # stranded-exit reconciliation) instead of
+                        # reporting a generic failure and retrying the
+                        # same doomed partial sell every tick forever.
+                        results.append({
+                            "ticker": ticker, "asset_class": asset_class, "action": "error",
+                            "message": f"Partial profit-take triggered for {ticker} but the "
+                                       f"wallet shows zero held -- position may already be "
+                                       f"closed outside this journal. Reconciling the journal "
+                                       f"to closed rather than retrying a doomed sell.",
+                        })
+                        journal.reduce_remaining_quantity(lot["order_id"], remaining_qty)
+                        clear_position_lifecycle_state(user_id, ticker, broker)
+                        continue
                     if sold is None:
                         results.append({
                             "ticker": ticker, "asset_class": asset_class, "action": "error",

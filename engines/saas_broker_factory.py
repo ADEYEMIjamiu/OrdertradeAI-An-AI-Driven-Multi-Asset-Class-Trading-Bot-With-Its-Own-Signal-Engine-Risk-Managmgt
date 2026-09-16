@@ -130,7 +130,11 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 
 from engines import tenant_engine as tenant
 from engines import saas_order_manager as journal
-from engines.broker_error_messages import friendly_broker_error_message, broker_error_status
+from engines.broker_error_messages import (
+    friendly_broker_error_message,
+    broker_error_status,
+    LiveTradingNotEnabledError,
+)
 from etoro_broker import (
     resolve_project_ticker,
     _is_forex_or_commodity_ticker,
@@ -431,9 +435,264 @@ def check_user_mt_bridge_connection(user_id):
     return mt_broker.check_user_mt_connection_sync(user_id)
 
 
+# ============================================================
+# KRAKEN (second CRYPTO broker, task #365) -- added to close the gap
+# Binance leaves in Canada (exited entirely, May 2023) and the UK (FCA
+# blocked new retail sign-ups Oct 2023, no derivatives for existing
+# ones) -- both currencies this platform already bills in (CAD/GBP).
+#
+# CRITICAL DIFFERENCE FROM BINANCE: Kraken has NO public spot sandbox/
+# testnet for ordinary retail API keys (confirmed via research before
+# building this -- Kraken's spot test environment is "offered for
+# qualified clients" only, not a self-serve testnet like Binance's).
+# A connected Kraken account is therefore ALWAYS real money -- there is
+# no code-level sandbox to flip between the way _binance_is_live() does
+# via set_sandbox_mode(). This is the SAME characteristic mt_broker.py
+# (MT4/5) has -- see that file's LIVE TRADING GATE section, which this
+# mirrors: the only gate is user_settings.allow_live_trading (Lock 1),
+# checked fresh on every buy/sell call via _require_kraken_live_
+# trading_enabled() below, raising LiveTradingNotEnabledError (already
+# handled by saas_decision_engine.py's/saas_exit_engine.py's generic
+# except-Exception blocks, same as MT4/5) if it's off. There is no
+# Lock 2 (credential environment) for Kraken -- environment is always
+# saved as "live" at connect time (see saas_app.py's render_kraken_
+# connection()), purely a display label, never consulted for the
+# execution gate (consistent with how MT_BRIDGE's stored environment
+# is also just a label -- see tenant.update_broker_environment()'s
+# docstring).
+#
+# check_user_kraken_connection() itself is NOT gated by Lock 1 -- same
+# as check_user_mt_bridge_connection() -- reading balance/connection
+# status is safe regardless of whether live trading is enabled; only
+# actually placing/closing an order is gated.
+#
+# Symbol convention: Kraken's classic strength is direct fiat USD spot
+# pairs (BTC/USD, ETH/USD, SOL/USD, etc. -- offered since Kraken's
+# inception), unlike Binance which is USDT-denominated. _to_kraken_
+# symbol() below converts this project's "TICKER-USD" tickers to
+# "TICKER/USD", and balances are read from the "USD" free balance, not
+# "USDT". NOT live-verified against a real Kraken account from this
+# build session (no network access at build time) -- every tracked
+# ticker's exact Kraken pair availability, minimum order size, and the
+# clientOrderId param name used for reconciliation below should be
+# confirmed via a real Test Connection + a small real order BEFORE
+# this is trusted for any live user, same "live-test before trusting"
+# discipline every other broker integration in this file got (see
+# mt_broker.py's task #231, eToro's task #44).
+# ============================================================
+
+
+def _require_kraken_live_trading_enabled(user_id):
+    """
+    THE single gate for Kraken order execution -- see the KRAKEN section
+    docstring above for why this is a SINGLE gate (Lock 1 only), unlike
+    Alpaca/Binance/eToro's double-gate (_alpaca_is_live()/_binance_is_
+    live()/_etoro_is_live()). Raises LiveTradingNotEnabledError (caught
+    by the same generic except-Exception handling saas_decision_engine.py
+    and saas_exit_engine.py already use for MT_BRIDGE's identical error)
+    if user_settings.allow_live_trading is not on. Never silently routes
+    to a "demo" execution path -- there isn't one for Kraken.
+    """
+    if not _user_has_live_trading_enabled(user_id):
+        raise LiveTradingNotEnabledError(
+            f"Kraken account for user {user_id} is real-money by design "
+            f"(Kraken has no spot sandbox/testnet for retail API keys) "
+            f"but allow_live_trading is not enabled."
+        )
+
+
+def check_user_kraken_connection(user_id):
+    """
+    Builds a fresh ccxt Kraken exchange instance from this user's OWN
+    stored credentials and validates it with a real balance call. No
+    sandbox mode (Kraken has none for spot -- see KRAKEN section
+    docstring above) and NOT gated by Lock 1 -- a read-only connection
+    check is safe regardless of whether live trading is enabled, same
+    as check_user_mt_bridge_connection(). Mirrors check_user_binance_
+    connection()'s return shape, reading the "USD" free balance instead
+    of "USDT" (Kraken's native fiat pair, not Binance's stablecoin one).
+    """
+    creds = tenant.get_broker_credentials(user_id, "KRAKEN")
+    if creds is None:
+        return {
+            "connected": False,
+            "error": "No Kraken credentials saved for this user.",
+        }
+
+    try:
+        exchange = ccxt.kraken({
+            "apiKey": creds["api_key"],
+            "secret": creds["api_secret"],
+            "enableRateLimit": True,
+        })
+        balance = exchange.fetch_balance()
+        usd = balance.get("USD", {}).get("free", 0)
+
+        return {
+            "connected": True,
+            "status": "connected",
+            "cash": float(usd),
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "connected": False,
+            "status": broker_error_status(e),  # see #258 note above check_user_alpaca_connection()
+            "cash": 0.0,
+            "error": friendly_broker_error_message("Kraken", e),
+        }
+
+
+def _require_kraken_exchange(user_id):
+    """
+    Used by every order-placing/order-status/balance-reading Kraken call
+    below. No sandbox mode call -- see KRAKEN section docstring above.
+    Real execution is gated separately by _require_kraken_live_trading_
+    enabled(), called explicitly by buy_kraken_for_user()/sell_kraken_
+    for_user() before this, never inlined here, so a future caller can't
+    accidentally build a live-capable client without that check.
+    """
+    creds = tenant.get_broker_credentials(user_id, "KRAKEN")
+    if creds is None:
+        raise ValueError("No Kraken credentials saved for this user.")
+    return ccxt.kraken({
+        "apiKey": creds["api_key"],
+        "secret": creds["api_secret"],
+        "enableRateLimit": True,
+    })
+
+
+def _to_kraken_symbol(ticker):
+    """See KRAKEN section docstring above -- Kraken's native pairs are
+    fiat-USD, not USDT, unlike _to_binance_symbol()."""
+    return f"{ticker.replace('-USD', '')}/USD"
+
+
+def buy_kraken_for_user(user_id, ticker, usd_amount, client_order_id=None):
+    """
+    Per-user Kraken REAL market BUY, sized by dollar amount. Mirrors
+    buy_crypto_for_user() (Binance) in shape, with two deliberate
+    differences: (1) _require_kraken_live_trading_enabled() is checked
+    FIRST, before anything else -- there is no sandbox to fall back to,
+    so this must never be reached with live trading off; (2) the
+    client_order_id is passed as ccxt's unified 'clientOrderId' params
+    key rather than Binance's 'newClientOrderId' -- NOT yet live-
+    verified against a real Kraken account (see KRAKEN section
+    docstring's live-test caveat) to confirm this is the exact param
+    ccxt's Kraken implementation expects and that fetch_order() can look
+    it back up the same way get_binance_order_by_client_id_for_user()
+    does. Returns (order, price, quantity) same shape as buy_crypto_
+    for_user() so saas_decision_engine.py's CRYPTO branch can treat
+    both brokers identically once `broker` is threaded through.
+    """
+    _require_kraken_live_trading_enabled(user_id)
+    exchange = _require_kraken_exchange(user_id)
+    symbol = _to_kraken_symbol(ticker)
+
+    ticker_data = exchange.fetch_ticker(symbol)
+    price = ticker_data["last"]
+    quantity = usd_amount / price
+
+    params = {"clientOrderId": client_order_id} if client_order_id else {}
+    order = exchange.create_market_buy_order(symbol, quantity, params=params)
+    return order, price, quantity
+
+
+def get_kraken_order_by_client_id_for_user(user_id, ticker, client_order_id):
+    """
+    Kraken equivalent of get_binance_order_by_client_id_for_user() --
+    used by reconcile_user_crypto_orders() (see saas_reconcile_engine.py,
+    now broker-parametrized) to resolve a Kraken BUY whose original
+    create_market_buy_order() response was lost to a network error. Not
+    gated by _require_kraken_live_trading_enabled() -- a lookup is
+    read-only and safe to run regardless (mirrors get_binance_order_by_
+    client_id_for_user() having no such gate either).
+
+    NOT yet live-verified (see KRAKEN section docstring) -- confirm
+    ccxt's Kraken fetchOrder() actually accepts 'clientOrderId' in
+    params the same way Binance's fetch_order() accepts
+    'origClientOrderId' before relying on this for real duplicate-order
+    protection.
+    """
+    exchange = _require_kraken_exchange(user_id)
+    symbol = _to_kraken_symbol(ticker)
+    return exchange.fetch_order(None, symbol, params={"clientOrderId": client_order_id})
+
+
+def sell_kraken_for_user(user_id, ticker, quantity):
+    """Per-user Kraken REAL market SELL. Mirrors sell_crypto_for_user()
+    (Binance), gated first by _require_kraken_live_trading_enabled() --
+    see buy_kraken_for_user()'s docstring for why this check comes
+    before anything else for Kraken specifically."""
+    _require_kraken_live_trading_enabled(user_id)
+    exchange = _require_kraken_exchange(user_id)
+    symbol = _to_kraken_symbol(ticker)
+    return exchange.create_market_sell_order(symbol, quantity)
+
+
+def get_user_kraken_held_qty(user_id, ticker):
+    """
+    Kraken equivalent of get_user_crypto_held_qty() (Binance) -- live
+    wallet check used by saas_exit_engine.py to cap a SELL at what's
+    actually held, same "trust the wallet over the journal" reasoning
+    as that function's docstring. Never raises -- returns 0.0 on any
+    failure (no credentials, API error, ticker not held), same
+    never-raise contract. Not gated by live-trading-enabled -- a
+    read-only wallet query, same reasoning as check_user_kraken_
+    connection() above.
+    """
+    try:
+        exchange = _require_kraken_exchange(user_id)
+    except Exception:
+        return 0.0
+
+    try:
+        base_asset = ticker.replace("-USD", "")
+        balance = exchange.fetch_balance()
+        return float(balance.get("free", {}).get(base_asset, 0) or 0)
+    except Exception:
+        return 0.0
+
+
+def _get_kraken_exposure_percent(user_id):
+    """Kraken equivalent of _get_binance_exposure_percent() -- values
+    only TRACKED_ASSETS at a fresh per-coin Kraken ticker price, reading
+    the "USD" free balance instead of "USDT". Never raises -- returns
+    0.0 on any failure, same contract as the Binance version."""
+    try:
+        exchange = _require_kraken_exchange(user_id)
+    except Exception:
+        return 0.0
+
+    try:
+        from data.asset_universe import ASSET_UNIVERSE
+        tracked = {t.replace("-USD", "") for t in ASSET_UNIVERSE["CRYPTO"]["symbols"]}
+
+        balance = exchange.fetch_balance()
+        free_usd = float(balance.get("USD", {}).get("free", 0) or 0)
+
+        crypto_value = 0.0
+        for asset, total_qty in balance.get("total", {}).items():
+            if asset not in tracked or not total_qty:
+                continue
+            try:
+                price = float(exchange.fetch_ticker(f"{asset}/USD").get("last") or 0)
+            except Exception:
+                continue
+            crypto_value += float(total_qty) * price
+
+        portfolio_value = free_usd + crypto_value
+        if portfolio_value <= 0:
+            return 0.0
+        return (crypto_value / portfolio_value) * 100
+    except Exception:
+        return 0.0
+
+
 _CHECKERS = {
     "ALPACA": check_user_alpaca_connection,
     "BINANCE": check_user_binance_connection,
+    "KRAKEN": check_user_kraken_connection,
     "ETORO": check_user_etoro_connection,
     "MT_BRIDGE": check_user_mt_bridge_connection,
 }
@@ -457,8 +716,9 @@ def get_user_account_balance(user_id, asset_class, broker=None):
     binance_broker.py. Used by the per-user decision loop
     (saas_decision_engine.py) to size trades with calculate_trade_amount().
 
-    US_STOCKS (Alpaca), CRYPTO (Binance), and -- as of the 2026-08-26
-    eToro follow-up -- FOREX/COMMODITIES (eToro) are all wired here.
+    US_STOCKS (Alpaca), CRYPTO (Binance or, as of task #365, Kraken), and
+    -- as of the 2026-08-26 eToro follow-up -- FOREX/COMMODITIES (eToro)
+    are all wired here.
 
     FOLLOW-UP 2026-09-02: FOREX/COMMODITIES can now also be served by
     MT_BRIDGE (MT4/5 via MetaApi) instead of ETORO -- since a given user
@@ -468,8 +728,19 @@ def get_user_account_balance(user_id, asset_class, broker=None):
     silently checking the wrong one. `broker=None` preserves the exact
     old behavior (always ETORO for FOREX/COMMODITIES) for any caller that
     hasn't been updated to pass it explicitly.
+
+    FOLLOW-UP 2026-09-15 (task #365): CRYPTO gained the exact same
+    two-broker shape as FOREX/COMMODITIES once Kraken was added --
+    `broker=None` preserves old behavior (always BINANCE) for any
+    caller not yet updated; saas_decision_engine.py's _resolve_broker_
+    for_asset_class() always passes it explicitly now.
     """
     if asset_class == "CRYPTO":
+        if broker == "KRAKEN":
+            result = check_user_kraken_connection(user_id)
+            if not result.get("connected"):
+                return 0.0
+            return float(result.get("cash", 0) or 0)
         result = check_user_binance_connection(user_id)
         if not result.get("connected"):
             return 0.0
@@ -551,6 +822,8 @@ def get_user_exposure_percent(user_id, asset_class, broker=None):
         return (invested / equity) * 100
 
     if asset_class == "CRYPTO":
+        if broker == "KRAKEN":
+            return _get_kraken_exposure_percent(user_id)
         return _get_binance_exposure_percent(user_id)
 
     if asset_class in ("FOREX", "COMMODITIES"):
@@ -1329,6 +1602,8 @@ def get_user_open_positions(user_id, broker):
         return _get_alpaca_open_positions(user_id)
     if broker == "BINANCE":
         return _get_binance_open_positions(user_id)
+    if broker == "KRAKEN":
+        return _get_kraken_open_positions(user_id)
     if broker == "ETORO":
         return _get_etoro_open_positions(user_id)
     if broker == "MT_BRIDGE":
@@ -1591,6 +1866,54 @@ def _get_binance_open_positions(user_id):
                 "unrealized_pnl_pct": pnl_pct,
                 # Real unit count * real entry price -- same reasoning as
                 # _get_alpaca_open_positions()'s invested_amount above.
+                "invested_amount": round(real_qty * entry_price, 2) if entry_price > 0 else None,
+                "stop_loss": entry_order.get("stop_loss"),
+                "take_profit": entry_order.get("take_profit"),
+            })
+        except Exception:
+            continue
+    return result
+
+
+def _get_kraken_open_positions(user_id):
+    """Kraken equivalent of _get_binance_open_positions() (task #365) --
+    same real-wallet-balance sizing (get_user_kraken_held_qty), same
+    "silently skip a ghost journal entry the wallet doesn't back" logic,
+    just against Kraken's USD pairs instead of Binance's USDT ones."""
+    try:
+        tickers = journal.list_open_tickers_for_user(user_id, "KRAKEN")
+    except Exception:
+        return []
+
+    result = []
+    for ticker in tickers:
+        try:
+            real_qty = get_user_kraken_held_qty(user_id, ticker)
+            if real_qty <= 0:
+                continue
+
+            entry_order = journal.get_most_recent_filled_buy_for_user(user_id, ticker, "KRAKEN")
+            if entry_order is None:
+                continue
+            entry_price = float(entry_order.get("filled_price") or entry_order.get("price") or 0)
+
+            exchange = _require_kraken_exchange(user_id)
+            symbol = _to_kraken_symbol(ticker)
+            current_price = float(exchange.fetch_ticker(symbol)["last"])
+
+            pnl = None
+            pnl_pct = None
+            if entry_price > 0:
+                pnl = round((current_price - entry_price) * real_qty, 2)
+                pnl_pct = round((current_price - entry_price) / entry_price * 100, 2)
+
+            result.append({
+                "ticker": ticker,
+                "quantity": real_qty,
+                "entry_price": round(entry_price, 4),
+                "current_price": round(current_price, 4),
+                "unrealized_pnl": pnl,
+                "unrealized_pnl_pct": pnl_pct,
                 "invested_amount": round(real_qty * entry_price, 2) if entry_price > 0 else None,
                 "stop_loss": entry_order.get("stop_loss"),
                 "take_profit": entry_order.get("take_profit"),

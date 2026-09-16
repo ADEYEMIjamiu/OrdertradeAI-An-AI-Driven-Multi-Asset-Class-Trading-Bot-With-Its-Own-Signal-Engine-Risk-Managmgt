@@ -763,7 +763,105 @@ def render_broker_connections(user_id):
                     else:
                         st.error(result.get("error"))
 
+    render_kraken_connection(user_id, connected)
     render_mt_bridge_connection(user_id, connected)
+
+
+def render_kraken_connection(user_id, connected):
+    """
+    Kraken connect form -- added task #365 (2026-09-15), a second CRYPTO
+    broker alongside Binance to serve customers in Canada (Binance
+    exited entirely, May 2023) and the UK (FCA blocked new Binance
+    retail sign-ups, no derivatives for existing ones), both currencies
+    this platform already bills in (CAD/GBP).
+
+    Kept separate from the _BROKER_FIELDS-driven loop above -- like
+    render_mt_bridge_connection() below -- because Kraken has NO
+    live/demo choice the way Alpaca/Binance/eToro do: Kraken has no
+    public spot sandbox for retail API keys at all (see saas_broker_
+    factory.py's KRAKEN section docstring), so a connected Kraken
+    account is ALWAYS real money. environment is therefore always saved
+    as "live" here, unconditionally -- there is no env_choice radio, no
+    live_capable_brokers membership, and no demo credential a new user
+    could safely try during their trial the way Binance testnet allows.
+    The permanent warning below (not gated on allow_live_trading, unlike
+    live.env_live_warning's radio-triggered version for the other three
+    brokers) makes sure a user understands this BEFORE saving keys, not
+    after: _require_kraken_live_trading_enabled() in saas_broker_
+    factory.py still blocks actual order placement until this user's own
+    Live Trading switch (Account Settings) is on, so saving Kraken keys
+    alone never risks a surprise real trade -- but the account itself is
+    always real, unlike a Binance testnet key.
+    """
+    status = connected.get("KRAKEN")
+    status_text = (
+        _t("broker.status_connected", environment=status['environment'], date=status['updated_at'][:10])
+        if status else _t("broker.status_not_connected")
+    )
+
+    with st.expander(_t("broker.expander_title", broker="Kraken (Crypto, Real Funds Only)", status=status_text)):
+        st.warning(_t("broker.kraken_no_demo_warning"))
+
+        with st.form("broker_form_KRAKEN"):
+            api_key = st.text_input("API Key", type="password", key="KRAKEN_key")
+            api_secret = st.text_input("Secret Key", type="password", key="KRAKEN_secret")
+            save_clicked = st.form_submit_button(_t("broker.save_button"))
+
+        if save_clicked:
+            if not api_key or not api_secret:
+                st.error(_t("broker.err_required"))
+            else:
+                previous_creds = tenant.get_broker_credentials(user_id, "KRAKEN")
+                tenant.save_broker_credentials(
+                    user_id,
+                    broker="KRAKEN",
+                    environment="live",
+                    api_key=api_key,
+                    api_secret=api_secret,
+                )
+                with st.spinner(_t("broker.verifying_spinner", label="Kraken")):
+                    check = saas_broker_factory.check_user_broker_connection(user_id, "KRAKEN")
+                if check.get("connected"):
+                    st.success(_t("broker.success_saved", broker="Kraken"))
+                    st.rerun()
+                elif check.get("status") == "unavailable":
+                    st.warning(
+                        _t("broker.warn_temp_issue", icon=check.get('error'), broker="Kraken")
+                    )
+                else:
+                    if previous_creds is not None:
+                        tenant.save_broker_credentials(
+                            user_id,
+                            broker="KRAKEN",
+                            environment=previous_creds["environment"],
+                            api_key=previous_creds["api_key"],
+                            api_secret=previous_creds["api_secret"],
+                            extra=previous_creds["extra"],
+                        )
+                        st.error(
+                            _t("broker.err_kept_unchanged", icon=check.get('error'), broker="Kraken")
+                        )
+                    else:
+                        tenant.delete_broker_credentials(user_id, "KRAKEN")
+                        st.error(
+                            _t("broker.err_nothing_saved", icon=check.get('error'))
+                        )
+
+        if status:
+            if st.button(_t("broker.test_connection"), key="test_KRAKEN"):
+                result = saas_broker_factory.check_user_broker_connection(user_id, "KRAKEN")
+                if result.get("connected"):
+                    st.success(
+                        _t(
+                            "broker.success_connected",
+                            cash=f"{result.get('cash', 0):,.2f}",
+                            equity=f"{result.get('equity', result.get('cash', 0)):,.2f}",
+                        )
+                    )
+                elif result.get("status") == "unavailable":
+                    st.warning(result.get("error"))
+                else:
+                    st.error(result.get("error"))
 
 
 def render_mt_bridge_connection(user_id, connected):
@@ -1238,6 +1336,7 @@ def render_trading_run(user_id):
 _BROKER_DISPLAY_NAMES = {
     "ALPACA": "Alpaca",
     "BINANCE": "Binance",
+    "KRAKEN": "Kraken",
     "ETORO": "eToro",
     "MT_BRIDGE": "MT4/5",
 }

@@ -198,6 +198,7 @@ _EN = {
     "live.env_demo_option": "Demo/paper",
     "live.env_live_option": "Live (real money)",
     "live.env_live_warning": "This will connect your REAL {broker} account. Orders placed after saving will use real money, not paper/demo funds.",
+    "broker.kraken_no_demo_warning": "Kraken does not offer a demo or paper trading account for API keys. Any Kraken account you connect here is always your real account. No trades will be placed on it, however, until you turn on Live Trading in Account Settings.",
     "live.audit_expander": "View your live trading history ({count})",
     "live.audit_status_on": "Live trading turned ON",
     "live.audit_status_off": "Live trading turned OFF",

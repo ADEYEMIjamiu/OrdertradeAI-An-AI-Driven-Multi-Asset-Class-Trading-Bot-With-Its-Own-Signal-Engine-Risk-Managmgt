@@ -200,6 +200,7 @@ from engines import saas_position_lifecycle_engine as lifecycle_engine
 from engines import saas_emergency_stop
 from engines.broker_error_messages import friendly_broker_error_message, LiveTradingNotEnabledError
 from data.asset_universe import ASSET_UNIVERSE
+from etoro_broker import ETORO_LEVERAGE
 
 from config import (
     MAX_POSITIONS,
@@ -214,6 +215,7 @@ from config import (
     MAX_PORTFOLIO_EXPOSURE,
     MIN_TRADE_AMOUNT,
     MIN_TRADE_AMOUNT_BY_ASSET_CLASS,
+    RISK_PER_TRADE,
 )
 
 MODEL_PATH = "models/trading_model.pkl"
@@ -264,6 +266,24 @@ def _effective_max_position_size(user_id, settings):
             return LIVE_TRADING_PROBATION_MAX_POSITION_SIZE
         return min(user_max, LIVE_TRADING_PROBATION_MAX_POSITION_SIZE)
     return user_max
+
+
+def _effective_risk_per_trade_pct(settings):
+    """
+    Returns the risk_per_trade_pct to actually use for this user's real
+    order sizing (see risk_engine.calculate_trade_amount()'s
+    risk_per_trade_pct docstring for the full "why" -- added 2026-09-18,
+    SaaS pre-funding sanity audit). Falls back to config.RISK_PER_TRADE
+    (this platform's 1% default) if the setting is somehow missing --
+    e.g. a row created before the risk_per_trade_pct migration that
+    hasn't been re-saved yet. Deliberately does NOT apply the live-
+    trading probation-style tightening _effective_max_position_size()
+    does above -- that mechanism caps how big a position can get; this
+    number already IS the real dollar-risk control, so there's no
+    equivalent "smaller blast radius" version of it to apply on top.
+    """
+    value = settings.get("risk_per_trade_pct")
+    return value if value is not None else RISK_PER_TRADE
 
 # All four asset classes now have real per-user execution (eToro
 # follow-up landed 2026-08-26 -- see saas_broker_factory.py's module
@@ -914,11 +934,45 @@ def _run_decision_loop_for_user_impl(user_id, dry_run=True):
                 })
                 continue
 
+            # FIX 2026-09-18 (SaaS pre-funding sanity audit): this used to
+            # hardcode leverage=1 for EVERY broker, including eToro (real
+            # 10x, ETORO_LEVERAGE) and MT4/5 (real per-account leverage,
+            # typically 30x-500x+ depending on broker/region) -- meaning
+            # risk_engine.calculate_trade_amount()'s leverage-aware
+            # adjustment never actually saw real leverage for the two
+            # brokers where it matters most. See that function's
+            # risk_per_trade_pct docstring for the full "why" this was a
+            # real live-money risk. Real leverage now resolved per broker:
+            # 1 for Alpaca/Binance/Kraken/Luno (genuinely unleveraged),
+            # ETORO_LEVERAGE for eToro (fixed, known constant), and the
+            # real per-account figure fetched fresh from MetaApi for
+            # MT_BRIDGE -- see saas_broker_factory.get_user_mt_bridge_
+            # leverage()'s docstring for why an unknown MT4/5 leverage
+            # must skip this trade rather than guess one.
+            if broker == "ETORO":
+                trade_leverage = ETORO_LEVERAGE
+            elif broker == "MT_BRIDGE":
+                trade_leverage = factory.get_user_mt_bridge_leverage(user_id)
+                if trade_leverage is None:
+                    results.append({
+                        "ticker": ticker,
+                        "asset_class": asset_class,
+                        "action": "skipped",
+                        "message": "Could not confirm this MT4/5 account's real leverage "
+                                   "right now -- skipping rather than guessing, since "
+                                   "sizing a leveraged CFD without knowing real leverage "
+                                   "risks more of the account than intended.",
+                        **_signal_snapshot(row),
+                    })
+                    continue
+            else:
+                trade_leverage = 1
+
             trade_amount = calculate_trade_amount(
                 confidence=row["AI Confidence %"],
                 entry_price=row.get("Price ($)"),
                 stop_loss=row.get("Stop Loss"),
-                leverage=1,
+                leverage=trade_leverage,
                 account_balance=balance,
                 # FIX 2026-09-09 (task #306): previously omitted entirely,
                 # which meant every SaaS user's real order sizing silently
@@ -936,6 +990,12 @@ def _run_decision_loop_for_user_impl(user_id, dry_run=True):
                 # while FOREX/COMMODITIES/INDICES (eToro's real $1,000
                 # leveraged-notional minimum) cannot.
                 asset_class=asset_class,
+                # FIX 2026-09-18 (SaaS pre-funding sanity audit): switches
+                # calculate_trade_amount() over to genuine risk-based
+                # sizing -- see that function's risk_per_trade_pct
+                # docstring. Per-user configurable in Account Settings,
+                # defaulting every account to 1% (config.RISK_PER_TRADE).
+                risk_per_trade_pct=_effective_risk_per_trade_pct(settings),
             )
             if trade_amount <= 0:
                 min_for_class = MIN_TRADE_AMOUNT_BY_ASSET_CLASS.get(
@@ -945,8 +1005,9 @@ def _run_decision_loop_for_user_impl(user_id, dry_run=True):
                     "ticker": ticker,
                     "asset_class": asset_class,
                     "action": "skipped",
-                    "message": f"Balance too small to cover the ${min_for_class:.0f} "
-                               f"minimum trade size for {asset_class}.",
+                    "message": f"Balance too small, or this trade's stop distance/leverage "
+                               f"would need less than the ${min_for_class:.0f} minimum trade "
+                               f"size for {asset_class} to stay within the intended risk per trade.",
                     **_signal_snapshot(row),
                 })
                 continue

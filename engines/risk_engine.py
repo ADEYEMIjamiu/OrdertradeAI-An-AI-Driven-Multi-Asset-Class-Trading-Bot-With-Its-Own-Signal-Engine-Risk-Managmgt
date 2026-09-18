@@ -14,6 +14,7 @@ from config import (
     MAX_TRADE_AMOUNT,
     MAX_POSITION_SIZE,
     STOP_LOSS_PERCENT,
+    RISK_PER_TRADE_PCT_MAX,
     ALLOW_PYRAMIDING,
     MAX_POSITIONS,
     MAX_OPEN_POSITIONS,
@@ -107,11 +108,82 @@ def calculate_trade_amount(
     account_balance=None,
     max_position_size=None,
     asset_class=None,
+    risk_per_trade_pct=None,
 ):
     """
     Dynamic position sizing based on AI confidence, market risk,
     per-ticker stop distance/leverage, and (new, 2026-08-25) the real
     account balance behind the trade.
+
+    risk_per_trade_pct (new, 2026-09-18 -- SaaS pre-funding sanity audit,
+    MT4/5 leveraged CFD sizing gap): when provided, switches this
+    function over to genuine risk-based sizing instead of the older
+    budget-then-adjust approach below. The difference matters a lot for
+    leveraged instruments (eToro/MT4-5 forex, commodities, indices):
+
+    OLD approach (still used whenever risk_per_trade_pct is None, e.g.
+    every existing app.py call site -- fully unchanged, for backward
+    compatibility): pick a position size first (confidence fraction of
+    account_balance * max_position_size), then apply a bounded
+    risk_adjustment multiplier (0.2x-1.5x) based on this trade's stop
+    distance vs a fixed reference. The real dollar loss if the stop
+    hits was never actually a controlled number -- it fell out of
+    whatever the position size and stop distance happened to be, and
+    every SaaS call site was ALSO passing leverage=1 regardless of the
+    real broker (confirmed during the audit: eToro's real 10x and
+    MT4/5's real, per-account leverage -- typically 30x-500x+ depending
+    on broker/region -- were never actually reaching this function), so
+    even the bounded adjustment above couldn't do its job. A small
+    account on a high-leverage MT4/5 connection could lose 10%-50%+ of
+    its entire balance on a single stop-out.
+
+    NEW approach (risk_per_trade_pct given): decide up front what
+    fraction of the account this trade is allowed to lose if its stop
+    hits (this platform defaults every user to 1%, same as the
+    "risk 1-2% per trade" rule professional discretionary/algo traders
+    commonly use), then derive position size BACKWARD from that and this
+    trade's real stop distance and real leverage:
+
+        risk_dollars = account_balance * risk_per_trade_pct * confidence_fraction * market_risk_multiplier
+        notional_needed = risk_dollars / actual_stop_percent
+        margin_needed = notional_needed / leverage
+
+    This makes the real dollar risk per trade the SAME fixed fraction of
+    the account regardless of which broker or how much leverage that
+    broker happens to apply -- leverage stops being the thing that makes
+    losses bigger and becomes (correctly) just the thing that determines
+    how much of the user's own cash a given exposure ties up. Callers
+    MUST now pass the real leverage for whichever broker this trade will
+    route through (1 for Alpaca/Binance/Kraken/Luno, ETORO_LEVERAGE for
+    eToro, the real per-account leverage fetched from MetaApi for
+    MT4/5 -- see saas_broker_factory.get_user_mt_bridge_leverage()) for
+    this to mean anything; passing leverage=1 for a leveraged broker
+    under this new path would understate the real notional exposure and
+    silently reintroduce the exact bug this was built to fix.
+
+    Still respects max_position_size and account_balance as hard
+    ceilings on top of the risk-derived amount -- a stop can always fail
+    to execute at exactly the intended price (slippage, a gap, a fast
+    market), so the position-size cap remains a second, independent
+    safety rail rather than something this fully replaces.
+
+    CRITICAL BEHAVIOR CHANGE from the old path: if the risk-derived
+    amount comes out BELOW this asset class's real broker minimum
+    (MIN_TRADE_AMOUNT_BY_ASSET_CLASS), this now returns 0.0 (skip the
+    trade) rather than forcing the size UP to that floor the way the old
+    path did. Forcing up to the floor was the single biggest source of
+    the original bug on small accounts: a $100 floor swamping a
+    correctly-computed $12 risk-based size meant the floor itself was
+    the thing blowing past 1% risk, not a rounding error. A trade that
+    genuinely cannot be sized safely at this leverage on an account this
+    small should be skipped, exactly like mt_broker.py's own lot-sizing
+    already skips (returns None) rather than forces a trade below a
+    symbol's minVolume.
+
+    risk_per_trade_pct is defensively clamped to
+    [0, RISK_PER_TRADE_PCT_MAX] here regardless of what the caller
+    passes -- see config.py's RISK_PER_TRADE_PCT_MAX docstring -- so a
+    bad per-user setting value can never reach this formula unclamped.
 
     asset_class (new, 2026-09-18): selects the per-asset-class minimum
     trade floor from MIN_TRADE_AMOUNT_BY_ASSET_CLASS (config.py) instead
@@ -216,6 +288,47 @@ def calculate_trade_amount(
             if confidence >= tier_confidence:
                 confidence_fraction = tier_fraction
                 break
+
+        # NEW risk-based path -- see docstring above. Only engages when
+        # the caller opted in (risk_per_trade_pct given) AND there's
+        # real stop data to derive a genuine dollar-risk figure from; if
+        # either is missing, falls through to the old budget-then-adjust
+        # path below exactly as before (never crashes or blocks a trade
+        # over a data gap).
+        if risk_per_trade_pct is not None:
+            try:
+                if entry_price is not None and stop_loss is not None:
+                    risk_entry_price = float(entry_price)
+                    risk_stop_loss = float(stop_loss)
+                    risk_leverage = float(leverage) if leverage else 1.0
+
+                    if risk_entry_price > 0 and risk_leverage > 0:
+                        actual_stop_percent = abs(risk_entry_price - risk_stop_loss) / risk_entry_price
+
+                        if actual_stop_percent > 0:
+                            clamped_risk_pct = max(
+                                0.0, min(float(risk_per_trade_pct), RISK_PER_TRADE_PCT_MAX)
+                            )
+                            effective_risk_pct = clamped_risk_pct * confidence_fraction
+                            if market_df is not None:
+                                _, risk_multiplier = get_market_risk_level(market_df)
+                                effective_risk_pct *= risk_multiplier
+
+                            risk_dollars = account_balance * effective_risk_pct
+                            notional_needed = risk_dollars / actual_stop_percent
+                            margin_needed = notional_needed / risk_leverage
+
+                            final_amount = min(margin_needed, position_budget, account_balance)
+                            if final_amount < effective_min_trade_amount:
+                                # Can't safely size this trade at this
+                                # leverage/stop distance without
+                                # exceeding the intended risk -- skip
+                                # rather than force up to the floor (see
+                                # docstring's CRITICAL BEHAVIOR CHANGE).
+                                return 0.0
+                            return round(final_amount, 2)
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass  # bad stop data -- fall through to the old path below
 
         base_amount = position_budget * confidence_fraction
         balance_ceiling = min(position_budget, account_balance)

@@ -430,7 +430,7 @@ async def _mt_connection(user_id, deploy_timeout_seconds=_DEPLOY_TIMEOUT_SECONDS
 
 def _mt_connection_result(connected, status, account_status, error,
                            buying_power=0.0, cash=0.0, equity=0.0, broker_name="",
-                           environment=None):
+                           environment=None, leverage=None):
     """Builds check_user_mt_connection()'s return dict -- one place for
     the shape so all three outcomes below (connected/deploying/failed)
     stay consistent. `status` is the field added 2026-09-02 (task #238
@@ -438,7 +438,15 @@ def _mt_connection_result(connected, status, account_status, error,
     -- "live" or "demo", derived from MetaApi's own account_information.
     type when connected==True, None otherwise (see LIVE TRADING GATE note
     near the top of this file for why this is never the source of truth
-    for the actual execution gate, only a display label).
+    for the actual execution gate, only a display label). `leverage`
+    (added 2026-09-18, SaaS pre-funding sanity audit) is this account's
+    REAL leverage as reported by MetaApi -- None unless connected==True.
+    Used by saas_broker_factory.get_user_mt_bridge_leverage() so
+    saas_decision_engine.py can pass this account's actual leverage into
+    risk_engine.calculate_trade_amount()'s risk-based sizing path instead
+    of guessing or hardcoding one -- see that function's docstring for
+    why sizing a leveraged MT4/5 CFD without knowing the account's real
+    leverage silently reintroduces oversized-risk bugs.
     `connected`/`account_status`/etc. are unchanged from the original
     shape so existing callers (saas_broker_factory.py, saas_app.py) that
     only read `connected`/`error` keep working as-is."""
@@ -452,6 +460,7 @@ def _mt_connection_result(connected, status, account_status, error,
         "equity": equity,
         "broker_name": broker_name,
         "environment": environment,
+        "leverage": leverage,
         "error": error,
     }
 
@@ -547,6 +556,7 @@ async def check_user_mt_connection(user_id):
                 equity=float(info.get("equity", 0) or 0),
                 broker_name=info.get("broker", ""),
                 environment=detected_environment,
+                leverage=float(info.get("leverage") or 0) or None,
             )
         except Exception as e:
             state = getattr(account, "state", None)

@@ -55,6 +55,7 @@ from engines import billing_engine
 from engines import geo_currency
 from engines import saas_i18n as i18n
 import mt_broker
+from config import RISK_PER_TRADE_PCT_MAX
 
 
 # Thin wrapper around engines/saas_i18n.t() that reads the CURRENT
@@ -1168,6 +1169,26 @@ def render_settings(user_id):
             value=int(settings["max_position_size"] * 100),
             step=5,
         )
+        # ADDED 2026-09-18 (SaaS pre-funding sanity audit): the actual
+        # dollar risk-per-trade control -- see risk_engine.
+        # calculate_trade_amount()'s risk_per_trade_pct docstring for why
+        # this, not max_position_size above, is what now determines how
+        # much of the account a single stop-out can cost, regardless of
+        # asset class or broker leverage. Slider works directly in
+        # percent (0.5%-3.0%, step 0.5) -- upper bound matches config.
+        # RISK_PER_TRADE_PCT_MAX exactly, so there's no gap between what
+        # this slider can show and what tenant.save_user_settings() will
+        # actually persist -- it clamps to the same constant again
+        # server-side as a second, independent safety check, not because
+        # the UI range is expected to be bypassed.
+        risk_per_trade_pct_ui = st.slider(
+            _t("settings.risk_per_trade_label"),
+            min_value=0.5, max_value=RISK_PER_TRADE_PCT_MAX * 100,
+            value=round(settings.get("risk_per_trade_pct", 0.01) * 100, 1),
+            step=0.5,
+            format="%.1f%%",
+        )
+        st.caption(_t("settings.risk_per_trade_cap_notice"))
         # ADDED 2026-09-18: surfaces the real per-asset-class trade floor
         # (MIN_TRADE_AMOUNT_BY_ASSET_CLASS, config.py) here instead of
         # letting a small-balance user discover it only after every
@@ -1191,6 +1212,7 @@ def render_settings(user_id):
             user_id,
             max_position_size=max_position_size / 100,
             enabled_asset_classes=enabled_classes,
+            risk_per_trade_pct=risk_per_trade_pct_ui / 100,
         )
         st.success(_t("settings.success_saved"))
         st.rerun()

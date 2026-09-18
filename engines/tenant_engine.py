@@ -53,6 +53,8 @@ import bcrypt
 from cryptography.fernet import Fernet, MultiFernet, InvalidToken
 from dotenv import load_dotenv
 
+from config import RISK_PER_TRADE_PCT_MAX
+
 # Loaded here directly (not just relied on transitively via some other
 # module) since this file reads SAAS_ENCRYPTION_KEY from the environment
 # itself and shouldn't depend on import order elsewhere.
@@ -128,6 +130,21 @@ def _get_connection():
     try:
         conn.execute(
             "ALTER TABLE user_settings ADD COLUMN trading_paused INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+    # Migration for databases created before 2026-09-18 (risk-based
+    # position sizing -- see risk_engine.calculate_trade_amount()'s
+    # risk_per_trade_pct docstring for the full "why"). Defaults every
+    # existing AND new account to 0.01 (1% of account risked per trade,
+    # the same figure config.py's RISK_PER_TRADE now actually uses as its
+    # real default instead of sitting unused). Clamped to
+    # config.RISK_PER_TRADE_PCT_MAX on every write in save_user_settings()
+    # below, and defensively again inside calculate_trade_amount() itself.
+    try:
+        conn.execute(
+            "ALTER TABLE user_settings ADD COLUMN risk_per_trade_pct REAL NOT NULL DEFAULT 0.01"
         )
     except sqlite3.OperationalError:
         pass  # column already exists
@@ -688,7 +705,8 @@ def create_user(email, password, phone=None, country=None, referred_by_code=None
         # allow_live_trading default and module docstring.
         conn.execute(
             "INSERT INTO user_settings (user_id, max_position_size, enabled_asset_classes, "
-            "allow_live_trading, created_at, updated_at) VALUES (?, 0.20, '[]', 0, ?, ?)",
+            "allow_live_trading, risk_per_trade_pct, created_at, updated_at) "
+            "VALUES (?, 0.20, '[]', 0, 0.01, ?, ?)",
             (user_id, now, now),
         )
         conn.commit()
@@ -1069,8 +1087,8 @@ def get_user_settings(user_id):
     conn = _get_connection()
     try:
         row = conn.execute(
-            "SELECT max_position_size, enabled_asset_classes, allow_live_trading, trading_paused "
-            "FROM user_settings WHERE user_id = ?",
+            "SELECT max_position_size, enabled_asset_classes, allow_live_trading, "
+            "trading_paused, risk_per_trade_pct FROM user_settings WHERE user_id = ?",
             (user_id,),
         ).fetchone()
         if not row:
@@ -1081,13 +1099,15 @@ def get_user_settings(user_id):
             "enabled_asset_classes": json.loads(row[1]),
             "allow_live_trading": bool(row[2]),
             "trading_paused": bool(row[3]),
+            "risk_per_trade_pct": row[4],
         }
     finally:
         conn.close()
 
 
 def save_user_settings(
-    user_id, max_position_size=None, enabled_asset_classes=None, trading_paused=None
+    user_id, max_position_size=None, enabled_asset_classes=None, trading_paused=None,
+    risk_per_trade_pct=None,
 ):
     """
     Updates a user's own settings. allow_live_trading is deliberately
@@ -1105,6 +1125,16 @@ def save_user_settings(
     semantics (blocks new entries, never blocks protective exits) --
     see that constant's usage in app.py for why exits are deliberately
     exempt.
+
+    risk_per_trade_pct (added 2026-09-18, see risk_engine.
+    calculate_trade_amount()'s docstring): the fraction of this user's
+    account balance risked on a single trade under the new risk-based
+    sizing path. Clamped to [0.001, config.RISK_PER_TRADE_PCT_MAX] here
+    (never silently dropped to 0 or let through unbounded) -- 0.001
+    floor because a risk target of 0 would make every trade unsizeable
+    (calculate_trade_amount() would always return 0.0), which is
+    indistinguishable from a broken account rather than an intentional
+    setting.
     """
     import json
     conn = _get_connection()
@@ -1125,12 +1155,17 @@ def save_user_settings(
             int(bool(trading_paused)) if trading_paused is not None
             else int(existing["trading_paused"])
         )
+        if risk_per_trade_pct is not None:
+            new_risk_per_trade_pct = max(0.001, min(float(risk_per_trade_pct), RISK_PER_TRADE_PCT_MAX))
+        else:
+            new_risk_per_trade_pct = existing["risk_per_trade_pct"]
         now = datetime.now(timezone.utc).isoformat()
 
         conn.execute(
             "UPDATE user_settings SET max_position_size = ?, enabled_asset_classes = ?, "
-            "trading_paused = ?, updated_at = ? WHERE user_id = ?",
-            (new_max_position_size, new_enabled_classes, new_trading_paused, now, user_id),
+            "trading_paused = ?, risk_per_trade_pct = ?, updated_at = ? WHERE user_id = ?",
+            (new_max_position_size, new_enabled_classes, new_trading_paused,
+             new_risk_per_trade_pct, now, user_id),
         )
         conn.commit()
         return True

@@ -437,6 +437,33 @@ def check_user_mt_bridge_connection(user_id):
     return mt_broker.check_user_mt_connection_sync(user_id)
 
 
+def get_user_mt_bridge_leverage(user_id):
+    """
+    Real per-account leverage for this user's connected MT4/5 account,
+    fetched fresh from MetaApi via check_user_mt_bridge_connection()'s
+    `leverage` field (added 2026-09-18, SaaS pre-funding sanity audit --
+    see mt_broker._mt_connection_result()'s docstring). Returns None if
+    not connected or leverage isn't known yet -- callers (saas_decision_
+    engine.py) MUST treat that as "cannot safely size this trade right
+    now" and skip it, never fall back to guessing a leverage value.
+    Guessing wrong in either direction breaks risk_engine.calculate_
+    trade_amount()'s risk-based sizing: assuming a leverage lower than
+    the real one undersizes the risk calculation's notional (the trade
+    then gets capped by other ceilings, sized smaller than intended --
+    survivable but wrong); assuming higher than real UNDERSTATES the
+    margin needed, which mt_broker.execute_buy_by_usd_amount() would
+    then multiply by the account's ACTUAL (lower) leverage, producing a
+    smaller real notional than the risk math intended -- also wrong, in
+    the opposite direction. Either way, "don't know" must mean "don't
+    trade this tick", not "assume something."
+    """
+    result = check_user_mt_bridge_connection(user_id)
+    if not result.get("connected"):
+        return None
+    leverage = result.get("leverage")
+    return float(leverage) if leverage else None
+
+
 # ============================================================
 # KRAKEN (second CRYPTO broker, task #365) -- added to close the gap
 # Binance leaves in Canada (exited entirely, May 2023) and the UK (FCA

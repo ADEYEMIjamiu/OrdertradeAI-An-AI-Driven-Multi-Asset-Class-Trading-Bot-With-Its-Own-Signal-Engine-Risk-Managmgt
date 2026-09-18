@@ -30,6 +30,21 @@ MIN_TRADE_AMOUNT = 100
 MAX_TRADE_AMOUNT = 1000
 RISK_PER_TRADE = 0.01
 
+# Per-asset-class minimum trade floor -- see config.py's matching comment
+# for the full reasoning. Short version: US_STOCKS/CRYPTO can safely go
+# lower than $100 (no real broker-side minimum that high), but FOREX/
+# COMMODITIES/INDICES route through eToro, which enforces a real $1,000
+# LEVERAGED-notional minimum per CFD trade -- at this project's
+# ETORO_LEVERAGE=10, $100 cash is the lowest amount that clears it, so
+# don't lower these three without also reconsidering leverage.
+MIN_TRADE_AMOUNT_BY_ASSET_CLASS = {
+    "US_STOCKS": 25,
+    "CRYPTO": 25,
+    "FOREX": 100,
+    "COMMODITIES": 100,
+    "INDICES": 100,
+}
+
 # FIX 2026-08-25: MAX_POSITION_SIZE is now the primary governor of real
 # trade sizing (engines/risk_engine.py's calculate_trade_amount()), not
 # just a secondary check -- every real trade is sized as a fraction of

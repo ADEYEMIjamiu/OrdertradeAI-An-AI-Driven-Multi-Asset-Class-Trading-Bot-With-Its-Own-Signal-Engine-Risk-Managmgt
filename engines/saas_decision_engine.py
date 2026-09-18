@@ -212,6 +212,8 @@ from config import (
     CRYPTO_MAX_TRADES_PER_DAY,
     CRYPTO_TRADE_COOLDOWN_MINUTES,
     MAX_PORTFOLIO_EXPOSURE,
+    MIN_TRADE_AMOUNT,
+    MIN_TRADE_AMOUNT_BY_ASSET_CLASS,
 )
 
 MODEL_PATH = "models/trading_model.pkl"
@@ -927,13 +929,24 @@ def _run_decision_loop_for_user_impl(user_id, dry_run=True):
                 # trader's first few days (see _effective_max_position_
                 # size() above).
                 max_position_size=_effective_max_position_size(user_id, settings),
+                # FIX 2026-09-18: previously omitted, so every asset class
+                # silently used the flat global MIN_TRADE_AMOUNT ($100) as
+                # its floor -- see MIN_TRADE_AMOUNT_BY_ASSET_CLASS in
+                # config.py for why US_STOCKS/CRYPTO can safely go lower
+                # while FOREX/COMMODITIES/INDICES (eToro's real $1,000
+                # leveraged-notional minimum) cannot.
+                asset_class=asset_class,
             )
             if trade_amount <= 0:
+                min_for_class = MIN_TRADE_AMOUNT_BY_ASSET_CLASS.get(
+                    asset_class, MIN_TRADE_AMOUNT
+                )
                 results.append({
                     "ticker": ticker,
                     "asset_class": asset_class,
                     "action": "skipped",
-                    "message": "Balance too small to cover the minimum trade size.",
+                    "message": f"Balance too small to cover the ${min_for_class:.0f} "
+                               f"minimum trade size for {asset_class}.",
                     **_signal_snapshot(row),
                 })
                 continue

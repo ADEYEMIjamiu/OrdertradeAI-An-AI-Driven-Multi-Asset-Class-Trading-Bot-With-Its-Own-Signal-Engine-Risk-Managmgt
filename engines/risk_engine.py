@@ -10,6 +10,7 @@ from config import (
     LIVE_TRADING,
     ETORO_LIVE_TRADING,
     MIN_TRADE_AMOUNT,
+    MIN_TRADE_AMOUNT_BY_ASSET_CLASS,
     MAX_TRADE_AMOUNT,
     MAX_POSITION_SIZE,
     STOP_LOSS_PERCENT,
@@ -105,11 +106,28 @@ def calculate_trade_amount(
     leverage=1,
     account_balance=None,
     max_position_size=None,
+    asset_class=None,
 ):
     """
     Dynamic position sizing based on AI confidence, market risk,
     per-ticker stop distance/leverage, and (new, 2026-08-25) the real
     account balance behind the trade.
+
+    asset_class (new, 2026-09-18): selects the per-asset-class minimum
+    trade floor from MIN_TRADE_AMOUNT_BY_ASSET_CLASS (config.py) instead
+    of the flat global MIN_TRADE_AMOUNT. Added after actually checking
+    each broker's real minimum order size instead of assuming one number
+    was safe everywhere: US_STOCKS/CRYPTO have no broker-side minimum
+    anywhere near $100 (Alpaca supports fractional shares, Binance/Kraken/
+    Luno's MIN_NOTIONAL is typically single-digit dollars), but FOREX/
+    COMMODITIES/INDICES route through eToro, which enforces a real
+    $1,000 LEVERAGED-notional minimum per CFD trade -- at this project's
+    ETORO_LEVERAGE=10, $100 of actual cash is the lowest amount that
+    clears that floor, so those three asset classes keep $100 regardless
+    of this parameter's dict value being lower elsewhere. Optional and
+    defaults to None, which falls back to the flat MIN_TRADE_AMOUNT
+    exactly as before -- existing callers that don't pass this are
+    unaffected.
 
     FIX 2026-08-25 (two-part): this function drives every real order
     size in the system (execute_alpaca_trades/execute_binance_trades/
@@ -171,6 +189,14 @@ def calculate_trade_amount(
         max_position_size if max_position_size is not None else MAX_POSITION_SIZE
     )
 
+    # See asset_class docstring above -- defaults to the flat global floor
+    # when no asset_class is given, exactly matching pre-2026-09-18 behavior.
+    effective_min_trade_amount = (
+        MIN_TRADE_AMOUNT_BY_ASSET_CLASS.get(asset_class, MIN_TRADE_AMOUNT)
+        if asset_class is not None
+        else MIN_TRADE_AMOUNT
+    )
+
     confidence = float(confidence)
 
     if account_balance is not None:
@@ -180,7 +206,7 @@ def calculate_trade_amount(
         # one. Call sites check for this 0.0 and skip with a clear
         # "insufficient balance" message rather than submitting an
         # order for less than the floor.
-        if account_balance < MIN_TRADE_AMOUNT:
+        if account_balance < effective_min_trade_amount:
             return 0.0
 
         position_budget = account_balance * effective_max_position_size
@@ -241,11 +267,13 @@ def calculate_trade_amount(
     except (TypeError, ValueError, ZeroDivisionError):
         pass  # missing/bad stop data -- fall back to pre-existing sizing, never crash a trade over it
 
-    # Respect configured limits: MIN_TRADE_AMOUNT is always the floor;
-    # the ceiling is either the proportional balance_ceiling (account-
-    # balance-aware path) or the legacy fixed MAX_TRADE_AMOUNT.
+    # Respect configured limits: effective_min_trade_amount (the
+    # per-asset-class floor, or MIN_TRADE_AMOUNT if none was given) is
+    # always the floor; the ceiling is either the proportional
+    # balance_ceiling (account-balance-aware path) or the legacy fixed
+    # MAX_TRADE_AMOUNT.
     adjusted_amount = min(adjusted_amount, balance_ceiling)
-    adjusted_amount = max(MIN_TRADE_AMOUNT, adjusted_amount)
+    adjusted_amount = max(effective_min_trade_amount, adjusted_amount)
 
     return round(adjusted_amount, 2)
 

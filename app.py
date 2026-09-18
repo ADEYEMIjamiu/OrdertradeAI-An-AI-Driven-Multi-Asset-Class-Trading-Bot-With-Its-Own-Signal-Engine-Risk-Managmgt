@@ -143,6 +143,7 @@ from broker import (
 from config import (
     INITIAL_CASH,
     MIN_TRADE_AMOUNT,
+    MIN_TRADE_AMOUNT_BY_ASSET_CLASS,
     MAX_TRADE_AMOUNT,
     RISK_PER_TRADE,
     BUY_CONFIDENCE,
@@ -1164,14 +1165,15 @@ def execute_alpaca_trades(buy_signals, sell_signals):
                 stop_loss=row.get("Stop Loss"),
                 leverage=1,
                 account_balance=account_balance,
+                asset_class="US_STOCKS",
             )
 
-            # trade_amount == 0 means the account can't cover even
-            # MIN_TRADE_AMOUNT -- skip rather than submit a sub-floor order.
+            # trade_amount == 0 means the account can't cover even the
+            # US_STOCKS floor -- skip rather than submit a sub-floor order.
             if trade_amount <= 0:
                 st.session_state.trade_messages.append(
                     f"BUY skipped for {ticker}: insufficient account "
-                    f"balance to open a minimum-size position."
+                    f"balance to open a minimum ${MIN_TRADE_AMOUNT_BY_ASSET_CLASS['US_STOCKS']:.0f} position."
                 )
                 continue
 
@@ -1499,12 +1501,13 @@ def execute_binance_trades(buy_signals, sell_signals):
                 stop_loss=row.get("Stop Loss"),
                 leverage=1,
                 account_balance=account_balance,
+                asset_class="CRYPTO",
             )
 
             if trade_amount <= 0:
                 st.session_state.trade_messages.append(
                     f"BUY skipped for {ticker}: insufficient account "
-                    f"balance to open a minimum-size position."
+                    f"balance to open a minimum ${MIN_TRADE_AMOUNT_BY_ASSET_CLASS['CRYPTO']:.0f} position."
                 )
                 continue
 
@@ -1928,12 +1931,14 @@ def execute_etoro_trades(buy_signals, sell_signals):
                 stop_loss=row.get("Stop Loss"),
                 leverage=etoro_broker.ETORO_LEVERAGE,
                 account_balance=account_balance,
+                asset_class=asset_class,
             )
 
             if trade_amount <= 0:
+                min_for_class = MIN_TRADE_AMOUNT_BY_ASSET_CLASS.get(asset_class, MIN_TRADE_AMOUNT)
                 st.session_state.trade_messages.append(
                     f"BUY skipped for {ticker}: insufficient account "
-                    f"balance to open a minimum-size position."
+                    f"balance to open a minimum ${min_for_class:.0f} position."
                 )
                 continue
 

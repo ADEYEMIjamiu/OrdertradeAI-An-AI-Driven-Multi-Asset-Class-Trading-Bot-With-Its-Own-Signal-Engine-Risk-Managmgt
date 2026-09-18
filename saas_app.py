@@ -1168,6 +1168,15 @@ def render_settings(user_id):
             value=int(settings["max_position_size"] * 100),
             step=5,
         )
+        # ADDED 2026-09-18: surfaces the real per-asset-class trade floor
+        # (MIN_TRADE_AMOUNT_BY_ASSET_CLASS, config.py) here instead of
+        # letting a small-balance user discover it only after every
+        # signal comes back "skipped -- balance too small." $25 for
+        # Stocks/Crypto is our own conservative choice; $100 for Forex/
+        # Commodities/Indices is eToro's own $1,000 leveraged-notional
+        # minimum divided by this project's 10x leverage, not adjustable
+        # from here.
+        st.caption(_t("settings.min_trade_notice"))
         enabled_classes = st.multiselect(
             _t("settings.asset_classes_label"),
             # INDICES added 2026-09-18 (task #390/#395) -- 5th asset

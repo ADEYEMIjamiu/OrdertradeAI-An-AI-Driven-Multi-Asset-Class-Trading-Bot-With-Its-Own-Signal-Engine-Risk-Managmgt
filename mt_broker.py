@@ -109,11 +109,100 @@ from contextlib import asynccontextmanager
 from metaapi_cloud_sdk import MetaApi
 
 from engines import tenant_engine as tenant
+from engines.broker_error_messages import friendly_broker_error_message, LiveTradingNotEnabledError
 
 BROKER_CODE = "MT_BRIDGE"
 
 _METAAPI_TOKEN_ENV_VAR = "METAAPI_TOKEN"
 _DEPLOY_TIMEOUT_SECONDS = 300  # first-ever deploy of a fresh account can be slow
+
+# LIVE TRADING GATE -- added 2026-09-08 (task #305). Unlike Alpaca
+# (paper=True/False), Binance (sandbox_mode), and eToro (URL path
+# prefix chosen from creds["environment"]), MetaApi/MT4/5 has NO
+# code-level sandbox: the login+server a user supplies IS a specific
+# broker account that is already, on the broker's own side, either a
+# demo account (fake money, provisioned by the broker for practice) or
+# a real account (real money) -- there is nothing for this platform to
+# flip between the two. The user_broker_credentials.environment field
+# saved at connect time (see save_mt_credentials() below) is therefore
+# just a placeholder ("demo") until the account has actually been
+# connected once -- it is NEVER consulted for the live/demo execution
+# decision, unlike the other three brokers' _is_live() checks in
+# saas_broker_factory.py, and must not be treated as equivalent to
+# their creds["environment"].
+#
+# The real, trustworthy signal is MetaApi's own account_information.type
+# field (enum ACCOUNT_TRADE_MODE_DEMO / ACCOUNT_TRADE_MODE_CONTEST /
+# ACCOUNT_TRADE_MODE_REAL -- confirmed via MetaApi's own API docs,
+# metaapi.cloud/docs/client/models/metatraderAccountInformation/),
+# fetched fresh from the broker on every single connection, not
+# self-reported by the user. _mt_is_live_account_type() below classifies
+# it; execute_buy_by_usd_amount() and execute_sell_close() both call
+# get_account_information() already (needed for lot sizing/position
+# lookups) and now use that same fetch to enforce Lock 1
+# (user_settings.allow_live_trading) before ever placing/closing a real
+# order -- raising LiveTradingNotEnabledError (caught by
+# saas_decision_engine.py's existing generic except-Exception block for
+# MT_BRIDGE, same fail-safe path as any other broker rejection: nothing
+# is journaled, no order is placed) if the account is REAL but Lock 1 is
+# off. Demo/contest accounts are never gated by Lock 1, exactly like a
+# paper/testnet/demo credential on the other three brokers -- no real
+# money is ever at risk on those regardless of this platform's own
+# live-trading switch.
+#
+# Found while implementing this task: prior to this fix, ANY user who
+# connected a real MT4/5 account had that account tradeable through the
+# AI decision loop with NO Lock 1 check at all -- a live, reachable gap,
+# not a dormant one like eToro's (task #304). Confirmed via direct
+# production DB query before starting this fix that zero users currently
+# have an MT_BRIDGE credential saved, so nothing was actually exposed --
+# but this needed to close before the feature could be considered safe
+# to leave live.
+
+
+def _mt_is_live_account_type(account_type):
+    """True only for MetaApi's ACCOUNT_TRADE_MODE_REAL -- see LIVE
+    TRADING GATE note above."""
+    return account_type == "ACCOUNT_TRADE_MODE_REAL"
+
+
+def _user_has_live_trading_enabled(user_id):
+    """
+    Mirrors saas_broker_factory.py's private helper of the exact same
+    name and contract (fails CLOSED / False on any exception) --
+    duplicated rather than imported because saas_broker_factory.py
+    already imports this module (mt_broker.py), so importing back would
+    be circular.
+    """
+    try:
+        settings = tenant.get_user_settings(user_id)
+        return bool(settings and settings.get("allow_live_trading"))
+    except Exception:
+        return False
+
+# FIX 2026-09-02 (task #238 follow-up -- first-connect UX): live-tested the
+# same day, a brand-new MetaApi account took ~16 minutes end-to-end for its
+# first real broker connection (multiple internal retries inside the SDK's
+# own wait_deployed/wait_connected/wait_synchronized calls, each budgeted up
+# to _DEPLOY_TIMEOUT_SECONDS=300s). check_user_mt_connection() backs a
+# synchronous "Test Connection" button/HTTP request (see saas_app.py) that
+# cannot block for minutes -- a Streamlit request or nginx proxy will hit
+# its own read timeout long before that. It now uses this much shorter
+# budget instead and returns fast with status="deploying" so the caller can
+# poll again rather than either hanging or reporting a false hard failure.
+# Deploying is idempotent (see _deploy_and_connect()'s own state check), so
+# calling this repeatedly while an account spins up is safe and cheap.
+_CONNECTION_CHECK_TIMEOUT_SECONDS = 20
+
+# account.state values that mean deployment genuinely, terminally failed --
+# confirmed live 2026-09-02 via direct read of the installed SDK's `State`
+# Literal (clients/metaapi/metatrader_account_client.py), same discipline as
+# every other SDK fact in this file. CREATED/DEPLOYING/DEPLOYED/UNDEPLOYING/
+# UNDEPLOYED/DELETING/DRAFT are all normal in-progress or already-passed
+# states, not failures, and are deliberately NOT in this set.
+_FAILED_ACCOUNT_STATES = frozenset({
+    "DEPLOY_FAILED", "UNDEPLOY_FAILED", "DELETE_FAILED", "REDEPLOY_FAILED",
+})
 
 
 def _get_api():
@@ -250,7 +339,7 @@ async def _get_or_create_metaapi_account(user_id):
     return api, account
 
 
-async def _deploy_and_connect(account):
+async def _deploy_and_connect(account, deploy_timeout_seconds=_DEPLOY_TIMEOUT_SECONDS):
     """
     Deploys the account if it isn't already, THEN explicitly waits for
     both (a) the cloud terminal to finish deploying and (b) that
@@ -260,21 +349,35 @@ async def _deploy_and_connect(account):
     live test failure on 2026-09-02 (see module docstring). Does NOT
     undeploy when done -- see module docstring's COST MODEL section for
     why staying deployed is now the deliberate, cheaper default.
+
+    FIX 2026-09-02 (task #238 follow-up): deploy_timeout_seconds is now a
+    parameter (was hardcoded to module-level _DEPLOY_TIMEOUT_SECONDS for
+    every wait below) so check_user_mt_connection() can use a much
+    shorter budget for its UI-facing check (see
+    _CONNECTION_CHECK_TIMEOUT_SECONDS) without affecting the patient
+    full-length wait execute_buy()/execute_sell_close()/
+    get_user_mt_positions() still use via the default. Also fixes a gap
+    found in that same investigation: connection.connect() below was the
+    ONLY call in this chain with no timeout at all -- its source location
+    in the installed SDK wasn't found to confirm whether it accepts a
+    timeout_in_seconds kwarg the way the other three calls do, so it's
+    wrapped in asyncio.wait_for() instead, which bounds it regardless of
+    whatever the SDK's own internal default is.
     """
     if getattr(account, "state", None) not in ("DEPLOYING", "DEPLOYED"):
         await account.deploy()
 
-    await account.wait_deployed(timeout_in_seconds=_DEPLOY_TIMEOUT_SECONDS)
-    await account.wait_connected(timeout_in_seconds=_DEPLOY_TIMEOUT_SECONDS)
+    await account.wait_deployed(timeout_in_seconds=deploy_timeout_seconds)
+    await account.wait_connected(timeout_in_seconds=deploy_timeout_seconds)
 
     connection = account.get_rpc_connection()
-    await connection.connect()
-    await connection.wait_synchronized(timeout_in_seconds=_DEPLOY_TIMEOUT_SECONDS)
+    await asyncio.wait_for(connection.connect(), timeout=deploy_timeout_seconds)
+    await connection.wait_synchronized(timeout_in_seconds=deploy_timeout_seconds)
     return connection
 
 
 @asynccontextmanager
-async def _mt_connection(user_id):
+async def _mt_connection(user_id, deploy_timeout_seconds=_DEPLOY_TIMEOUT_SECONDS):
     """
     Async context manager: yields a live RPC connection for this user's
     MT4/5 account, guaranteeing BOTH connection.close() and api.close()
@@ -289,6 +392,15 @@ async def _mt_connection(user_id):
     methods on the connection and MetaApi client respectively (see
     inspect_close_methods.py), not guessed.
 
+    FIX 2026-09-02 (task #238 follow-up): api is now fetched/closed in
+    its own try/finally wrapping _deploy_and_connect() too, not just the
+    yielded body -- the original version fetched `api` and then called
+    _deploy_and_connect(account) BEFORE entering the try/finally that
+    closes it, so a deploy/connect failure (confirmed live: this is
+    exactly what happened on 3 of 4 calls in a real test) leaked `api`'s
+    aiohttp session every time, the same class of bug this function was
+    built to fix in the first place -- just not on the failure path.
+
     Does NOT undeploy the account itself -- see module docstring's COST
     MODEL section for why staying deployed between calls is deliberate.
     Only the RPC-level connection and client are closed here, which is
@@ -300,18 +412,48 @@ async def _mt_connection(user_id):
     CONNECTED).
     """
     api, account = await _get_or_create_metaapi_account(user_id)
-    connection = await _deploy_and_connect(account)
     try:
-        yield connection
-    finally:
+        connection = await _deploy_and_connect(account, deploy_timeout_seconds=deploy_timeout_seconds)
         try:
-            await connection.close()
-        except Exception:
-            pass
+            yield connection
+        finally:
+            try:
+                await connection.close()
+            except Exception:
+                pass
+    finally:
         try:
             await api.close()
         except Exception:
             pass
+
+
+def _mt_connection_result(connected, status, account_status, error,
+                           buying_power=0.0, cash=0.0, equity=0.0, broker_name="",
+                           environment=None):
+    """Builds check_user_mt_connection()'s return dict -- one place for
+    the shape so all three outcomes below (connected/deploying/failed)
+    stay consistent. `status` is the field added 2026-09-02 (task #238
+    follow-up); `environment` is the field added 2026-09-08 (task #305)
+    -- "live" or "demo", derived from MetaApi's own account_information.
+    type when connected==True, None otherwise (see LIVE TRADING GATE note
+    near the top of this file for why this is never the source of truth
+    for the actual execution gate, only a display label).
+    `connected`/`account_status`/etc. are unchanged from the original
+    shape so existing callers (saas_broker_factory.py, saas_app.py) that
+    only read `connected`/`error` keep working as-is."""
+    return {
+        "connected": connected,
+        "status": status,
+        "account_status": account_status,
+        "trading_blocked": not connected,
+        "buying_power": buying_power,
+        "cash": cash,
+        "equity": equity,
+        "broker_name": broker_name,
+        "environment": environment,
+        "error": error,
+    }
 
 
 async def check_user_mt_connection(user_id):
@@ -322,31 +464,104 @@ async def check_user_mt_connection(user_id):
     check_user_etoro_connection()/check_user_alpaca_connection() return
     shape so this can be plugged into the same "Test Connection" UI
     pattern in Phase 2 without changing that shape.
+
+    FIX 2026-09-02 (task #238 follow-up -- first-connect UX): previously
+    returned only a flat connected=True/False, with no way to tell
+    "still deploying -- completely normal on a brand-new account, try
+    again shortly" apart from "actually broken" (bad password/server,
+    deploy genuinely failed). Live-tested 2026-09-02: a fresh MetaApi
+    account took ~16 minutes end-to-end for its first real broker
+    connection -- every check during that window would previously have
+    reported a flat, unqualified "connected": False, indistinguishable
+    from a real error to any caller/UI (saas_app.py was showing the raw
+    exception text as "Connection failed", which is exactly wrong for a
+    still-deploying account). Now adds a `status` field -- "connected",
+    "deploying", or "failed" -- by inspecting account.state (confirmed
+    live via the installed SDK's State Literal,
+    clients/metaapi/metatrader_account_client.py) whenever the connect
+    attempt raises: state in _FAILED_ACCOUNT_STATES means deployment
+    genuinely, terminally failed; anything else (CREATED/DEPLOYING/
+    DEPLOYED-but-not-yet-broker-connected/unrecognized) is treated as
+    still in progress, not a hard failure. This also covers the
+    DISCONNECTED_FROM_BROKER connection_status case, which looks
+    identical to a real bad-password rejection at this layer on a
+    first-ever connect -- if credentials are genuinely wrong, this will
+    keep reporting "deploying" on every retry rather than ever
+    resolving, which the UI should surface after enough repeated
+    attempts (see saas_app.py's Test Connection button).
+
+    Uses _CONNECTION_CHECK_TIMEOUT_SECONDS (short) rather than the full
+    _DEPLOY_TIMEOUT_SECONDS (5 min per stage) _deploy_and_connect() gives
+    execute_buy()/execute_sell_close()/get_user_mt_positions() -- this
+    function backs a synchronous "Test Connection" UI button/HTTP
+    request that cannot block for minutes, so it returns fast instead
+    and expects the caller to check again later. Deploying is idempotent
+    (see _deploy_and_connect()'s own state check), so polling this
+    repeatedly while an account spins up is safe and cheap.
     """
     try:
-        async with _mt_connection(user_id) as connection:
-            info = await connection.get_account_information()
-        return {
-            "connected": True,
-            "account_status": "CONNECTED",
-            "trading_blocked": False,
-            "buying_power": float(info.get("freeMargin", 0) or 0),
-            "cash": float(info.get("balance", 0) or 0),
-            "equity": float(info.get("equity", 0) or 0),
-            "broker_name": info.get("broker", ""),
-            "error": None,
-        }
+        api, account = await _get_or_create_metaapi_account(user_id)
     except Exception as e:
-        return {
-            "connected": False,
-            "account_status": None,
-            "trading_blocked": True,
-            "buying_power": 0.0,
-            "cash": 0.0,
-            "equity": 0.0,
-            "broker_name": "",
-            "error": str(e),
-        }
+        # No credentials, no server name saved, etc. -- a real
+        # configuration problem, not a timing issue, so this is always
+        # "failed" (there is no account yet to be "still deploying").
+        # FIX 2026-09-03 (#257): don't show raw exception text to users --
+        # see engines/broker_error_messages.py.
+        return _mt_connection_result(False, "failed", None, friendly_broker_error_message("MT4/5", e))
+
+    try:
+        try:
+            connection = await _deploy_and_connect(
+                account, deploy_timeout_seconds=_CONNECTION_CHECK_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            state = getattr(account, "state", None)
+            status = "failed" if state in _FAILED_ACCOUNT_STATES else "deploying"
+            # FIX 2026-09-03 (#257): don't show raw exception text to
+            # users -- see engines/broker_error_messages.py. Note this
+            # branch's message is only ever shown to the user when
+            # status=="failed" (saas_app.py's "deploying" branch never
+            # reads .get("error")), but it's sanitized either way for
+            # consistency and in case a future caller does read it.
+            return _mt_connection_result(False, status, state, friendly_broker_error_message("MT4/5", e))
+
+        try:
+            info = await connection.get_account_information()
+            # FIX 2026-09-08 (task #305, LIVE TRADING GATE): correct the
+            # credential row's stored environment label from MetaApi's
+            # own ground truth now that we actually know it -- see
+            # tenant.update_broker_environment()'s docstring for why this
+            # is purely a display-label fix, never consulted for the
+            # actual execution gate. Best-effort: a DB hiccup here must
+            # never turn a successful "Test Connection" into a reported
+            # failure.
+            detected_environment = "live" if _mt_is_live_account_type(info.get("type")) else "demo"
+            try:
+                tenant.update_broker_environment(user_id, BROKER_CODE, detected_environment)
+            except Exception:
+                pass
+            return _mt_connection_result(
+                True, "connected", "CONNECTED", None,
+                buying_power=float(info.get("freeMargin", 0) or 0),
+                cash=float(info.get("balance", 0) or 0),
+                equity=float(info.get("equity", 0) or 0),
+                broker_name=info.get("broker", ""),
+                environment=detected_environment,
+            )
+        except Exception as e:
+            state = getattr(account, "state", None)
+            status = "failed" if state in _FAILED_ACCOUNT_STATES else "deploying"
+            return _mt_connection_result(False, status, state, str(e))
+        finally:
+            try:
+                await connection.close()
+            except Exception:
+                pass
+    finally:
+        try:
+            await api.close()
+        except Exception:
+            pass
 
 
 async def get_user_mt_positions(user_id):
@@ -378,8 +593,24 @@ async def execute_buy(user_id, symbol, volume, stop_loss=None, take_profit=None)
 async def execute_sell_close(user_id, position_id):
     """Fully closes an existing position by MetaApi position id.
     Same master-password requirement and Phase-1-standalone status as
-    execute_buy() above."""
+    execute_buy() above.
+
+    LIVE TRADING GATE (task #305, 2026-09-08): same check as
+    execute_buy_by_usd_amount() -- see this file's module-level note near
+    the top. Applied symmetrically to closes for consistency with how
+    Alpaca/Binance/eToro's own _is_live() checks are re-verified on every
+    call including sells (see saas_broker_factory.py); accepted tradeoff
+    there is that reverting Lock 1 after a real position was opened means
+    the automated close can no longer fire either -- not fixed here, just
+    matched, since changing that tradeoff is out of scope for this task.
+    """
     async with _mt_connection(user_id) as connection:
+        account_info = await connection.get_account_information()
+        if _mt_is_live_account_type(account_info.get("type")) and not _user_has_live_trading_enabled(user_id):
+            raise LiveTradingNotEnabledError(
+                f"MT4/5 account for user {user_id} is real-money "
+                f"(ACCOUNT_TRADE_MODE_REAL) but allow_live_trading is not enabled."
+            )
         return await connection.close_position(position_id=position_id)
 
 
@@ -447,15 +678,40 @@ _MT_TICKER_OVERRIDES = {
     "SI=F": "XAGUSD",   # Silver
     "CL=F": "SpotCrude",  # WTI Crude -- see note above on why this one
                           # specifically, not WTOIL-PERP or Crude-F.
+
+    # INDICES (task #390-393) -- added alongside FOREX/COMMODITIES as a
+    # 5th asset class. THESE ARE UNVERIFIED GUESSES, more so than any
+    # other entry in this table: index symbol names AND lot/contract-size
+    # conventions vary far more broker-to-broker than commodities do (the
+    # note above about "SpotCrude vs a blind guess at a similarly-named
+    # symbol" applies here even more strongly). The names below match a
+    # common raw/ECN-broker convention, but MUST be checked against
+    # whatever MT4/5 broker a real account actually connects through
+    # (symbols() lookup or the broker's own contract specification page)
+    # before enabling real-money INDICES trading via MT4/5. A wrong
+    # contract-size assumption in _compute_lot_size() below would size a
+    # real position wrong, not just fail to find the symbol.
+    "^GSPC": "US500",    # S&P 500
+    "^IXIC": "NAS100",   # Nasdaq 100
+    "^DJI": "US30",      # Dow Jones Industrial Average
+    "^FTSE": "UK100",    # FTSE 100
+    "^GDAXI": "GER40",   # DAX 40
+    "^N225": "JPN225",   # Nikkei 225
 }
 
 
 def resolve_mt_symbol(project_ticker):
     """
     Translate one of this project's own tickers (data/asset_universe.py
-    -- yfinance-style, e.g. "EURUSD=X", "GC=F") into the real MT symbol
-    name this broker uses (e.g. "EURUSD", "XAUUSD"). Mirrors
+    -- yfinance-style, e.g. "EURUSD=X", "GC=F", or the "^"-prefixed
+    INDICES convention, e.g. "^GSPC") into the real MT symbol name this
+    broker uses (e.g. "EURUSD", "XAUUSD", "US500"). Mirrors
     etoro_broker.resolve_project_ticker()'s exact same job for eToro.
+    Every "^"-prefixed ticker this project trades is listed explicitly in
+    _MT_TICKER_OVERRIDES above (index symbol names vary far more
+    broker-to-broker than the "=X"/"=F" fallback below could safely
+    guess), so the override lookup is what actually resolves indices --
+    the endswith("=X")/endswith("=F") fallback below never sees them.
     """
     ticker = project_ticker.upper().strip()
 
@@ -560,6 +816,16 @@ async def execute_buy_by_usd_amount(user_id, ticker, usd_amount, stop_loss_price
 
     async with _mt_connection(user_id) as connection:
         account_info = await connection.get_account_information()
+
+        # LIVE TRADING GATE (task #305) -- see this file's module-level
+        # note near the top for the full reasoning. Checked fresh on
+        # every single BUY, from MetaApi's own account type, not from
+        # any stored/user-entered flag.
+        if _mt_is_live_account_type(account_info.get("type")) and not _user_has_live_trading_enabled(user_id):
+            raise LiveTradingNotEnabledError(
+                f"MT4/5 account for user {user_id} is real-money "
+                f"(ACCOUNT_TRADE_MODE_REAL) but allow_live_trading is not enabled."
+            )
 
         lot_size = await _compute_lot_size(connection, account_info, symbol, usd_amount)
         if lot_size is None:

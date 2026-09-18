@@ -597,7 +597,7 @@ _BROKER_FIELDS = {
         "has_extra": False,
     },
     "ETORO": {
-        "label": "eToro (Forex/Commodities, Demo)",
+        "label": "eToro (Forex/Commodities/Indices, Demo)",
         "environment": "demo",
         "key_label": "API Key",
         "secret_label": "User Key",
@@ -1002,10 +1002,10 @@ def render_mt_bridge_connection(user_id, connected):
     not a single global API endpoint -- see mt_broker.save_mt_credentials()
     for why each of these is required.
 
-    Alternative to eToro for FOREX/COMMODITIES, not a replacement -- a
-    user can have either, both, or neither connected; see
-    saas_decision_engine.py's _resolve_broker_for_asset_class() for how
-    that choice is resolved per user at trade time.
+    Alternative to eToro for FOREX/COMMODITIES/INDICES, not a
+    replacement -- a user can have either, both, or neither connected;
+    see saas_decision_engine.py's _resolve_broker_for_asset_class() for
+    how that choice is resolved per user at trade time.
     """
     status = connected.get("MT_BRIDGE")
     status_text = (
@@ -1170,7 +1170,9 @@ def render_settings(user_id):
         )
         enabled_classes = st.multiselect(
             _t("settings.asset_classes_label"),
-            options=["US_STOCKS", "CRYPTO", "FOREX", "COMMODITIES"],
+            # INDICES added 2026-09-18 (task #390/#395) -- 5th asset
+            # class, same eToro/MT4-5 CFD path as FOREX/COMMODITIES.
+            options=["US_STOCKS", "CRYPTO", "FOREX", "COMMODITIES", "INDICES"],
             default=settings["enabled_asset_classes"],
         )
         save_settings_clicked = st.form_submit_button(_t("settings.save_button"))

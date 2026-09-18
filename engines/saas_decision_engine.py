@@ -206,6 +206,7 @@ from config import (
     MAX_CRYPTO_POSITIONS,
     MAX_FOREX_POSITIONS,
     MAX_COMMODITIES_POSITIONS,
+    MAX_INDICES_POSITIONS,
     MAX_TRADES_PER_DAY,
     TRADE_COOLDOWN_MINUTES,
     CRYPTO_MAX_TRADES_PER_DAY,
@@ -283,17 +284,27 @@ def _effective_max_position_size(user_id, settings):
 # currencies this platform already bills in). CRYPTO moved OUT of
 # _ASSET_CLASS_BROKER (now US_STOCKS only) and into the same multi-
 # broker preference pattern FOREX/COMMODITIES already established.
+#
+# FOLLOW-UP 2026-09-18 (task #390, INDICES): INDICES joined as a 5th
+# asset class on the exact same eToro/MT4-5 CFD path as FOREX/
+# COMMODITIES (see data/asset_universe.py's INDICES entry and
+# etoro_broker.py's/mt_broker.py's index ticker-override tables), so it
+# reuses _FOREX_COMMODITIES_BROKER_PREFERENCE below rather than getting
+# its own preference tuple -- there's no reason MT4/5-vs-eToro
+# preference would differ for indices vs forex/commodities, they're the
+# same two brokers with the same connect-either-one shape.
 _ASSET_CLASS_BROKER = {
     "US_STOCKS": "ALPACA",
 }
 
-_FOREX_COMMODITIES_ASSET_CLASSES = ("FOREX", "COMMODITIES")
+_FOREX_COMMODITIES_ASSET_CLASSES = ("FOREX", "COMMODITIES", "INDICES")
 
 # MT_BRIDGE checked first when a user has BOTH connected -- no strong
 # reason to prefer one over the other when both exist, but MT4/5 is
 # typically the lower-cost-to-the-user option (see mt_broker.py's module
 # docstring's original cost-reduction rationale for building this
-# integration at all), so it gets first look.
+# integration at all), so it gets first look. Also used for INDICES --
+# see the follow-up comment above this tuple's own definition.
 _FOREX_COMMODITIES_BROKER_PREFERENCE = ("MT_BRIDGE", "ETORO")
 
 # BINANCE checked first when a user has BOTH connected -- it has a real
@@ -311,6 +322,7 @@ _MULTI_BROKER_ASSET_CLASS_PREFERENCE = {
     "CRYPTO": _CRYPTO_BROKER_PREFERENCE,
     "FOREX": _FOREX_COMMODITIES_BROKER_PREFERENCE,
     "COMMODITIES": _FOREX_COMMODITIES_BROKER_PREFERENCE,
+    "INDICES": _FOREX_COMMODITIES_BROKER_PREFERENCE,
 }
 
 _ALL_ASSET_CLASSES = ("US_STOCKS", "CRYPTO") + _FOREX_COMMODITIES_ASSET_CLASSES
@@ -342,6 +354,7 @@ _POSITION_CAPS = {
     "CRYPTO": MAX_CRYPTO_POSITIONS,
     "FOREX": MAX_FOREX_POSITIONS,
     "COMMODITIES": MAX_COMMODITIES_POSITIONS,
+    "INDICES": MAX_INDICES_POSITIONS,
 }
 
 _model = None
@@ -1058,9 +1071,15 @@ def _run_decision_loop_for_user_impl(user_id, dry_run=True):
                         user_id, ticker, trade_amount, client_order_id=client_order_id
                     )
                 elif broker == "MT_BRIDGE":
-                    # FOREX/COMMODITIES via MT4/5 (MetaApi) -- added
+                    # FOREX/COMMODITIES/INDICES via MT4/5 (MetaApi) -- added
                     # 2026-09-02, alongside eToro (see this function's
-                    # module docstring FOLLOW-UP). Unlike eToro,
+                    # module docstring FOLLOW-UP; INDICES joined this same
+                    # branch on 2026-09-18 per the follow-up above
+                    # _ASSET_CLASS_BROKER -- this branch is keyed on
+                    # `broker`, not `asset_class`, so no new branch was
+                    # needed, just resolve_mt_symbol() knowing the index
+                    # ticker, which mt_broker.py's _MT_TICKER_OVERRIDES
+                    # now does). Unlike eToro,
                     # buy_mt_for_user() confirms a fill SYNCHRONOUSLY
                     # (MetaApi's market-order response returns a real
                     # positionId immediately, live-tested via
@@ -1105,7 +1124,12 @@ def _run_decision_loop_for_user_impl(user_id, dry_run=True):
                         # number with no relationship to the real position.
                         filled_quantity = mt_result["lot_size"]
                 else:
-                    # FOREX/COMMODITIES via eToro. buy_etoro_for_user()
+                    # FOREX/COMMODITIES/INDICES via eToro (INDICES joined
+                    # 2026-09-18, same reasoning as the MT_BRIDGE branch
+                    # above -- this is the "not MT_BRIDGE" fallback, keyed
+                    # on `broker`, so it already covers INDICES once
+                    # _resolve_broker_for_asset_class() can return ETORO
+                    # for it). buy_etoro_for_user()
                     # already polls for a confirmed fill internally (15s
                     # window for leveraged CFDs -- see that function's
                     # docstring); position_id is None if that window

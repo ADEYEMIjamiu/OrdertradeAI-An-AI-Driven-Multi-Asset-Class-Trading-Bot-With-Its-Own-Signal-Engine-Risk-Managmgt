@@ -1,7 +1,8 @@
 """
 Asset Class Toggle Engine -- lets the user turn AI trade ENTRY on/off per
-asset class (US_STOCKS, CRYPTO, FOREX, COMMODITIES) from the dashboard,
-e.g. "only trade crypto today" or "no forex this week."
+asset class (US_STOCKS, CRYPTO, FOREX, COMMODITIES, and -- as of task
+#390 -- INDICES) from the dashboard, e.g. "only trade crypto today" or
+"no forex this week."
 
 Built 2026-08-22 per explicit user request: a real money-making machine
 should let the operator choose which markets it's allowed to enter on a
@@ -28,7 +29,7 @@ import sqlite3
 
 _DB_NAME = "asset_toggles.db"
 
-ASSET_CLASSES = ["US_STOCKS", "CRYPTO", "FOREX", "COMMODITIES"]
+ASSET_CLASSES = ["US_STOCKS", "CRYPTO", "FOREX", "COMMODITIES", "INDICES"]
 
 
 def _get_connection():

@@ -19,6 +19,7 @@ from config import (
     MAX_CRYPTO_POSITIONS,
     MAX_FOREX_POSITIONS,
     MAX_COMMODITIES_POSITIONS,
+    MAX_INDICES_POSITIONS,
     MAX_PORTFOLIO_EXPOSURE,
     MAX_TRADES_PER_DAY,
     TRADE_COOLDOWN_MINUTES,
@@ -59,14 +60,20 @@ _CONFIDENCE_TIER_FLOOR_FRACTION = 0.10
 def get_account_balance(asset_class):
     """
     Real, current available balance for whichever broker owns this
-    asset class -- CRYPTO reads Binance testnet USDT, FOREX/COMMODITIES
-    reads eToro's account cash, everything else (US_STOCKS) reads
+    asset class -- CRYPTO reads Binance testnet USDT, FOREX/COMMODITIES/
+    INDICES reads eToro's account cash, everything else (US_STOCKS) reads
     Alpaca cash. Used by calculate_trade_amount() so trade sizing scales
     with however much money is actually in a given account, rather than
     a single fixed dollar range. Never raises -- a failed balance fetch
     returns 0.0, which calculate_trade_amount() below treats as "cannot
     afford any trade right now" rather than crashing or silently
     guessing a number.
+
+    NOTE 2026-09-18: INDICES joined FOREX/COMMODITIES here as a 5th asset
+    class (task #390) -- this single-owner-bot path only knows ETORO,
+    unlike saas_broker_factory.get_user_account_balance()'s per-user
+    MT_BRIDGE-or-ETORO choice, since app.py's single-owner bot has never
+    had an MT4/5 connection of its own.
     """
     if asset_class == "CRYPTO":
         try:
@@ -75,7 +82,7 @@ def get_account_balance(asset_class):
         except Exception:
             return 0.0
 
-    if asset_class in ("FOREX", "COMMODITIES"):
+    if asset_class in ("FOREX", "COMMODITIES", "INDICES"):
         try:
             import etoro_broker
             return float(etoro_broker.check_broker_connection().get("cash", 0) or 0)
@@ -97,6 +104,7 @@ def calculate_trade_amount(
     stop_loss=None,
     leverage=1,
     account_balance=None,
+    max_position_size=None,
 ):
     """
     Dynamic position sizing based on AI confidence, market risk,
@@ -139,6 +147,19 @@ def calculate_trade_amount(
     this falls back to the original fixed MIN_TRADE_AMOUNT/
     MAX_TRADE_AMOUNT-tiered behavior unchanged.
 
+    max_position_size is also optional, defaulting to the global
+    MAX_POSITION_SIZE config constant (this function's original,
+    single-account behavior, unchanged for the single-owner bot's own
+    call sites in app.py). FIX 2026-09-09 (task #306): added so
+    saas_decision_engine.py can pass each SaaS user's OWN configured
+    max_position_size (the 5%-50% slider in Account Settings) --
+    previously that per-user setting was displayed and saved but never
+    actually read anywhere, so every SaaS user's real order sizing
+    silently used the single flat 20% global constant regardless of
+    what they'd configured for their own account. Also lets that same
+    caller apply a temporary, tighter probation ceiling for newly-live
+    accounts on top of (never instead of) the user's own setting.
+
     entry_price/stop_loss are optional and sourced from each row's
     "Price ($)"/"Stop Loss" columns (trade_planner.py's per-ticker ATR
     stop) -- if either is missing/invalid the risk_adjustment step is
@@ -146,6 +167,9 @@ def calculate_trade_amount(
     fall back to the pre-existing confidence/market-risk sizing, never
     block or crash a trade.
     """
+    effective_max_position_size = (
+        max_position_size if max_position_size is not None else MAX_POSITION_SIZE
+    )
 
     confidence = float(confidence)
 
@@ -159,7 +183,7 @@ def calculate_trade_amount(
         if account_balance < MIN_TRADE_AMOUNT:
             return 0.0
 
-        position_budget = account_balance * MAX_POSITION_SIZE
+        position_budget = account_balance * effective_max_position_size
 
         confidence_fraction = _CONFIDENCE_TIER_FLOOR_FRACTION
         for tier_confidence, tier_fraction in _CONFIDENCE_TIER_FRACTIONS:
@@ -238,6 +262,13 @@ def _is_forex_ticker(ticker):
 def _is_commodity_ticker(ticker):
     """yfinance commodity futures tickers are all named 'XX=F' (e.g. GC=F)."""
     return str(ticker).upper().endswith("=F")
+
+
+def _is_index_ticker(ticker):
+    """yfinance index tickers are all '^'-prefixed (e.g. ^GSPC), not
+    suffixed like FOREX's '=X' or COMMODITIES' '=F' -- see
+    data/asset_universe.py's INDICES entry."""
+    return str(ticker).upper().startswith("^")
 
 
 def _get_etoro_position_count(asset_class):
@@ -323,16 +354,27 @@ def _get_commodity_position_count():
     )
 
 
+def _get_index_position_count():
+    """Same reasoning as _get_forex_position_count(), for indices."""
+    if ETORO_LIVE_TRADING:
+        return _get_etoro_position_count("INDICES")
+    return sum(
+        1 for t in st.session_state.positions if _is_index_ticker(t)
+    )
+
+
 def _get_stock_position_count():
     """
-    Stocks share st.session_state.positions with forex/commodities, so the
-    stock-only cap must exclude those tickers -- otherwise forex/commodity
-    positions would eat into MAX_POSITIONS/MAX_OPEN_POSITIONS meant for
-    stocks, the same class of bug this whole file works around for crypto.
+    Stocks share st.session_state.positions with forex/commodities/indices,
+    so the stock-only cap must exclude those tickers -- otherwise forex/
+    commodity/index positions would eat into MAX_POSITIONS/MAX_OPEN_POSITIONS
+    meant for stocks, the same class of bug this whole file works around
+    for crypto.
     """
     return sum(
         1 for t in st.session_state.positions
         if not _is_forex_ticker(t) and not _is_commodity_ticker(t)
+        and not _is_index_ticker(t)
     )
 
 
@@ -376,8 +418,9 @@ def can_open_position(ticker):
             return False, "Maximum crypto positions reached."
         return True, ""
 
-    # Forex/commodities: same independent-cap treatment as crypto above,
-    # see MAX_FOREX_POSITIONS/MAX_COMMODITIES_POSITIONS in config.py for why.
+    # Forex/commodities/indices: same independent-cap treatment as crypto
+    # above, see MAX_FOREX_POSITIONS/MAX_COMMODITIES_POSITIONS/
+    # MAX_INDICES_POSITIONS in config.py for why.
     if _is_forex_ticker(ticker):
         if _get_forex_position_count() >= MAX_FOREX_POSITIONS:
             return False, "Maximum forex positions reached."
@@ -386,6 +429,11 @@ def can_open_position(ticker):
     if _is_commodity_ticker(ticker):
         if _get_commodity_position_count() >= MAX_COMMODITIES_POSITIONS:
             return False, "Maximum commodities positions reached."
+        return True, ""
+
+    if _is_index_ticker(ticker):
+        if _get_index_position_count() >= MAX_INDICES_POSITIONS:
+            return False, "Maximum indices positions reached."
         return True, ""
 
     # Already holding? / too many positions?
@@ -437,9 +485,10 @@ def risk_check_before_trade(ticker, trade_amount, market_df):
     is_crypto = _is_crypto_ticker(ticker)
     is_forex = _is_forex_ticker(ticker)
     is_commodity = _is_commodity_ticker(ticker)
+    is_index = _is_index_ticker(ticker)
 
-    # 1. Maximum open positions -- crypto, forex, commodities and stocks
-    # are all capped independently, see can_open_position() above for why.
+    # 1. Maximum open positions -- crypto, forex, commodities, indices and
+    # stocks are all capped independently, see can_open_position() above for why.
     if is_crypto:
         if _get_crypto_position_count() >= MAX_CRYPTO_POSITIONS:
             return False, "Maximum crypto positions reached."
@@ -449,6 +498,9 @@ def risk_check_before_trade(ticker, trade_amount, market_df):
     elif is_commodity:
         if _get_commodity_position_count() >= MAX_COMMODITIES_POSITIONS:
             return False, "Maximum commodities positions reached."
+    elif is_index:
+        if _get_index_position_count() >= MAX_INDICES_POSITIONS:
+            return False, "Maximum indices positions reached."
     elif LIVE_TRADING:
         try:
             positions = get_open_positions()
@@ -561,6 +613,7 @@ def risk_check_before_trade(ticker, trade_amount, market_df):
         "CRYPTO" if is_crypto
         else "FOREX" if is_forex
         else "COMMODITIES" if is_commodity
+        else "INDICES" if is_index
         else "US_STOCKS"
     )
 

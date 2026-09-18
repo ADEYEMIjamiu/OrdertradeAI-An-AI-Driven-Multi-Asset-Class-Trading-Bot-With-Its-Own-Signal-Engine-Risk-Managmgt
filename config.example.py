@@ -91,6 +91,11 @@ MAX_CRYPTO_POSITIONS = 8
 MAX_FOREX_POSITIONS = 3
 MAX_COMMODITIES_POSITIONS = 3
 
+# INDICES added as a 5th asset class, trading through the same eToro/
+# MT4-5 CFD path as FOREX/COMMODITIES -- same independent-budget
+# reasoning as those two, same starting cap.
+MAX_INDICES_POSITIONS = 3
+
 DAILY_LOSS_LIMIT = 0.03
 DAILY_PROFIT_TARGET = 0.05
 

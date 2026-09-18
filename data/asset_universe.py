@@ -110,6 +110,33 @@ ASSET_UNIVERSE = {
         "broker": "etoro",
         "symbols": ["GC=F", "CL=F", "SI=F"],
         "enabled": True
+    },
+
+    "INDICES": {
+        # Added as a 5th asset class (task #390) alongside FOREX/
+        # COMMODITIES -- same eToro/MT4-5 CFD path, same "broker": "etoro"
+        # placeholder label (the SaaS decision engine actually resolves
+        # the real per-user broker between ETORO/MT_BRIDGE at runtime;
+        # see saas_decision_engine._resolve_broker_for_asset_class() --
+        # this key is only read directly by the single-owner bot's own
+        # app.py/rotation_engine.py paths).
+        #
+        # Tickers are yfinance's real index symbols (^-prefixed, not a
+        # suffix like FOREX's "=X" or COMMODITIES' "=F" -- see the new
+        # _is_index_ticker() helper added alongside this). Six major
+        # indices chosen to mirror the six symbols each FOREX/COMMODITIES
+        # started with: US (S&P 500, Nasdaq 100, Dow), UK, Germany, Japan.
+        #
+        # NOT YET VERIFIED LIVE: unlike GC=F/CL=F/SI=F (confirmed against
+        # eToro's real catalog before shipping), these six have NOT been
+        # checked against eToro's or any MT4/5 broker's actual live
+        # instrument list yet -- see etoro_broker._PROJECT_TICKER_OVERRIDES
+        # and mt_broker._MT_TICKER_OVERRIDES for the mapped names and their
+        # own "needs live verification" warnings. Do not enable real-money
+        # INDICES trading until that verification pass is done.
+        "broker": "etoro",
+        "symbols": ["^GSPC", "^IXIC", "^DJI", "^FTSE", "^GDAXI", "^N225"],
+        "enabled": True
     }
 }
 

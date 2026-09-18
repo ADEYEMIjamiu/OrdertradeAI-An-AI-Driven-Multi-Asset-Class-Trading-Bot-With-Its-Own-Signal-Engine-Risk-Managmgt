@@ -247,6 +247,8 @@ def _classify_unknown_ticker(ticker):
         return "FOREX"
     if ticker.endswith("=F"):
         return "COMMODITIES"
+    if ticker.startswith("^"):
+        return "INDICES"
     return "US_STOCKS"
 
 

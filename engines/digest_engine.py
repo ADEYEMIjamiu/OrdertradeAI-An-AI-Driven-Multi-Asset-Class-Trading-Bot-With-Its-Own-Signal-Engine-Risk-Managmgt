@@ -33,7 +33,7 @@ def _classify_unknown_ticker(ticker):
     Best-effort asset-class guess for a ticker no longer in
     ASSET_UNIVERSE, based on this project's ticker-naming conventions
     (see data/asset_universe.py): "-USD" = crypto, "=X" = forex,
-    "=F" = commodities, anything else = stocks.
+    "=F" = commodities, "^" prefix = indices, anything else = stocks.
     """
     ticker = str(ticker).upper()
 
@@ -43,6 +43,8 @@ def _classify_unknown_ticker(ticker):
         return "FOREX"
     if ticker.endswith("=F"):
         return "COMMODITIES"
+    if ticker.startswith("^"):
+        return "INDICES"
     return "US_STOCKS"
 
 

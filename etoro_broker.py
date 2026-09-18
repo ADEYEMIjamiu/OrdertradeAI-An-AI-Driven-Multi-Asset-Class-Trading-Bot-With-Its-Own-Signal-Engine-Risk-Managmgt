@@ -165,6 +165,22 @@ _PROJECT_TICKER_OVERRIDES = {
     "GC=F": "GOLD",
     "CL=F": "OIL",
     "SI=F": "SILVER",
+
+    # INDICES (task #390-393) -- added alongside FOREX/COMMODITIES as a
+    # 5th asset class. UNLIKE the three overrides above, these six have
+    # NOT been confirmed against eToro's live instrument catalog yet --
+    # they're this project's best guess at eToro's plain symbolFull for
+    # each index (based on the same naming convention eToro uses
+    # publicly), not a verified catalog scan the way GOLD/OIL/SILVER
+    # were. Before enabling real-money INDICES trading, run the same
+    # kind of live catalog scan documented above for commodities against
+    # a real eToro account and correct any of these that don't match.
+    "^GSPC": "SPX500",   # S&P 500
+    "^IXIC": "NSDQ100",  # Nasdaq 100
+    "^DJI": "DJ30",      # Dow Jones Industrial Average
+    "^FTSE": "UK100",    # FTSE 100
+    "^GDAXI": "GER40",   # DAX 40
+    "^N225": "JPN225",   # Nikkei 225
 }
 
 
@@ -172,13 +188,14 @@ def resolve_project_ticker(project_ticker: str) -> str:
     """
     Translate one of this project's own tickers (as used in
     data/asset_universe.py and throughout app.py -- yfinance-style, e.g.
-    "EURUSD=X", "GC=F") into the symbolFull eToro's catalog actually
-    uses (e.g. "EURUSD", "GOLD"). Stocks/crypto tickers ("AAPL",
-    "BTC-USD") don't need this -- eToro's symbolFull already matches
-    plain US stock tickers directly, but this project doesn't currently
-    route stocks/crypto through eToro (see execute_etoro_trades() in
-    app.py), so only the forex "=X" stripping and the commodities
-    override table above are exercised in practice right now.
+    "EURUSD=X", "GC=F", "^GSPC") into the symbolFull eToro's catalog
+    actually uses (e.g. "EURUSD", "GOLD", "SPX500"). Stocks/crypto
+    tickers ("AAPL", "BTC-USD") don't need this -- eToro's symbolFull
+    already matches plain US stock tickers directly, but this project
+    doesn't currently route stocks/crypto through eToro (see
+    execute_etoro_trades() in app.py), so only the forex "=X" stripping
+    and the commodities/indices override table above are exercised in
+    practice right now.
     """
     ticker = project_ticker.upper().strip()
 
@@ -279,17 +296,30 @@ ETORO_USE_TRAILING_STOP = True
 ETORO_TRAILING_STEP_PCT = 0.005
 
 
-def _is_forex_or_commodity_ticker(project_ticker: str) -> bool:
+def _is_leveraged_cfd_ticker(project_ticker: str) -> bool:
     """
-    True for this project's forex/commodities tickers ("EURUSD=X",
-    "GC=F", etc.), False for stocks/crypto ("AAPL", "BTC-USD"). Used by
-    buy() to decide whether to apply ETORO_LEVERAGE/stop-loss handling --
-    based on the project's own yfinance-style ticker suffix convention
-    (data/asset_universe.py), not an eToro API call, so it's free to call
-    on every buy().
+    True for this project's forex/commodities/indices tickers ("EURUSD=X",
+    "GC=F", "^GSPC", etc.), False for stocks/crypto ("AAPL", "BTC-USD").
+    Used by buy() to decide whether to apply ETORO_LEVERAGE/stop-loss
+    handling -- based on the project's own yfinance-style ticker suffix/
+    prefix convention (data/asset_universe.py), not an eToro API call, so
+    it's free to call on every buy().
+
+    RENAMED from _is_forex_or_commodity_ticker (task #390-393, when
+    INDICES was added as a 5th CFD asset class) -- the old name was
+    already accurate to "checks membership in _PROJECT_TICKER_OVERRIDES
+    or the =X/=F suffixes", it just stopped describing every asset class
+    that check actually covers once indices joined. Same trap as the old
+    "kraken_no_demo_warning" i18n key generalizing to "broker.no_demo_warning".
     """
     upper = project_ticker.upper().strip()
     return upper in _PROJECT_TICKER_OVERRIDES or upper.endswith(("=X", "=F"))
+
+
+# Backward-compatible alias -- saas_broker_factory.py and any other
+# external importer using the old name keeps working. New code should
+# use _is_leveraged_cfd_ticker directly.
+_is_forex_or_commodity_ticker = _is_leveraged_cfd_ticker
 
 
 def _get_instrument_id(ticker: str):
@@ -594,7 +624,7 @@ def buy(ticker: str, usd_amount: float):
         undiscussed risk change.
     """
     instrument_id = _get_instrument_id(ticker)
-    is_leveraged_cfd = _is_forex_or_commodity_ticker(ticker)
+    is_leveraged_cfd = _is_leveraged_cfd_ticker(ticker)
 
     order_payload = {
         "action": "open",

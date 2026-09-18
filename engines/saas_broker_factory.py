@@ -30,8 +30,10 @@ FOLLOW-UP 2026-08-26: eToro (forex/commodities) execution is now also
 included -- buy_etoro_for_user() below, plus the per-user instrument-
 catalog lookup and leverage/stop-loss-rate computation it needs. This
 imports (does not duplicate) the pure, credential-independent helpers
-from etoro_broker.py -- resolve_project_ticker(), _is_forex_or_commodity_
-ticker(), and the ETORO_LEVERAGE/ETORO_STOP_LOSS_PCT/ETORO_TAKE_PROFIT_PCT/
+from etoro_broker.py -- resolve_project_ticker(), _is_leveraged_cfd_ticker()
+(renamed from _is_forex_or_commodity_ticker() when INDICES joined as a 5th
+CFD asset class -- see that function's docstring), and the
+ETORO_LEVERAGE/ETORO_STOP_LOSS_PCT/ETORO_TAKE_PROFIT_PCT/
 ETORO_USE_TRAILING_STOP constants -- since those don't touch that file's
 module-level client (API_KEY/USER_KEY/_headers()) at all, so importing
 them doesn't create the cross-user coupling risk described above for why
@@ -137,7 +139,7 @@ from engines.broker_error_messages import (
 )
 from etoro_broker import (
     resolve_project_ticker,
-    _is_forex_or_commodity_ticker,
+    _is_leveraged_cfd_ticker,
     ETORO_LEVERAGE,
     ETORO_STOP_LOSS_PCT,
     ETORO_TAKE_PROFIT_PCT,
@@ -1139,7 +1141,10 @@ def get_user_account_balance(user_id, asset_class, broker=None):
         # buy_stock_for_user() above checks before submitting an order.
         return float(result.get("buying_power", 0) or 0)
 
-    if asset_class in ("FOREX", "COMMODITIES"):
+    if asset_class in ("FOREX", "COMMODITIES", "INDICES"):
+        # INDICES (task #394) joined this branch on 2026-09-18 -- same
+        # eToro/MT_BRIDGE two-broker shape as FOREX/COMMODITIES, no new
+        # code needed beyond adding it to this tuple.
         if broker == "MT_BRIDGE":
             result = check_user_mt_bridge_connection(user_id)
             if not result.get("connected"):
@@ -1155,9 +1160,9 @@ def get_user_account_balance(user_id, asset_class, broker=None):
         if not result.get("connected"):
             return 0.0
         # "cash" here is eToro's "credit" field (see check_user_etoro_
-        # connection()'s docstring) -- the same balance both FOREX and
-        # COMMODITIES draw from, since they share one eToro account per
-        # user rather than separate sub-balances.
+        # connection()'s docstring) -- the same balance FOREX,
+        # COMMODITIES, and now INDICES all draw from, since they share
+        # one eToro account per user rather than separate sub-balances.
         return float(result.get("cash", 0) or 0)
 
     return 0.0
@@ -1212,7 +1217,9 @@ def get_user_exposure_percent(user_id, asset_class, broker=None):
             return _get_luno_exposure_percent(user_id)
         return _get_binance_exposure_percent(user_id)
 
-    if asset_class in ("FOREX", "COMMODITIES"):
+    if asset_class in ("FOREX", "COMMODITIES", "INDICES"):
+        # INDICES joined this branch 2026-09-18 -- see the matching
+        # get_user_account_balance() branch above for the reasoning.
         if broker == "MT_BRIDGE":
             return _get_mt_bridge_exposure_percent(user_id)
         return _get_etoro_exposure_percent(user_id)
@@ -1728,7 +1735,7 @@ def buy_etoro_for_user(user_id, ticker, usd_amount):
     """
     creds = _require_etoro_creds(user_id)
     instrument_id = _get_etoro_instrument_id_for_user(user_id, creds, ticker)
-    is_leveraged_cfd = _is_forex_or_commodity_ticker(ticker)
+    is_leveraged_cfd = _is_leveraged_cfd_ticker(ticker)
 
     order_payload = {
         "action": "open",

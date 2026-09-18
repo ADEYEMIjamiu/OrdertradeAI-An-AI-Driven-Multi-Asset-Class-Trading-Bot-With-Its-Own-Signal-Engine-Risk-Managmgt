@@ -39,7 +39,10 @@ def _add_real_stock_and_etoro_values(allocation):
             from data.asset_universe import ASSET_UNIVERSE
 
             etoro_positions = etoro_broker.get_positions()
-            for asset_class in ("FOREX", "COMMODITIES"):
+            # INDICES joined FOREX/COMMODITIES here 2026-09-18 (task
+            # #390) -- same eToro CFD path, same real-data-not-stale-
+            # local-dict reasoning as the rest of this function.
+            for asset_class in ("FOREX", "COMMODITIES", "INDICES"):
                 class_value = 0.0
                 for project_ticker in ASSET_UNIVERSE.get(asset_class, {}).get("symbols", []):
                     etoro_symbol = etoro_broker.resolve_project_ticker(project_ticker)

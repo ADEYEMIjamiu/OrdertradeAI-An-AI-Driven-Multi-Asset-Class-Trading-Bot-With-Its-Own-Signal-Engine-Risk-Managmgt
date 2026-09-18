@@ -357,14 +357,29 @@
   }
   .bd-save-btn.disabled{opacity:0.4;}
 
-  /* ---------- Asset class grid: 1 + 3 asymmetric ---------- */
-  .asset-grid{display:grid; grid-template-columns:1.3fr 1fr 1fr 1fr; gap:1px; background:var(--border-soft); border:1px solid var(--border-soft);}
-  .asset-card{background:var(--bg-alt); padding:26px 22px;}
+  /* ---------- Asset class grid: 2-across (stocks/crypto) + 3-across (forex/commodities/indices) ---------- */
+  /* FIX (user screen recording, 2026-09-18): with the old fixed 4-column
+     grid, adding Indices as a 5th card left it alone on its own row with
+     3 empty cells beside it. A 6-column base grid lets each row's cards
+     span evenly across the full width regardless of how many are in that
+     row -- row 1 (stocks, crypto) spans 3+3, row 2 (forex, commodities,
+     indices) spans 2+2+2 -- so both rows fill edge to edge. */
+  .asset-grid{display:grid; grid-template-columns:repeat(6, 1fr); gap:1px; background:var(--border-soft); border:1px solid var(--border-soft);}
+  .asset-card{background:var(--bg-alt); padding:26px 22px; grid-column:span 3;}
+  .asset-card:nth-child(3), .asset-card:nth-child(4), .asset-card:nth-child(5){grid-column:span 2;}
   .asset-card .tag{font-family:"IBM Plex Mono"; font-size:11px; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:10px;}
   .asset-card h3{font-size:17px; margin:0 0 8px; font-weight:600;}
   .asset-card p{font-size:14px; color:var(--text-dim); margin:0; line-height:1.55;}
-  @media (max-width:900px){ .asset-grid{grid-template-columns:1fr 1fr;} }
-  @media (max-width:560px){ .asset-grid{grid-template-columns:1fr;} }
+  @media (max-width:900px){
+    .asset-grid{grid-template-columns:1fr 1fr;}
+    .asset-card{grid-column:span 1;}
+    .asset-card:nth-child(3), .asset-card:nth-child(4), .asset-card:nth-child(5){grid-column:span 1;}
+    .asset-card:nth-child(5){grid-column:1 / -1;}
+  }
+  @media (max-width:560px){
+    .asset-grid{grid-template-columns:1fr;}
+    .asset-card, .asset-card:nth-child(3), .asset-card:nth-child(4), .asset-card:nth-child(5){grid-column:span 1;}
+  }
 
   /* ---------- Risk list ---------- */
   .risk-list{display:flex; flex-direction:column;}
@@ -587,6 +602,7 @@
             <button class="td-chip" id="tdChipCrypto" type="button" data-i18n="how.demo2_chip_crypto">Crypto</button>
             <button class="td-chip" id="tdChipForex" type="button" data-i18n="how.demo2_chip_forex">Forex</button>
             <button class="td-chip" id="tdChipCommodities" type="button" data-i18n="how.demo2_chip_commodities">Commodities</button>
+            <button class="td-chip" id="tdChipIndices" type="button" data-i18n="how.demo2_chip_indices">Indices</button>
           </div>
           <button class="bd-save-btn" id="tdSaveBtn" type="button" data-i18n="how.demo2_save">Save settings</button>
           <div class="bd-success" id="tdSavedMsg" data-i18n="how.demo2_saved">Settings saved.</div>
@@ -638,17 +654,17 @@
       </div>
       <div class="asset-card">
         <div class="tag" data-i18n="assets.forex_tag">Forex</div>
-        <h3 data-i18n="assets.forex_h">eToro demo, MT4/5</h3>
+        <h3 data-i18n="assets.forex_h">eToro demo/live, MT4/5</h3>
         <p data-i18n="assets.forex_p">Leverage and stop-loss rate handled per broker rules for currency pairs.</p>
       </div>
       <div class="asset-card">
         <div class="tag" data-i18n="assets.commodities_tag">Commodities</div>
-        <h3 data-i18n="assets.commodities_h">eToro demo, MT4/5</h3>
+        <h3 data-i18n="assets.commodities_h">eToro demo/live, MT4/5</h3>
         <p data-i18n="assets.commodities_p">Gold, oil and other CFD instruments alongside your forex positions.</p>
       </div>
       <div class="asset-card">
         <div class="tag" data-i18n="assets.indices_tag">Indices</div>
-        <h3 data-i18n="assets.indices_h">eToro demo, MT4/5</h3>
+        <h3 data-i18n="assets.indices_h">eToro demo/live, MT4/5</h3>
         <p data-i18n="assets.indices_p">Major stock indices like the S&amp;P 500 and Nasdaq 100, traded as CFDs the same way as forex and commodities.</p>
       </div>
     </div>
@@ -1010,6 +1026,7 @@ en: {
 "how.demo2_chip_crypto":"Crypto",
 "how.demo2_chip_forex":"Forex",
 "how.demo2_chip_commodities":"Commodities",
+"how.demo2_chip_indices":"Indices",
 "how.demo2_save":"Save settings",
 "how.demo2_saved":"Settings saved.",
 "how.demo2_preview_button":"Preview AI",
@@ -1028,13 +1045,13 @@ en: {
 "assets.crypto_h":"Binance testnet, Kraken, Luno",
 "assets.crypto_p":"Wallet-balance-based position sizing, not just this dashboard's own trade log.",
 "assets.forex_tag":"Forex",
-"assets.forex_h":"eToro demo, MT4/5",
+"assets.forex_h":"eToro demo/live, MT4/5",
 "assets.forex_p":"Leverage and stop-loss rate handled per broker rules for currency pairs.",
 "assets.commodities_tag":"Commodities",
-"assets.commodities_h":"eToro demo, MT4/5",
+"assets.commodities_h":"eToro demo/live, MT4/5",
 "assets.commodities_p":"Gold, oil and other CFD instruments alongside your forex positions.",
 "assets.indices_tag":"Indices",
-"assets.indices_h":"eToro demo, MT4/5",
+"assets.indices_h":"eToro demo/live, MT4/5",
 "assets.indices_p":"Major stock indices like the S&P 500 and Nasdaq 100, traded as CFDs the same way as forex and commodities.",
 "risk.title":"Risk management runs in the background",
 "risk.sub":"Protection that applies once a position is open, not just at entry.",
@@ -1133,6 +1150,7 @@ es: {
 "how.demo2_chip_crypto":"Cripto",
 "how.demo2_chip_forex":"Forex",
 "how.demo2_chip_commodities":"Materias primas",
+"how.demo2_chip_indices":"Índices",
 "how.demo2_save":"Guardar ajustes",
 "how.demo2_saved":"Ajustes guardados.",
 "how.demo2_preview_button":"Previsualizar IA",
@@ -1151,13 +1169,13 @@ es: {
 "assets.crypto_h":"Binance testnet, Kraken, Luno",
 "assets.crypto_p":"Dimensionamiento de posición basado en el saldo real de la billetera, no solo en el registro de operaciones de este panel.",
 "assets.forex_tag":"Forex",
-"assets.forex_h":"Demo de eToro, MT4/5",
+"assets.forex_h":"Demo/en vivo de eToro, MT4/5",
 "assets.forex_p":"El apalancamiento y la tasa de stop-loss se gestionan según las reglas del bróker para pares de divisas.",
 "assets.commodities_tag":"Materias primas",
-"assets.commodities_h":"Demo de eToro, MT4/5",
+"assets.commodities_h":"Demo/en vivo de eToro, MT4/5",
 "assets.commodities_p":"Oro, petróleo y otros instrumentos CFD junto a tus posiciones de forex.",
 "assets.indices_tag":"Índices",
-"assets.indices_h":"Demo de eToro, MT4/5",
+"assets.indices_h":"Demo/en vivo de eToro, MT4/5",
 "assets.indices_p":"Índices bursátiles importantes como el S&P 500 y el Nasdaq 100, negociados como CFD igual que el forex y las materias primas.",
 "risk.title":"La gestión de riesgo funciona en segundo plano",
 "risk.sub":"Protección que se aplica una vez que una posición está abierta, no solo al entrar.",
@@ -1256,6 +1274,7 @@ pt: {
 "how.demo2_chip_crypto":"Cripto",
 "how.demo2_chip_forex":"Forex",
 "how.demo2_chip_commodities":"Commodities",
+"how.demo2_chip_indices":"Índices",
 "how.demo2_save":"Salvar configurações",
 "how.demo2_saved":"Configurações salvas.",
 "how.demo2_preview_button":"Visualizar IA",
@@ -1274,13 +1293,13 @@ pt: {
 "assets.crypto_h":"Binance testnet, Kraken, Luno",
 "assets.crypto_p":"Dimensionamento de posição com base no saldo real da carteira, não apenas no histórico de operações deste painel.",
 "assets.forex_tag":"Forex",
-"assets.forex_h":"Demo da eToro, MT4/5",
+"assets.forex_h":"Demo/ao vivo da eToro, MT4/5",
 "assets.forex_p":"Alavancagem e taxa de stop-loss tratadas conforme as regras da corretora para pares de moedas.",
 "assets.commodities_tag":"Commodities",
-"assets.commodities_h":"Demo da eToro, MT4/5",
+"assets.commodities_h":"Demo/ao vivo da eToro, MT4/5",
 "assets.commodities_p":"Ouro, petróleo e outros instrumentos CFD junto com suas posições de forex.",
 "assets.indices_tag":"Índices",
-"assets.indices_h":"Demo da eToro, MT4/5",
+"assets.indices_h":"Demo/ao vivo da eToro, MT4/5",
 "assets.indices_p":"Principais índices de ações, como o S&P 500 e o Nasdaq 100, negociados como CFDs da mesma forma que forex e commodities.",
 "risk.title":"A gestão de risco funciona em segundo plano",
 "risk.sub":"Proteção aplicada assim que uma posição é aberta, não apenas na entrada.",
@@ -1379,6 +1398,7 @@ fr: {
 "how.demo2_chip_crypto":"Crypto",
 "how.demo2_chip_forex":"Forex",
 "how.demo2_chip_commodities":"Matières premières",
+"how.demo2_chip_indices":"Indices",
 "how.demo2_save":"Enregistrer les paramètres",
 "how.demo2_saved":"Paramètres enregistrés.",
 "how.demo2_preview_button":"Prévisualiser l'IA",
@@ -1397,13 +1417,13 @@ fr: {
 "assets.crypto_h":"Testnet Binance, Kraken, Luno",
 "assets.crypto_p":"Dimensionnement des positions basé sur le solde réel du portefeuille, pas seulement sur le journal des opérations de ce tableau de bord.",
 "assets.forex_tag":"Forex",
-"assets.forex_h":"Démo eToro, MT4/5",
+"assets.forex_h":"Démo/en direct eToro, MT4/5",
 "assets.forex_p":"Effet de levier et taux de stop-loss gérés selon les règles du courtier pour les paires de devises.",
 "assets.commodities_tag":"Matières premières",
-"assets.commodities_h":"Démo eToro, MT4/5",
+"assets.commodities_h":"Démo/en direct eToro, MT4/5",
 "assets.commodities_p":"Or, pétrole et autres instruments CFD aux côtés de vos positions de change.",
 "assets.indices_tag":"Indices",
-"assets.indices_h":"Démo eToro, MT4/5",
+"assets.indices_h":"Démo/en direct eToro, MT4/5",
 "assets.indices_p":"Grands indices boursiers comme le S&P 500 et le Nasdaq 100, négociés en CFD comme le forex et les matières premières.",
 "risk.title":"La gestion des risques fonctionne en arrière-plan",
 "risk.sub":"Une protection qui s'applique une fois la position ouverte, pas seulement à l'entrée.",
@@ -1502,6 +1522,7 @@ de: {
 "how.demo2_chip_crypto":"Krypto",
 "how.demo2_chip_forex":"Forex",
 "how.demo2_chip_commodities":"Rohstoffe",
+"how.demo2_chip_indices":"Indizes",
 "how.demo2_save":"Einstellungen speichern",
 "how.demo2_saved":"Einstellungen gespeichert.",
 "how.demo2_preview_button":"KI-Vorschau",
@@ -1520,13 +1541,13 @@ de: {
 "assets.crypto_h":"Binance Testnet, Kraken, Luno",
 "assets.crypto_p":"Positionsgrößenbestimmung basierend auf dem tatsächlichen Wallet-Guthaben, nicht nur dem eigenen Trade-Log dieses Dashboards.",
 "assets.forex_tag":"Forex",
-"assets.forex_h":"eToro-Demo, MT4/5",
+"assets.forex_h":"eToro-Demo/Live, MT4/5",
 "assets.forex_p":"Hebel und Stop-Loss-Rate werden gemäß den Broker-Regeln für Währungspaare gehandhabt.",
 "assets.commodities_tag":"Rohstoffe",
-"assets.commodities_h":"eToro-Demo, MT4/5",
+"assets.commodities_h":"eToro-Demo/Live, MT4/5",
 "assets.commodities_p":"Gold, Öl und andere CFD-Instrumente neben Ihren Forex-Positionen.",
 "assets.indices_tag":"Indizes",
-"assets.indices_h":"eToro-Demo, MT4/5",
+"assets.indices_h":"eToro-Demo/Live, MT4/5",
 "assets.indices_p":"Wichtige Aktienindizes wie der S&P 500 und der Nasdaq 100, gehandelt als CFDs genau wie Forex und Rohstoffe.",
 "risk.title":"Das Risikomanagement läuft im Hintergrund",
 "risk.sub":"Schutz, der gilt, sobald eine Position offen ist, nicht nur beim Einstieg.",
@@ -1625,6 +1646,7 @@ zh: {
 "how.demo2_chip_crypto":"加密货币",
 "how.demo2_chip_forex":"外汇",
 "how.demo2_chip_commodities":"大宗商品",
+"how.demo2_chip_indices":"指数",
 "how.demo2_save":"保存设置",
 "how.demo2_saved":"设置已保存。",
 "how.demo2_preview_button":"AI 预览",
@@ -1643,13 +1665,13 @@ zh: {
 "assets.crypto_h":"Binance 测试网、Kraken、Luno",
 "assets.crypto_p":"根据钱包实际余额确定仓位大小,而不仅仅依据本仪表盘自身的交易记录。",
 "assets.forex_tag":"外汇",
-"assets.forex_h":"eToro 演示账户, MT4/5",
+"assets.forex_h":"eToro 演示/实盘账户, MT4/5",
 "assets.forex_p":"货币对的杠杆和止损比例按券商规则处理。",
 "assets.commodities_tag":"大宗商品",
-"assets.commodities_h":"eToro 演示账户, MT4/5",
+"assets.commodities_h":"eToro 演示/实盘账户, MT4/5",
 "assets.commodities_p":"黄金、原油等差价合约(CFD)工具与您的外汇仓位并列展示。",
 "assets.indices_tag":"指数",
-"assets.indices_h":"eToro 演示账户, MT4/5",
+"assets.indices_h":"eToro 演示/实盘账户, MT4/5",
 "assets.indices_p":"标普500、纳斯达克100等主要股指,以差价合约(CFD)方式交易,与外汇和大宗商品相同。",
 "risk.title":"风险管理在后台持续运行",
 "risk.sub":"从建仓那一刻起持续生效的保护机制,而不仅仅在入场时起作用。",
@@ -1748,6 +1770,7 @@ id: {
 "how.demo2_chip_crypto":"Kripto",
 "how.demo2_chip_forex":"Forex",
 "how.demo2_chip_commodities":"Komoditas",
+"how.demo2_chip_indices":"Indeks",
 "how.demo2_save":"Simpan pengaturan",
 "how.demo2_saved":"Pengaturan disimpan.",
 "how.demo2_preview_button":"Pratinjau AI",
@@ -1766,13 +1789,13 @@ id: {
 "assets.crypto_h":"Binance testnet, Kraken, Luno",
 "assets.crypto_p":"Ukuran posisi berbasis saldo dompet, bukan hanya log transaksi dasbor ini sendiri.",
 "assets.forex_tag":"Forex",
-"assets.forex_h":"Demo eToro, MT4/5",
+"assets.forex_h":"Demo/Live eToro, MT4/5",
 "assets.forex_p":"Leverage dan rasio stop-loss ditangani sesuai aturan broker untuk pasangan mata uang.",
 "assets.commodities_tag":"Komoditas",
-"assets.commodities_h":"Demo eToro, MT4/5",
+"assets.commodities_h":"Demo/Live eToro, MT4/5",
 "assets.commodities_p":"Emas, minyak, dan instrumen CFD lainnya bersama posisi forex Anda.",
 "assets.indices_tag":"Indeks",
-"assets.indices_h":"Demo eToro, MT4/5",
+"assets.indices_h":"Demo/Live eToro, MT4/5",
 "assets.indices_p":"Indeks saham utama seperti S&P 500 dan Nasdaq 100, diperdagangkan sebagai CFD sama seperti forex dan komoditas.",
 "risk.title":"Manajemen risiko berjalan di latar belakang",
 "risk.sub":"Perlindungan yang berlaku begitu posisi terbuka, tidak hanya saat masuk.",
@@ -1871,6 +1894,7 @@ ms: {
 "how.demo2_chip_crypto":"Kripto",
 "how.demo2_chip_forex":"Forex",
 "how.demo2_chip_commodities":"Komoditi",
+"how.demo2_chip_indices":"Indeks",
 "how.demo2_save":"Simpan tetapan",
 "how.demo2_saved":"Tetapan disimpan.",
 "how.demo2_preview_button":"Pratonton AI",
@@ -1889,13 +1913,13 @@ ms: {
 "assets.crypto_h":"Binance testnet, Kraken, Luno",
 "assets.crypto_p":"Saiz kedudukan berdasarkan baki dompet, bukan sekadar log dagangan papan pemuka ini sendiri.",
 "assets.forex_tag":"Forex",
-"assets.forex_h":"Demo eToro, MT4/5",
+"assets.forex_h":"Demo/Langsung eToro, MT4/5",
 "assets.forex_p":"Leveraj dan kadar stop-loss dikendalikan mengikut peraturan broker untuk pasangan mata wang.",
 "assets.commodities_tag":"Komoditi",
-"assets.commodities_h":"Demo eToro, MT4/5",
+"assets.commodities_h":"Demo/Langsung eToro, MT4/5",
 "assets.commodities_p":"Emas, minyak dan instrumen CFD lain bersama kedudukan forex anda.",
 "assets.indices_tag":"Indeks",
-"assets.indices_h":"Demo eToro, MT4/5",
+"assets.indices_h":"Demo/Langsung eToro, MT4/5",
 "assets.indices_p":"Indeks saham utama seperti S&P 500 dan Nasdaq 100, didagangkan sebagai CFD sama seperti forex dan komoditi.",
 "risk.title":"Pengurusan risiko berjalan di latar belakang",
 "risk.sub":"Perlindungan yang terpakai sebaik sahaja kedudukan dibuka, bukan hanya semasa masuk.",
@@ -1994,6 +2018,7 @@ ms: {
 "how.demo2_chip_crypto":"加密貨幣",
 "how.demo2_chip_forex":"外匯",
 "how.demo2_chip_commodities":"大宗商品",
+"how.demo2_chip_indices":"指數",
 "how.demo2_save":"儲存設定",
 "how.demo2_saved":"設定已儲存。",
 "how.demo2_preview_button":"AI 預覽",
@@ -2012,13 +2037,13 @@ ms: {
 "assets.crypto_h":"Binance 測試網、Kraken、Luno",
 "assets.crypto_p":"根據錢包實際餘額決定倉位大小,而不僅僅依據本儀表板自身的交易記錄。",
 "assets.forex_tag":"外匯",
-"assets.forex_h":"eToro 示範帳戶, MT4/5",
+"assets.forex_h":"eToro 示範/實盤帳戶, MT4/5",
 "assets.forex_p":"貨幣對的槓桿和停損比例按券商規則處理。",
 "assets.commodities_tag":"大宗商品",
-"assets.commodities_h":"eToro 示範帳戶, MT4/5",
+"assets.commodities_h":"eToro 示範/實盤帳戶, MT4/5",
 "assets.commodities_p":"黃金、原油等差價合約(CFD)工具與您的外匯倉位並列顯示。",
 "assets.indices_tag":"指數",
-"assets.indices_h":"eToro 示範帳戶, MT4/5",
+"assets.indices_h":"eToro 示範/實盤帳戶, MT4/5",
 "assets.indices_p":"標普500、那斯達克100等主要股指,以差價合約(CFD)方式交易,與外匯和大宗商品相同。",
 "risk.title":"風險管理在背景持續運行",
 "risk.sub":"從建倉那一刻起持續生效的保護機制,而不僅僅在進場時起作用。",
@@ -2117,6 +2142,7 @@ th: {
 "how.demo2_chip_crypto":"คริปโต",
 "how.demo2_chip_forex":"ฟอเร็กซ์",
 "how.demo2_chip_commodities":"สินค้าโภคภัณฑ์",
+"how.demo2_chip_indices":"ดัชนี",
 "how.demo2_save":"บันทึกการตั้งค่า",
 "how.demo2_saved":"บันทึกการตั้งค่าแล้ว",
 "how.demo2_preview_button":"ดูตัวอย่าง AI",
@@ -2135,13 +2161,13 @@ th: {
 "assets.crypto_h":"Binance testnet, Kraken, Luno",
 "assets.crypto_p":"กำหนดขนาดโพซิชันตามยอดคงเหลือในกระเป๋าเงินจริง ไม่ใช่แค่บันทึกการซื้อขายของแดชบอร์ดนี้เอง",
 "assets.forex_tag":"ฟอเร็กซ์",
-"assets.forex_h":"eToro demo, MT4/5",
+"assets.forex_h":"eToro เดโม/จริง, MT4/5",
 "assets.forex_p":"เลเวอเรจและอัตรา stop-loss จัดการตามกฎของโบรกเกอร์สำหรับคู่สกุลเงิน",
 "assets.commodities_tag":"สินค้าโภคภัณฑ์",
-"assets.commodities_h":"eToro demo, MT4/5",
+"assets.commodities_h":"eToro เดโม/จริง, MT4/5",
 "assets.commodities_p":"ทองคำ น้ำมัน และเครื่องมือ CFD อื่นๆ ควบคู่ไปกับโพซิชันฟอเร็กซ์ของคุณ",
 "assets.indices_tag":"ดัชนี",
-"assets.indices_h":"eToro demo, MT4/5",
+"assets.indices_h":"eToro เดโม/จริง, MT4/5",
 "assets.indices_p":"ดัชนีหุ้นหลัก เช่น S&P 500 และ Nasdaq 100 ซื้อขายในรูปแบบ CFD เช่นเดียวกับฟอเร็กซ์และสินค้าโภคภัณฑ์",
 "risk.title":"การบริหารความเสี่ยงทำงานอยู่เบื้องหลัง",
 "risk.sub":"การป้องกันที่มีผลทันทีที่เปิดโพซิชัน ไม่ใช่แค่ตอนเข้าซื้อเท่านั้น",
@@ -2240,6 +2266,7 @@ ja: {
 "how.demo2_chip_crypto":"暗号資産",
 "how.demo2_chip_forex":"外国為替",
 "how.demo2_chip_commodities":"コモディティ",
+"how.demo2_chip_indices":"指数",
 "how.demo2_save":"設定を保存",
 "how.demo2_saved":"設定を保存しました。",
 "how.demo2_preview_button":"AIプレビュー",
@@ -2258,13 +2285,13 @@ ja: {
 "assets.crypto_h":"Binanceテストネット、Kraken、Luno",
 "assets.crypto_p":"このダッシュボード自体の取引ログだけでなく、ウォレットの実際の残高に基づいたポジションサイジング。",
 "assets.forex_tag":"外国為替",
-"assets.forex_h":"eToroデモ、MT4/5",
+"assets.forex_h":"eToroデモ/ライブ、MT4/5",
 "assets.forex_p":"通貨ペアのレバレッジとストップロス率はブローカーのルールに従って処理されます。",
 "assets.commodities_tag":"コモディティ",
-"assets.commodities_h":"eToroデモ、MT4/5",
+"assets.commodities_h":"eToroデモ/ライブ、MT4/5",
 "assets.commodities_p":"金、原油、その他のCFD商品が外国為替ポジションと並んで表示されます。",
 "assets.indices_tag":"指数",
-"assets.indices_h":"eToroデモ、MT4/5",
+"assets.indices_h":"eToroデモ/ライブ、MT4/5",
 "assets.indices_p":"S&P 500やナスダック100などの主要株価指数を、外国為替やコモディティと同様にCFDとして取引します。",
 "risk.title":"リスク管理はバックグラウンドで動作",
 "risk.sub":"エントリー時だけでなく、ポジションが開いた時点から適用される保護。",
@@ -2363,6 +2390,7 @@ ko: {
 "how.demo2_chip_crypto":"암호화폐",
 "how.demo2_chip_forex":"외환",
 "how.demo2_chip_commodities":"원자재",
+"how.demo2_chip_indices":"지수",
 "how.demo2_save":"설정 저장",
 "how.demo2_saved":"설정이 저장되었습니다.",
 "how.demo2_preview_button":"AI 미리보기",
@@ -2381,13 +2409,13 @@ ko: {
 "assets.crypto_h":"Binance 테스트넷, Kraken, Luno",
 "assets.crypto_p":"이 대시보드 자체의 거래 기록이 아닌, 실제 지갑 잔액을 기반으로 한 포지션 사이징.",
 "assets.forex_tag":"외환",
-"assets.forex_h":"eToro 데모, MT4/5",
+"assets.forex_h":"eToro 데모/라이브, MT4/5",
 "assets.forex_p":"통화쌍에 대한 레버리지와 손절매 비율은 브로커 규칙에 따라 처리됩니다.",
 "assets.commodities_tag":"원자재",
-"assets.commodities_h":"eToro 데모, MT4/5",
+"assets.commodities_h":"eToro 데모/라이브, MT4/5",
 "assets.commodities_p":"금, 원유 등 CFD 상품이 외환 포지션과 함께 표시됩니다.",
 "assets.indices_tag":"지수",
-"assets.indices_h":"eToro 데모, MT4/5",
+"assets.indices_h":"eToro 데모/라이브, MT4/5",
 "assets.indices_p":"S&P 500, 나스닥 100 등 주요 주가지수를 외환 및 원자재와 동일하게 CFD로 거래합니다.",
 "risk.title":"리스크 관리는 백그라운드에서 작동합니다",
 "risk.sub":"진입 시점뿐 아니라 포지션이 열려 있는 동안 계속 적용되는 보호 장치입니다.",
@@ -2592,6 +2620,31 @@ ko: {
 
   var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // FIX (reported by user via screen recording, 2026-09-18): this panel's
+  // own height used to change as the demo opened/closed (max-height 0 ->
+  // 280px on .bd-body), which shifted every section below it up and down
+  // in the page while the loop played -- most noticeable as a jumpy scroll
+  // for anyone reading the page while this demo was on screen. Fix is to
+  // measure the panel's fully-expanded height once up front (instantly,
+  // with transitions disabled so we read the end state, not a mid-
+  // transition value) and pin that as min-height, so the collapse/expand
+  // happens inside a reserved box instead of pushing the rest of the page.
+  (function reserveHeight() {
+    var prevPanelTransition = panel.style.transition;
+    var prevBodyTransition = body.style.transition;
+    panel.style.transition = "none";
+    body.style.transition = "none";
+    panel.classList.add("open", "connected");
+    success.classList.add("show");
+    void panel.offsetHeight; // force layout flush before measuring
+    panel.style.minHeight = panel.scrollHeight + "px";
+    panel.classList.remove("open", "connected");
+    success.classList.remove("show");
+    void panel.offsetHeight;
+    panel.style.transition = prevPanelTransition;
+    body.style.transition = prevBodyTransition;
+  })();
+
   function moveCursorTo(el, xOffset, yOffset) {
     var panelRect = panel.getBoundingClientRect();
     var elRect = el.getBoundingClientRect();
@@ -2599,6 +2652,23 @@ ko: {
     var y = elRect.top - panelRect.top + (yOffset !== undefined ? yOffset : elRect.height / 2);
     cursor.style.left = x + "px";
     cursor.style.top = y + "px";
+  }
+
+  // FIX (same 2026-09-18 report): the animation used to keep looping
+  // forever once started, even after the user scrolled far past it. That
+  // wasted CPU in the background and meant it could be mid-sequence,
+  // rather than freshly reset, whenever someone scrolled back to it.
+  // `timers` collects every pending setTimeout/setInterval for this demo
+  // so they can all be cancelled in one shot when it leaves the viewport.
+  var timers = [];
+  function setT(fn, delay) {
+    var id = setTimeout(fn, delay);
+    timers.push(id);
+    return id;
+  }
+  function clearTimers() {
+    timers.forEach(function (id) { clearTimeout(id); clearInterval(id); });
+    timers = [];
   }
 
   function typeInto(el, char, count, interval, done) {
@@ -2611,6 +2681,7 @@ ko: {
         if (done) done();
       }
     }, interval);
+    timers.push(timer);
   }
 
   function reset() {
@@ -2638,68 +2709,72 @@ ko: {
     connectedText = table["how.demo_connected"] || base["how.demo_connected"] || "Connected";
   }
 
+  var visible = false;
+  var running = false;
+
   function runSequence() {
+    running = true;
     getStatusStrings();
     reset();
     headStatus.textContent = notConnectedText;
 
     var t = 400;
-    setTimeout(function () {
+    setT(function () {
       cursor.classList.add("visible");
       moveCursorTo(head, 20, 20);
     }, t);
 
     t += 700;
-    setTimeout(function () {
+    setT(function () {
       cursor.classList.add("click");
       panel.classList.add("open");
-      setTimeout(function () { cursor.classList.remove("click"); }, 450);
+      setT(function () { cursor.classList.remove("click"); }, 450);
     }, t);
 
     t += 900;
-    setTimeout(function () { moveCursorTo(keyInput, 16, 17); }, t);
+    setT(function () { moveCursorTo(keyInput, 16, 17); }, t);
 
     t += 550;
-    setTimeout(function () {
+    setT(function () {
       cursor.classList.add("click");
       keyInput.classList.add("focused");
-      setTimeout(function () { cursor.classList.remove("click"); }, 450);
+      setT(function () { cursor.classList.remove("click"); }, 450);
       typeInto(keyInput, String.fromCharCode(0x2022), 18, 55);
     }, t);
 
     t += 1450;
-    setTimeout(function () {
+    setT(function () {
       keyInput.classList.remove("focused");
       moveCursorTo(secretInput, 16, 17);
     }, t);
 
     t += 550;
-    setTimeout(function () {
+    setT(function () {
       cursor.classList.add("click");
       secretInput.classList.add("focused");
-      setTimeout(function () { cursor.classList.remove("click"); }, 450);
+      setT(function () { cursor.classList.remove("click"); }, 450);
       typeInto(secretInput, String.fromCharCode(0x2022), 26, 50);
     }, t);
 
     t += 1600;
-    setTimeout(function () {
+    setT(function () {
       secretInput.classList.remove("focused");
       moveCursorTo(saveBtn, saveBtn.offsetWidth / 2, saveBtn.offsetHeight / 2);
     }, t);
 
     t += 550;
-    setTimeout(function () {
+    setT(function () {
       cursor.classList.add("click");
       saveBtn.classList.add("pressed");
       spinner.classList.add("show");
-      setTimeout(function () {
+      setT(function () {
         cursor.classList.remove("click");
         saveBtn.classList.remove("pressed");
       }, 200);
     }, t);
 
     t += 1300;
-    setTimeout(function () {
+    setT(function () {
       spinner.classList.remove("show");
       success.classList.add("show");
       panel.classList.add("connected");
@@ -2708,16 +2783,25 @@ ko: {
     }, t);
 
     t += 2600;
-    if (reduceMotion) return; // hold on the connected end state, no loop
-    setTimeout(runSequence, t);
+    if (reduceMotion) { running = false; return; } // hold on the connected end state, no loop
+    setT(function () {
+      // FIX 2026-09-18: only keep looping while still on screen. If the
+      // visitor scrolled away mid-loop, stop here instead of continuing
+      // to animate off-screen forever -- the IntersectionObserver below
+      // will start a fresh run the next time this scrolls back into view.
+      if (visible) { runSequence(); } else { running = false; }
+    }, t);
   }
 
-  var started = false;
   var io = new IntersectionObserver(function (entries) {
     entries.forEach(function (entry) {
-      if (entry.isIntersecting && !started) {
-        started = true;
+      visible = entry.isIntersecting;
+      if (visible && !running) {
         runSequence();
+      } else if (!visible && running) {
+        clearTimers();
+        reset();
+        running = false;
       }
     });
   }, { threshold: 0.3 });
@@ -2763,6 +2847,56 @@ ko: {
 
   var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // FIX (reported by user via screen recording, 2026-09-18): same issue as
+  // the broker-connect demo above -- this panel's height used to change as
+  // results/warning/confirm rows appeared and disappeared (several
+  // max-height:0 -> Npx transitions), shifting everything below it on the
+  // page while the loop played. Measure the fully-expanded height once up
+  // front (transitions off, so we read the end state) and pin it as
+  // min-height so the whole sequence plays inside a reserved box.
+  (function reserveHeight() {
+    var prevPanelTransition = panel.style.transition;
+    var prevResultsTransition = results.style.transition;
+    var prevConfirmTransition = confirmRow.style.transition;
+    panel.style.transition = "none";
+    results.style.transition = "none";
+    confirmRow.style.transition = "none";
+    results.classList.add("show");
+    row1.classList.add("show");
+    row2.classList.add("show");
+    warn.classList.add("show");
+    confirmRow.classList.add("show");
+    savedMsg.classList.add("show");
+    executedMsg.classList.add("show");
+    void panel.offsetHeight; // force layout flush before measuring
+    panel.style.minHeight = panel.scrollHeight + "px";
+    results.classList.remove("show");
+    row1.classList.remove("show");
+    row2.classList.remove("show");
+    warn.classList.remove("show");
+    confirmRow.classList.remove("show");
+    savedMsg.classList.remove("show");
+    executedMsg.classList.remove("show");
+    void panel.offsetHeight;
+    panel.style.transition = prevPanelTransition;
+    results.style.transition = prevResultsTransition;
+    confirmRow.style.transition = prevConfirmTransition;
+  })();
+
+  // Same background-loop fix as the broker-connect demo: track pending
+  // timers so they can all be cancelled when this scrolls out of view,
+  // instead of animating forever off-screen.
+  var timers = [];
+  function setT(fn, delay) {
+    var id = setTimeout(fn, delay);
+    timers.push(id);
+    return id;
+  }
+  function clearTimers() {
+    timers.forEach(clearTimeout);
+    timers = [];
+  }
+
   function moveCursorTo(el, xOffset, yOffset) {
     var panelRect = panel.getBoundingClientRect();
     var elRect = el.getBoundingClientRect();
@@ -2775,7 +2909,7 @@ ko: {
   function clickPulse(el, holdClass) {
     cursor.classList.add("click");
     if (holdClass) el.classList.add(holdClass);
-    setTimeout(function () {
+    setT(function () {
       cursor.classList.remove("click");
       if (holdClass) el.classList.remove(holdClass);
     }, 200);
@@ -2799,95 +2933,106 @@ ko: {
     cursor.classList.remove("visible", "click");
   }
 
+  var visible = false;
+  var running = false;
+
   function runSequence() {
+    running = true;
     reset();
 
     var t = 400;
-    setTimeout(function () {
+    setT(function () {
       cursor.classList.add("visible");
       moveCursorTo(chipStocks, chipStocks.offsetWidth / 2, chipStocks.offsetHeight / 2);
     }, t);
 
     t += 600;
-    setTimeout(function () {
+    setT(function () {
       clickPulse(chipStocks);
       chipStocks.classList.add("active");
     }, t);
 
     t += 700;
-    setTimeout(function () { moveCursorTo(chipCrypto, chipCrypto.offsetWidth / 2, chipCrypto.offsetHeight / 2); }, t);
+    setT(function () { moveCursorTo(chipCrypto, chipCrypto.offsetWidth / 2, chipCrypto.offsetHeight / 2); }, t);
 
     t += 550;
-    setTimeout(function () {
+    setT(function () {
       clickPulse(chipCrypto);
       chipCrypto.classList.add("active");
     }, t);
 
     t += 700;
-    setTimeout(function () { moveCursorTo(saveBtn, saveBtn.offsetWidth / 2, saveBtn.offsetHeight / 2); }, t);
+    setT(function () { moveCursorTo(saveBtn, saveBtn.offsetWidth / 2, saveBtn.offsetHeight / 2); }, t);
 
     t += 550;
-    setTimeout(function () {
+    setT(function () {
       clickPulse(saveBtn, "pressed");
       savedMsg.classList.add("show");
     }, t);
 
     t += 900;
-    setTimeout(function () { moveCursorTo(previewBtn, previewBtn.offsetWidth / 2, previewBtn.offsetHeight / 2); }, t);
+    setT(function () { moveCursorTo(previewBtn, previewBtn.offsetWidth / 2, previewBtn.offsetHeight / 2); }, t);
 
     t += 550;
-    setTimeout(function () {
+    setT(function () {
       clickPulse(previewBtn, "pressed");
       scanSpinner.classList.add("show");
     }, t);
 
     t += 1300;
-    setTimeout(function () {
+    setT(function () {
       scanSpinner.classList.remove("show");
       results.classList.add("show");
       row1.classList.add("show");
-      setTimeout(function () { row2.classList.add("show"); }, 150);
+      setT(function () { row2.classList.add("show"); }, 150);
       warn.classList.add("show");
       confirmRow.classList.add("show");
     }, t);
 
     t += 900;
-    setTimeout(function () { moveCursorTo(checkbox, 8, 8); }, t);
+    setT(function () { moveCursorTo(checkbox, 8, 8); }, t);
 
     t += 550;
-    setTimeout(function () {
+    setT(function () {
       clickPulse(checkbox);
       checkbox.classList.add("checked");
       executeBtn.classList.remove("disabled");
     }, t);
 
     t += 700;
-    setTimeout(function () { moveCursorTo(executeBtn, executeBtn.offsetWidth / 2, executeBtn.offsetHeight / 2); }, t);
+    setT(function () { moveCursorTo(executeBtn, executeBtn.offsetWidth / 2, executeBtn.offsetHeight / 2); }, t);
 
     t += 550;
-    setTimeout(function () {
+    setT(function () {
       clickPulse(executeBtn, "pressed");
       placingSpinner.classList.add("show");
     }, t);
 
     t += 1300;
-    setTimeout(function () {
+    setT(function () {
       placingSpinner.classList.remove("show");
       executedMsg.classList.add("show");
       cursor.classList.remove("visible");
     }, t);
 
     t += 2600;
-    if (reduceMotion) return; // hold on the executed end state, no loop
-    setTimeout(runSequence, t);
+    if (reduceMotion) { running = false; return; } // hold on the executed end state, no loop
+    setT(function () {
+      // FIX 2026-09-18: don't keep looping once scrolled off-screen; the
+      // IntersectionObserver below restarts cleanly next time it's visible.
+      if (visible) { runSequence(); } else { running = false; }
+    }, t);
   }
 
-  var started = false;
   var io2 = new IntersectionObserver(function (entries) {
     entries.forEach(function (entry) {
-      if (entry.isIntersecting && !started) {
-        started = true;
+      visible = entry.isIntersecting;
+      if (visible && !running) {
         runSequence();
+      } else if (!visible && running) {
+        clearTimers();
+        reset();
+        running = false;
       }
     });
   }, { threshold: 0.3 });

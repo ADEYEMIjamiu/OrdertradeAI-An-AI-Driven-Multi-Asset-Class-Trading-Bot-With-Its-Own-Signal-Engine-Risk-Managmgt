@@ -142,7 +142,7 @@ _EN = {
     "broker.success_connected": "Connected. Cash: \\${cash}, equity: \\${equity}",
 
     # ---- MT4/MT5 bridge connection ----
-    "mt.expander_title": "MT4/MT5 (Forex/Commodities, alternative to eToro): {status}",
+    "mt.expander_title": "MT4/MT5 (Forex/Commodities/Indices, alternative to eToro): {status}",
     "mt.caption": "Connect a real MetaTrader 4 or 5 account from any supported broker (Exness, XM, Pepperstone, IC Markets, and dozens more), covering most retail forex brokers used outside the US/EU. Your login and password are encrypted the same way as every other broker connection here.",
     "mt.login_label": "Account login (number)",
     "mt.password_label": "Account password",
@@ -246,7 +246,7 @@ _EN = {
 
     # ---- AI Trading run screen ----
     "trading.header": "AI Trading",
-    "trading.caption": "Checks your existing positions for stop-loss/take-profit/max-hold-time exits, then runs the AI signal engine across your enabled asset classes (US Stocks via Alpaca, Crypto via Binance, Forex/Commodities via eToro or a connected MT4/MT5 account, whichever you've connected), sizes any approved BUY against your real connected-broker balance, and shows you exactly what it would do. Nothing is ever bought or sold without you clicking Execute separately below. Exit protection (stop-loss/take-profit/a hard max-hold-time, no partial profit-taking) currently covers US Stocks and Crypto only. An eToro or MT4/5 position relies on the fixed stop-loss/take-profit set on the broker side at trade-open, same as everywhere else in this project, just without this dashboard's own exit-protection pass checking on it in between visits.",
+    "trading.caption": "Checks your existing positions for stop-loss/take-profit/max-hold-time exits, then runs the AI signal engine across your enabled asset classes (US Stocks via Alpaca, Crypto via Binance, Forex/Commodities/Indices via eToro or a connected MT4/MT5 account, whichever you've connected), sizes any approved BUY against your real connected-broker balance, and shows you exactly what it would do. Nothing is ever bought or sold without you clicking Execute separately below. Exit protection (stop-loss/take-profit/a hard max-hold-time, no partial profit-taking) currently covers US Stocks and Crypto only. An eToro or MT4/5 position relies on the fixed stop-loss/take-profit set on the broker side at trade-open, same as everywhere else in this project, just without this dashboard's own exit-protection pass checking on it in between visits.",
     "trading.preview_button": "Preview AI Signals",
     "trading.warn_real_orders": "{count} would be placed with real (paper/testnet) orders on your connected broker account.",
     "trading.confirm_checkbox": "I understand this will place real paper/testnet orders on my connected broker account.",
@@ -535,7 +535,7 @@ _ES = {
     "broker.test_connection": "Probar conexión",
     "broker.success_connected": "Conectado. Efectivo: \\${cash}, patrimonio: \\${equity}",
 
-    "mt.expander_title": "MT4/MT5 (Forex/Materias primas, alternativa a eToro): {status}",
+    "mt.expander_title": "MT4/MT5 (Forex/Materias primas/Índices, alternativa a eToro): {status}",
     "mt.caption": "Conecta una cuenta real de MetaTrader 4 o 5 de cualquier bróker compatible (Exness, XM, Pepperstone, IC Markets y muchos más), cubriendo la mayoría de brókers de forex minoristas fuera de EE. UU./UE. Tu usuario y contraseña se encriptan igual que cualquier otra conexión de bróker aquí.",
     "mt.login_label": "Número de cuenta (login)",
     "mt.password_label": "Contraseña de la cuenta",
@@ -631,7 +631,7 @@ _ES = {
     "account.language_saved": "Idioma actualizado.",
 
     "trading.header": "Trading con IA",
-    "trading.caption": "Revisa tus posiciones existentes para detectar salidas por stop-loss/take-profit/tiempo máximo de retención, luego ejecuta el motor de señales de IA en tus clases de activos habilitadas (Acciones de EE. UU. vía Alpaca, Cripto vía Binance, Forex/Materias primas vía eToro o una cuenta MT4/MT5 conectada, la que tengas conectada), calcula el tamaño de cualquier COMPRA aprobada según el saldo real de tu bróker conectado, y te muestra exactamente qué haría. Nunca se compra ni se vende nada sin que hagas clic en Ejecutar por separado abajo. La protección de salida (stop-loss/take-profit/un tiempo máximo de retención fijo, sin toma de ganancias parcial) actualmente cubre solo Acciones de EE. UU. y Cripto. Una posición de eToro o MT4/5 depende del stop-loss/take-profit fijo establecido del lado del bróker al abrir la operación, igual que en el resto de este proyecto, solo que sin que este panel revise esa protección de salida entre visitas.",
+    "trading.caption": "Revisa tus posiciones existentes para detectar salidas por stop-loss/take-profit/tiempo máximo de retención, luego ejecuta el motor de señales de IA en tus clases de activos habilitadas (Acciones de EE. UU. vía Alpaca, Cripto vía Binance, Forex/Materias primas/Índices vía eToro o una cuenta MT4/MT5 conectada, la que tengas conectada), calcula el tamaño de cualquier COMPRA aprobada según el saldo real de tu bróker conectado, y te muestra exactamente qué haría. Nunca se compra ni se vende nada sin que hagas clic en Ejecutar por separado abajo. La protección de salida (stop-loss/take-profit/un tiempo máximo de retención fijo, sin toma de ganancias parcial) actualmente cubre solo Acciones de EE. UU. y Cripto. Una posición de eToro o MT4/5 depende del stop-loss/take-profit fijo establecido del lado del bróker al abrir la operación, igual que en el resto de este proyecto, solo que sin que este panel revise esa protección de salida entre visitas.",
     "trading.preview_button": "Previsualizar señales de IA",
     "trading.warn_real_orders": "{count} se colocarían como órdenes reales (paper/testnet) en tu cuenta de bróker conectada.",
     "trading.confirm_checkbox": "Entiendo que esto colocará órdenes reales de paper/testnet en mi cuenta de bróker conectada.",
@@ -910,7 +910,7 @@ _PT = {
     "broker.test_connection": "Testar conexão",
     "broker.success_connected": "Conectado. Caixa: \\${cash}, patrimônio: \\${equity}",
 
-    "mt.expander_title": "MT4/MT5 (Forex/Commodities, alternativa ao eToro): {status}",
+    "mt.expander_title": "MT4/MT5 (Forex/Commodities/Índices, alternativa ao eToro): {status}",
     "mt.caption": "Conecte uma conta real do MetaTrader 4 ou 5 de qualquer corretora compatível (Exness, XM, Pepperstone, IC Markets e muitas outras), cobrindo a maioria das corretoras de forex de varejo fora dos EUA/UE. Seu login e senha são criptografados da mesma forma que qualquer outra conexão de corretora aqui.",
     "mt.login_label": "Login da conta (número)",
     "mt.password_label": "Senha da conta",
@@ -1006,7 +1006,7 @@ _PT = {
     "account.language_saved": "Idioma atualizado.",
 
     "trading.header": "Negociação com IA",
-    "trading.caption": "Verifica suas posições existentes em busca de saídas por stop-loss/take-profit/tempo máximo de retenção, depois executa o mecanismo de sinais de IA nas suas classes de ativos habilitadas (Ações dos EUA via Alpaca, Cripto via Binance, Forex/Commodities via eToro ou uma conta MT4/MT5 conectada, a que você tiver conectado), dimensiona qualquer COMPRA aprovada com base no saldo real da sua corretora conectada e mostra exatamente o que faria. Nada é comprado ou vendido sem que você clique em Executar separadamente abaixo. A proteção de saída (stop-loss/take-profit/um tempo máximo de retenção fixo, sem realização parcial de lucros) atualmente cobre apenas Ações dos EUA e Cripto. Uma posição do eToro ou MT4/5 depende do stop-loss/take-profit fixo definido pela corretora na abertura da operação, assim como no restante deste projeto, apenas sem esta verificação de proteção de saída própria deste painel entre visitas.",
+    "trading.caption": "Verifica suas posições existentes em busca de saídas por stop-loss/take-profit/tempo máximo de retenção, depois executa o mecanismo de sinais de IA nas suas classes de ativos habilitadas (Ações dos EUA via Alpaca, Cripto via Binance, Forex/Commodities/Índices via eToro ou uma conta MT4/MT5 conectada, a que você tiver conectado), dimensiona qualquer COMPRA aprovada com base no saldo real da sua corretora conectada e mostra exatamente o que faria. Nada é comprado ou vendido sem que você clique em Executar separadamente abaixo. A proteção de saída (stop-loss/take-profit/um tempo máximo de retenção fixo, sem realização parcial de lucros) atualmente cobre apenas Ações dos EUA e Cripto. Uma posição do eToro ou MT4/5 depende do stop-loss/take-profit fixo definido pela corretora na abertura da operação, assim como no restante deste projeto, apenas sem esta verificação de proteção de saída própria deste painel entre visitas.",
     "trading.preview_button": "Pré-visualizar sinais de IA",
     "trading.warn_real_orders": "{count} seriam colocadas como ordens reais (paper/testnet) na sua conta de corretora conectada.",
     "trading.confirm_checkbox": "Entendo que isso colocará ordens reais de paper/testnet na minha conta de corretora conectada.",
@@ -1285,7 +1285,7 @@ _FR = {
     "broker.test_connection": "Tester la connexion",
     "broker.success_connected": "Connecté. Liquidités : {cash} \\$, capitaux propres : {equity} \\$",
 
-    "mt.expander_title": "MT4/MT5 (Forex/Matières premières, alternative à eToro) : {status}",
+    "mt.expander_title": "MT4/MT5 (Forex/Matières premières/Indices, alternative à eToro) : {status}",
     "mt.caption": "Connectez un vrai compte MetaTrader 4 ou 5 depuis n'importe quel courtier pris en charge (Exness, XM, Pepperstone, IC Markets et bien d'autres), couvrant la plupart des courtiers forex particuliers hors États-Unis/UE. Votre identifiant et votre mot de passe sont chiffrés de la même manière que toute autre connexion de courtier ici.",
     "mt.login_label": "Identifiant du compte (numéro)",
     "mt.password_label": "Mot de passe du compte",
@@ -1381,7 +1381,7 @@ _FR = {
     "account.language_saved": "Langue mise à jour.",
 
     "trading.header": "Trading IA",
-    "trading.caption": "Vérifie vos positions existantes pour détecter les sorties par stop-loss/take-profit/durée maximale de détention, puis exécute le moteur de signaux IA sur vos classes d'actifs activées (actions américaines via Alpaca, crypto via Binance, forex/matières premières via eToro ou un compte MT4/MT5 connecté, selon celui que vous avez connecté), dimensionne tout ACHAT approuvé en fonction du solde réel de votre courtier connecté, et vous montre exactement ce qu'il ferait. Rien n'est jamais acheté ni vendu sans que vous cliquiez séparément sur Exécuter ci-dessous. La protection de sortie (stop-loss/take-profit/une durée maximale de détention fixe, sans prise de bénéfices partielle) couvre actuellement uniquement les actions américaines et la crypto. Une position eToro ou MT4/5 dépend du stop-loss/take-profit fixe défini côté courtier à l'ouverture de la position, comme partout ailleurs dans ce projet, simplement sans que ce tableau de bord vérifie cette protection de sortie entre les visites.",
+    "trading.caption": "Vérifie vos positions existantes pour détecter les sorties par stop-loss/take-profit/durée maximale de détention, puis exécute le moteur de signaux IA sur vos classes d'actifs activées (actions américaines via Alpaca, crypto via Binance, forex/matières premières/indices via eToro ou un compte MT4/MT5 connecté, selon celui que vous avez connecté), dimensionne tout ACHAT approuvé en fonction du solde réel de votre courtier connecté, et vous montre exactement ce qu'il ferait. Rien n'est jamais acheté ni vendu sans que vous cliquiez séparément sur Exécuter ci-dessous. La protection de sortie (stop-loss/take-profit/une durée maximale de détention fixe, sans prise de bénéfices partielle) couvre actuellement uniquement les actions américaines et la crypto. Une position eToro ou MT4/5 dépend du stop-loss/take-profit fixe défini côté courtier à l'ouverture de la position, comme partout ailleurs dans ce projet, simplement sans que ce tableau de bord vérifie cette protection de sortie entre les visites.",
     "trading.preview_button": "Aperçu des signaux IA",
     "trading.warn_real_orders": "{count} seraient passées comme de vrais ordres (paper/testnet) sur votre compte de courtier connecté.",
     "trading.confirm_checkbox": "Je comprends que cela passera de vrais ordres paper/testnet sur mon compte de courtier connecté.",
@@ -1660,7 +1660,7 @@ _DE = {
     "broker.test_connection": "Verbindung testen",
     "broker.success_connected": "Verbunden. Guthaben: \\${cash}, Eigenkapital: \\${equity}",
 
-    "mt.expander_title": "MT4/MT5 (Forex/Rohstoffe, Alternative zu eToro): {status}",
+    "mt.expander_title": "MT4/MT5 (Forex/Rohstoffe/Indizes, Alternative zu eToro): {status}",
     "mt.caption": "Verbinde ein echtes MetaTrader-4- oder -5-Konto bei jedem unterstützten Broker (Exness, XM, Pepperstone, IC Markets und viele weitere), was die meisten Retail-Forex-Broker außerhalb der USA/EU abdeckt. Dein Login und Passwort werden genauso verschlüsselt wie jede andere Broker-Verbindung hier.",
     "mt.login_label": "Konto-Login (Nummer)",
     "mt.password_label": "Kontopasswort",
@@ -1756,7 +1756,7 @@ _DE = {
     "account.language_saved": "Sprache aktualisiert.",
 
     "trading.header": "KI-Trading",
-    "trading.caption": "Prüft deine bestehenden Positionen auf Stop-Loss-/Take-Profit-/Maximalhaltedauer-Exits, führt dann die KI-Signal-Engine über deine aktivierten Anlageklassen aus (US-Aktien via Alpaca, Krypto via Binance, Forex/Rohstoffe via eToro oder ein verbundenes MT4/MT5-Konto, je nachdem was du verbunden hast), bemisst jeden genehmigten KAUF anhand deines echten Guthabens beim verbundenen Broker und zeigt dir genau, was getan würde. Es wird nie etwas gekauft oder verkauft, ohne dass du unten separat auf Ausführen klickst. Der Exit-Schutz (Stop-Loss/Take-Profit/eine feste Maximalhaltedauer, keine Teilgewinnmitnahme) deckt derzeit nur US-Aktien und Krypto ab. Eine eToro- oder MT4/5-Position verlässt sich auf den beim Trade-Eröffnung broker-seitig festgelegten Stop-Loss/Take-Profit, genau wie überall sonst in diesem Projekt, nur ohne dass dieses Dashboard diesen Exit-Schutz zwischen Besuchen selbst überprüft.",
+    "trading.caption": "Prüft deine bestehenden Positionen auf Stop-Loss-/Take-Profit-/Maximalhaltedauer-Exits, führt dann die KI-Signal-Engine über deine aktivierten Anlageklassen aus (US-Aktien via Alpaca, Krypto via Binance, Forex/Rohstoffe/Indizes via eToro oder ein verbundenes MT4/MT5-Konto, je nachdem was du verbunden hast), bemisst jeden genehmigten KAUF anhand deines echten Guthabens beim verbundenen Broker und zeigt dir genau, was getan würde. Es wird nie etwas gekauft oder verkauft, ohne dass du unten separat auf Ausführen klickst. Der Exit-Schutz (Stop-Loss/Take-Profit/eine feste Maximalhaltedauer, keine Teilgewinnmitnahme) deckt derzeit nur US-Aktien und Krypto ab. Eine eToro- oder MT4/5-Position verlässt sich auf den beim Trade-Eröffnung broker-seitig festgelegten Stop-Loss/Take-Profit, genau wie überall sonst in diesem Projekt, nur ohne dass dieses Dashboard diesen Exit-Schutz zwischen Besuchen selbst überprüft.",
     "trading.preview_button": "KI-Signale in der Vorschau anzeigen",
     "trading.warn_real_orders": "{count} würden als echte (Paper-/Testnet-)Orders auf deinem verbundenen Broker-Konto platziert.",
     "trading.confirm_checkbox": "Mir ist bewusst, dass dadurch echte Paper-/Testnet-Orders auf meinem verbundenen Broker-Konto platziert werden.",
@@ -2035,7 +2035,7 @@ _ZH = {
     "broker.test_connection": "测试连接",
     "broker.success_connected": "已连接。现金：\\${cash}，净值：\\${equity}",
 
-    "mt.expander_title": "MT4/MT5（外汇/大宗商品，eToro 的替代方案）：{status}",
+    "mt.expander_title": "MT4/MT5（外汇/大宗商品/指数，eToro 的替代方案）：{status}",
     "mt.caption": "连接来自任意受支持经纪商（Exness、XM、Pepperstone、IC Markets 等数十家）的真实 MetaTrader 4 或 5 账户，覆盖美国/欧盟以外的大多数零售外汇经纪商。您的登录名和密码采用与此处其他经纪商连接相同的加密方式。",
     "mt.login_label": "账户登录名（数字）",
     "mt.password_label": "账户密码",
@@ -2131,7 +2131,7 @@ _ZH = {
     "account.language_saved": "语言已更新。",
 
     "trading.header": "AI 交易",
-    "trading.caption": "先检查您现有仓位是否触发止损/止盈/最长持仓时间出场，然后在您启用的资产类别（通过 Alpaca 的美股、通过 Binance 的加密货币、通过 eToro 或已连接的 MT4/MT5 账户的外汇/大宗商品，取决于您连接了哪一个）上运行 AI 信号引擎，根据您在已连接经纪商的真实余额计算任何已批准买入的仓位规模，并准确显示将会执行的操作。除非您在下方单独点击执行，否则绝不会买入或卖出任何标的。出场保护（止损/止盈/固定的最长持仓时间，不含部分止盈）目前仅覆盖美股和加密货币。eToro 或 MT4/5 仓位依赖于交易开仓时在经纪商端设置的固定止损/止盈，与本项目其他地方相同，只是本控制台不会在您两次访问之间自行检查该出场保护。",
+    "trading.caption": "先检查您现有仓位是否触发止损/止盈/最长持仓时间出场，然后在您启用的资产类别（通过 Alpaca 的美股、通过 Binance 的加密货币、通过 eToro 或已连接的 MT4/MT5 账户的外汇/大宗商品/指数，取决于您连接了哪一个）上运行 AI 信号引擎，根据您在已连接经纪商的真实余额计算任何已批准买入的仓位规模，并准确显示将会执行的操作。除非您在下方单独点击执行，否则绝不会买入或卖出任何标的。出场保护（止损/止盈/固定的最长持仓时间，不含部分止盈）目前仅覆盖美股和加密货币。eToro 或 MT4/5 仓位依赖于交易开仓时在经纪商端设置的固定止损/止盈，与本项目其他地方相同，只是本控制台不会在您两次访问之间自行检查该出场保护。",
     "trading.preview_button": "预览 AI 信号",
     "trading.warn_real_orders": "{count} 个订单将作为真实（模拟/测试网）订单提交到您已连接的经纪商账户。",
     "trading.confirm_checkbox": "我理解这将在我已连接的经纪商账户上提交真实的模拟/测试网订单。",
@@ -2413,7 +2413,7 @@ _ID = {
     "broker.status_not_connected": "Belum terhubung",
     "broker.verifying_spinner": "Memverifikasi kredensial {label} Anda...",
 
-    "mt.expander_title": "MT4/MT5 (Forex/Komoditas, alternatif untuk eToro): {status}",
+    "mt.expander_title": "MT4/MT5 (Forex/Komoditas/Indeks, alternatif untuk eToro): {status}",
     "mt.caption": "Hubungkan akun MetaTrader 4 atau 5 asli dari broker mana pun yang didukung (Exness, XM, Pepperstone, IC Markets, dan puluhan lainnya), mencakup sebagian besar broker forex ritel yang digunakan di luar AS/UE. Login dan kata sandi Anda dienkripsi dengan cara yang sama seperti koneksi broker lainnya di sini.",
     "mt.login_label": "Login akun (nomor)",
     "mt.password_label": "Kata sandi akun",
@@ -2518,7 +2518,7 @@ _ID = {
     "account.language_saved": "Bahasa diperbarui.",
 
     "trading.header": "AI Trading",
-    "trading.caption": "Memeriksa posisi Anda yang ada untuk keluar stop-loss/take-profit/waktu tahan maksimum, lalu menjalankan mesin sinyal AI di seluruh kelas aset yang Anda aktifkan (Saham AS via Alpaca, Kripto via Binance, Forex/Komoditas via eToro atau akun MT4/MT5 yang terhubung, mana pun yang Anda hubungkan), menentukan ukuran BELI yang disetujui berdasarkan saldo broker terhubung Anda yang sebenarnya, dan menunjukkan persis apa yang akan dilakukannya. Tidak ada yang pernah dibeli atau dijual tanpa Anda mengklik Execute secara terpisah di bawah. Perlindungan keluar (stop-loss/take-profit/waktu tahan maksimum tetap, tanpa pengambilan untung sebagian) saat ini hanya mencakup Saham AS dan Kripto. Posisi eToro atau MT4/5 bergantung pada stop-loss/take-profit tetap yang ditetapkan di sisi broker saat transaksi dibuka, sama seperti di tempat lain dalam proyek ini, hanya saja tanpa pemeriksaan perlindungan keluar dasbor ini sendiri di antara kunjungan.",
+    "trading.caption": "Memeriksa posisi Anda yang ada untuk keluar stop-loss/take-profit/waktu tahan maksimum, lalu menjalankan mesin sinyal AI di seluruh kelas aset yang Anda aktifkan (Saham AS via Alpaca, Kripto via Binance, Forex/Komoditas/Indeks via eToro atau akun MT4/MT5 yang terhubung, mana pun yang Anda hubungkan), menentukan ukuran BELI yang disetujui berdasarkan saldo broker terhubung Anda yang sebenarnya, dan menunjukkan persis apa yang akan dilakukannya. Tidak ada yang pernah dibeli atau dijual tanpa Anda mengklik Execute secara terpisah di bawah. Perlindungan keluar (stop-loss/take-profit/waktu tahan maksimum tetap, tanpa pengambilan untung sebagian) saat ini hanya mencakup Saham AS dan Kripto. Posisi eToro atau MT4/5 bergantung pada stop-loss/take-profit tetap yang ditetapkan di sisi broker saat transaksi dibuka, sama seperti di tempat lain dalam proyek ini, hanya saja tanpa pemeriksaan perlindungan keluar dasbor ini sendiri di antara kunjungan.",
     "trading.preview_button": "Pratinjau Sinyal AI",
     "trading.warn_real_orders": "{count} akan ditempatkan sebagai order nyata (paper/testnet) pada akun broker Anda yang terhubung.",
     "trading.confirm_checkbox": "Saya memahami bahwa ini akan menempatkan order paper/testnet nyata pada akun broker saya yang terhubung.",
@@ -2787,7 +2787,7 @@ _MS = {
     "broker.status_not_connected": "Belum disambungkan",
     "broker.verifying_spinner": "Mengesahkan kelayakan {label} anda...",
 
-    "mt.expander_title": "MT4/MT5 (Forex/Komoditi, alternatif kepada eToro): {status}",
+    "mt.expander_title": "MT4/MT5 (Forex/Komoditi/Indeks, alternatif kepada eToro): {status}",
     "mt.caption": "Sambungkan akaun MetaTrader 4 atau 5 sebenar daripada mana-mana broker yang disokong (Exness, XM, Pepperstone, IC Markets, dan puluhan lagi), merangkumi kebanyakan broker forex runcit yang digunakan di luar AS/EU. Log masuk dan kata laluan anda disulitkan dengan cara yang sama seperti setiap sambungan broker lain di sini.",
     "mt.login_label": "Log masuk akaun (nombor)",
     "mt.password_label": "Kata laluan akaun",
@@ -2892,7 +2892,7 @@ _MS = {
     "account.language_saved": "Bahasa dikemas kini.",
 
     "trading.header": "Dagangan AI",
-    "trading.caption": "Menyemak kedudukan sedia ada anda untuk keluar stop-loss/take-profit/tempoh pegangan maksimum, kemudian menjalankan enjin isyarat AI merentasi kelas aset yang anda aktifkan (Saham AS melalui Alpaca, Kripto melalui Binance, Forex/Komoditi melalui eToro atau akaun MT4/MT5 yang disambungkan, mana-mana yang anda sambungkan), menentukan saiz mana-mana BELI yang diluluskan berdasarkan baki broker sebenar anda yang disambungkan, dan menunjukkan dengan tepat apa yang akan dilakukannya. Tiada apa-apa dibeli atau dijual tanpa anda mengklik Execute secara berasingan di bawah. Perlindungan keluar (stop-loss/take-profit/tempoh pegangan maksimum tetap, tanpa pengambilan untung separa) buat masa ini hanya merangkumi Saham AS dan Kripto. Kedudukan eToro atau MT4/5 bergantung pada stop-loss/take-profit tetap yang ditetapkan di pihak broker semasa dagangan dibuka, sama seperti di tempat lain dalam projek ini, cuma tanpa semakan perlindungan keluar papan pemuka ini sendiri di antara lawatan.",
+    "trading.caption": "Menyemak kedudukan sedia ada anda untuk keluar stop-loss/take-profit/tempoh pegangan maksimum, kemudian menjalankan enjin isyarat AI merentasi kelas aset yang anda aktifkan (Saham AS melalui Alpaca, Kripto melalui Binance, Forex/Komoditi/Indeks melalui eToro atau akaun MT4/MT5 yang disambungkan, mana-mana yang anda sambungkan), menentukan saiz mana-mana BELI yang diluluskan berdasarkan baki broker sebenar anda yang disambungkan, dan menunjukkan dengan tepat apa yang akan dilakukannya. Tiada apa-apa dibeli atau dijual tanpa anda mengklik Execute secara berasingan di bawah. Perlindungan keluar (stop-loss/take-profit/tempoh pegangan maksimum tetap, tanpa pengambilan untung separa) buat masa ini hanya merangkumi Saham AS dan Kripto. Kedudukan eToro atau MT4/5 bergantung pada stop-loss/take-profit tetap yang ditetapkan di pihak broker semasa dagangan dibuka, sama seperti di tempat lain dalam projek ini, cuma tanpa semakan perlindungan keluar papan pemuka ini sendiri di antara lawatan.",
     "trading.preview_button": "Pratonton Isyarat AI",
     "trading.warn_real_orders": "{count} akan ditempatkan sebagai pesanan sebenar (paper/testnet) pada akaun broker anda yang disambungkan.",
     "trading.confirm_checkbox": "Saya faham ini akan menempatkan pesanan paper/testnet sebenar pada akaun broker saya yang disambungkan.",
@@ -3161,7 +3161,7 @@ _ZH_TW = {
     "broker.status_not_connected": "尚未連線",
     "broker.verifying_spinner": "正在驗證您的 {label} 憑證……",
 
-    "mt.expander_title": "MT4/MT5(外匯/大宗商品,eToro 的替代方案):{status}",
+    "mt.expander_title": "MT4/MT5(外匯/大宗商品/指數,eToro 的替代方案):{status}",
     "mt.caption": "連結任何支援的券商(Exness、XM、Pepperstone、IC Markets 等數十家)的真實 MetaTrader 4 或 5 帳戶,涵蓋大多數美國/歐盟以外常用的零售外匯券商。您的帳號與密碼會以與此處其他券商連線相同的方式加密。",
     "mt.login_label": "帳戶登入(數字帳號)",
     "mt.password_label": "帳戶密碼",
@@ -3266,7 +3266,7 @@ _ZH_TW = {
     "account.language_saved": "語言已更新。",
 
     "trading.header": "AI 交易",
-    "trading.caption": "先檢查您現有部位是否觸發停損/停利/最長持有時間出場,接著在您已啟用的資產類別(透過 Alpaca 交易美股、透過 Binance 交易加密貨幣、透過 eToro 或已連結的 MT4/MT5 帳戶交易外匯/大宗商品,視您連結的項目而定)執行 AI 訊號引擎,依您實際連結券商的餘額計算任何獲核准買進單的規模,並精確顯示它會採取的動作。在您於下方另外勾選確認並點擊「執行」前,絕不會買進或賣出任何東西。出場保護(停損/停利/固定最長持有時間,不含部分獲利了結)目前僅涵蓋美股與加密貨幣。eToro 或 MT4/5 的部位則依賴券商端於開倉時設定的固定停損/停利,與本專案其他部分相同,只是本儀表板不會在每次造訪之間額外檢查該出場保護。",
+    "trading.caption": "先檢查您現有部位是否觸發停損/停利/最長持有時間出場,接著在您已啟用的資產類別(透過 Alpaca 交易美股、透過 Binance 交易加密貨幣、透過 eToro 或已連結的 MT4/MT5 帳戶交易外匯/大宗商品/指數,視您連結的項目而定)執行 AI 訊號引擎,依您實際連結券商的餘額計算任何獲核准買進單的規模,並精確顯示它會採取的動作。在您於下方另外勾選確認並點擊「執行」前,絕不會買進或賣出任何東西。出場保護(停損/停利/固定最長持有時間,不含部分獲利了結)目前僅涵蓋美股與加密貨幣。eToro 或 MT4/5 的部位則依賴券商端於開倉時設定的固定停損/停利,與本專案其他部分相同,只是本儀表板不會在每次造訪之間額外檢查該出場保護。",
     "trading.preview_button": "預覽 AI 訊號",
     "trading.warn_real_orders": "{count} 筆將以真實(模擬盤/testnet)委託單方式送至您連結的券商帳戶。",
     "trading.confirm_checkbox": "我了解這將在我連結的券商帳戶送出真實的模擬盤/testnet委託單。",
@@ -3535,7 +3535,7 @@ _TH = {
     "broker.status_not_connected": "ยังไม่ได้เชื่อมต่อ",
     "broker.verifying_spinner": "กำลังตรวจสอบข้อมูลรับรอง {label} ของคุณ...",
 
-    "mt.expander_title": "MT4/MT5 (ฟอเร็กซ์/สินค้าโภคภัณฑ์ ทางเลือกแทน eToro): {status}",
+    "mt.expander_title": "MT4/MT5 (ฟอเร็กซ์/สินค้าโภคภัณฑ์/ดัชนี ทางเลือกแทน eToro): {status}",
     "mt.caption": "เชื่อมต่อบัญชี MetaTrader 4 หรือ 5 จริงจากโบรกเกอร์ที่รองรับ (Exness, XM, Pepperstone, IC Markets และอีกหลายสิบราย) ครอบคลุมโบรกเกอร์ฟอเร็กซ์รายย่อยส่วนใหญ่ที่ใช้นอกสหรัฐฯ/สหภาพยุโรป ชื่อผู้ใช้และรหัสผ่านของคุณจะถูกเข้ารหัสด้วยวิธีเดียวกับการเชื่อมต่อโบรกเกอร์อื่นๆ ในที่นี้",
     "mt.login_label": "หมายเลขบัญชีเข้าสู่ระบบ",
     "mt.password_label": "รหัสผ่านบัญชี",
@@ -3640,7 +3640,7 @@ _TH = {
     "account.language_saved": "อัปเดตภาษาแล้ว",
 
     "trading.header": "การเทรดด้วย AI",
-    "trading.caption": "ตรวจสอบโพซิชันที่มีอยู่ของคุณเพื่อหาจุดออกจากสถานะโดย stop-loss/take-profit/ระยะเวลาถือครองสูงสุด จากนั้นรันเอนจินสัญญาณ AI ในประเภทสินทรัพย์ที่คุณเปิดใช้งาน (หุ้นสหรัฐฯ ผ่าน Alpaca, คริปโตผ่าน Binance, ฟอเร็กซ์/สินค้าโภคภัณฑ์ผ่าน eToro หรือบัญชี MT4/MT5 ที่เชื่อมต่อไว้ แล้วแต่ว่าคุณเชื่อมต่อรายการใด) กำหนดขนาดของคำสั่งซื้อที่ได้รับอนุมัติตามยอดคงเหลือจริงของโบรกเกอร์ที่เชื่อมต่อไว้ และแสดงให้เห็นอย่างชัดเจนว่าจะดำเนินการอย่างไร จะไม่มีการซื้อหรือขายใดๆ จนกว่าคุณจะคลิก Execute แยกต่างหากด้านล่าง การป้องกันการออกจากสถานะ (stop-loss/take-profit/ระยะเวลาถือครองสูงสุดแบบตายตัว โดยไม่มีการทำกำไรบางส่วน) ปัจจุบันครอบคลุมเฉพาะหุ้นสหรัฐฯ และคริปโตเท่านั้น โพซิชันของ eToro หรือ MT4/5 จะขึ้นอยู่กับ stop-loss/take-profit แบบตายตัวที่ตั้งไว้ฝั่งโบรกเกอร์ตอนเปิดสถานะ เช่นเดียวกับส่วนอื่นๆ ของโปรเจกต์นี้ เพียงแต่ไม่มีการตรวจสอบการป้องกันการออกจากสถานะของแดชบอร์ดนี้เองระหว่างการเข้าใช้งานแต่ละครั้ง",
+    "trading.caption": "ตรวจสอบโพซิชันที่มีอยู่ของคุณเพื่อหาจุดออกจากสถานะโดย stop-loss/take-profit/ระยะเวลาถือครองสูงสุด จากนั้นรันเอนจินสัญญาณ AI ในประเภทสินทรัพย์ที่คุณเปิดใช้งาน (หุ้นสหรัฐฯ ผ่าน Alpaca, คริปโตผ่าน Binance, ฟอเร็กซ์/สินค้าโภคภัณฑ์/ดัชนีผ่าน eToro หรือบัญชี MT4/MT5 ที่เชื่อมต่อไว้ แล้วแต่ว่าคุณเชื่อมต่อรายการใด) กำหนดขนาดของคำสั่งซื้อที่ได้รับอนุมัติตามยอดคงเหลือจริงของโบรกเกอร์ที่เชื่อมต่อไว้ และแสดงให้เห็นอย่างชัดเจนว่าจะดำเนินการอย่างไร จะไม่มีการซื้อหรือขายใดๆ จนกว่าคุณจะคลิก Execute แยกต่างหากด้านล่าง การป้องกันการออกจากสถานะ (stop-loss/take-profit/ระยะเวลาถือครองสูงสุดแบบตายตัว โดยไม่มีการทำกำไรบางส่วน) ปัจจุบันครอบคลุมเฉพาะหุ้นสหรัฐฯ และคริปโตเท่านั้น โพซิชันของ eToro หรือ MT4/5 จะขึ้นอยู่กับ stop-loss/take-profit แบบตายตัวที่ตั้งไว้ฝั่งโบรกเกอร์ตอนเปิดสถานะ เช่นเดียวกับส่วนอื่นๆ ของโปรเจกต์นี้ เพียงแต่ไม่มีการตรวจสอบการป้องกันการออกจากสถานะของแดชบอร์ดนี้เองระหว่างการเข้าใช้งานแต่ละครั้ง",
     "trading.preview_button": "แสดงตัวอย่างสัญญาณ AI",
     "trading.warn_real_orders": "{count} รายการจะถูกส่งเป็นคำสั่งซื้อขายจริง (paper/testnet) ในบัญชีโบรกเกอร์ที่คุณเชื่อมต่อไว้",
     "trading.confirm_checkbox": "ฉันเข้าใจว่าการดำเนินการนี้จะส่งคำสั่งซื้อขาย paper/testnet จริงในบัญชีโบรกเกอร์ที่เชื่อมต่อไว้ของฉัน",
@@ -3909,7 +3909,7 @@ _JA = {
     "broker.status_not_connected": "未接続",
     "broker.verifying_spinner": "{label} の認証情報を確認しています...",
 
-    "mt.expander_title": "MT4/MT5(FX/コモディティ、eToroの代替):{status}",
+    "mt.expander_title": "MT4/MT5(FX/コモディティ/指数、eToroの代替):{status}",
     "mt.caption": "対応するブローカー(Exness、XM、Pepperstone、IC Marketsなど数十社)の実際のMetaTrader 4または5口座を接続できます。米国/EU以外で使用されるほとんどの個人向けFXブローカーに対応しています。ログイン情報とパスワードは、他のブローカー接続と同じ方式で暗号化されます。",
     "mt.login_label": "口座ログイン番号",
     "mt.password_label": "口座パスワード",
@@ -4014,7 +4014,7 @@ _JA = {
     "account.language_saved": "言語を更新しました。",
 
     "trading.header": "AI取引",
-    "trading.caption": "既存のポジションについて損切り/利益確定/最大保有期間による決済をチェックした後、有効化しているアセットクラス(AlpacaによるUS株式、Binanceによる暗号資産、eToroまたは接続済みMT4/MT5口座によるFX/コモディティ、接続状況に応じて)全体でAIシグナルエンジンを実行し、承認された買い注文を接続済みブローカーの実際の残高に基づいてサイジングし、実行内容を正確に表示します。下部で確認ボックスにチェックを入れて個別にExecuteをクリックするまで、売買が実行されることはありません。決済保護(損切り/利益確定/固定の最大保有期間、部分利確なし)は現在US株式と暗号資産のみに対応しています。eToroまたはMT4/5のポジションは、他の部分と同様、取引開始時にブローカー側で設定された固定の損切り/利益確定に依存しており、このダッシュボードが訪問の合間に決済保護を独自にチェックすることはありません。",
+    "trading.caption": "既存のポジションについて損切り/利益確定/最大保有期間による決済をチェックした後、有効化しているアセットクラス(AlpacaによるUS株式、Binanceによる暗号資産、eToroまたは接続済みMT4/MT5口座によるFX/コモディティ/指数、接続状況に応じて)全体でAIシグナルエンジンを実行し、承認された買い注文を接続済みブローカーの実際の残高に基づいてサイジングし、実行内容を正確に表示します。下部で確認ボックスにチェックを入れて個別にExecuteをクリックするまで、売買が実行されることはありません。決済保護(損切り/利益確定/固定の最大保有期間、部分利確なし)は現在US株式と暗号資産のみに対応しています。eToroまたはMT4/5のポジションは、他の部分と同様、取引開始時にブローカー側で設定された固定の損切り/利益確定に依存しており、このダッシュボードが訪問の合間に決済保護を独自にチェックすることはありません。",
     "trading.preview_button": "AIシグナルをプレビュー",
     "trading.warn_real_orders": "{count} 件が接続済みブローカー口座に実際の(ペーパー/testnet)注文として発注されます。",
     "trading.confirm_checkbox": "これにより、接続済みのブローカー口座に実際のペーパー/testnet注文が発注されることを理解しています。",
@@ -4283,7 +4283,7 @@ _KO = {
     "broker.status_not_connected": "연결되지 않음",
     "broker.verifying_spinner": "{label} 인증 정보를 확인하는 중...",
 
-    "mt.expander_title": "MT4/MT5 (외환/원자재, eToro의 대안): {status}",
+    "mt.expander_title": "MT4/MT5 (외환/원자재/지수, eToro의 대안): {status}",
     "mt.caption": "지원되는 모든 브로커(Exness, XM, Pepperstone, IC Markets 등 수십 곳)의 실제 MetaTrader 4 또는 5 계좌를 연결하세요. 미국/EU 외 지역에서 사용되는 대부분의 소매 외환 브로커를 지원합니다. 로그인 정보와 비밀번호는 여기의 다른 브로커 연결과 동일한 방식으로 암호화됩니다.",
     "mt.login_label": "계좌 로그인 번호",
     "mt.password_label": "계좌 비밀번호",
@@ -4388,7 +4388,7 @@ _KO = {
     "account.language_saved": "언어가 업데이트되었습니다.",
 
     "trading.header": "AI 거래",
-    "trading.caption": "기존 포지션에 대해 손절매/익절/최대 보유 시간 청산 여부를 확인한 후, 활성화된 자산군(Alpaca를 통한 미국 주식, Binance를 통한 암호화폐, eToro 또는 연결된 MT4/MT5 계좌를 통한 외환/원자재, 연결한 항목에 따라 다름) 전반에서 AI 시그널 엔진을 실행하고, 승인된 매수를 실제로 연결된 브로커 잔액에 맞춰 사이징한 다음, 정확히 무엇을 할지 보여줍니다. 아래에서 별도로 확인란을 체크하고 Execute를 클릭하기 전까지는 어떤 매수/매도도 실행되지 않습니다. 청산 보호(손절매/익절/고정 최대 보유 시간, 부분 익절 없음)는 현재 미국 주식과 암호화폐에만 적용됩니다. eToro 또는 MT4/5 포지션은 다른 부분과 마찬가지로 거래 시작 시 브로커 측에서 설정한 고정 손절매/익절에 의존하며, 이 대시보드가 방문 사이에 별도로 해당 청산 보호를 확인하지는 않습니다.",
+    "trading.caption": "기존 포지션에 대해 손절매/익절/최대 보유 시간 청산 여부를 확인한 후, 활성화된 자산군(Alpaca를 통한 미국 주식, Binance를 통한 암호화폐, eToro 또는 연결된 MT4/MT5 계좌를 통한 외환/원자재/지수, 연결한 항목에 따라 다름) 전반에서 AI 시그널 엔진을 실행하고, 승인된 매수를 실제로 연결된 브로커 잔액에 맞춰 사이징한 다음, 정확히 무엇을 할지 보여줍니다. 아래에서 별도로 확인란을 체크하고 Execute를 클릭하기 전까지는 어떤 매수/매도도 실행되지 않습니다. 청산 보호(손절매/익절/고정 최대 보유 시간, 부분 익절 없음)는 현재 미국 주식과 암호화폐에만 적용됩니다. eToro 또는 MT4/5 포지션은 다른 부분과 마찬가지로 거래 시작 시 브로커 측에서 설정한 고정 손절매/익절에 의존하며, 이 대시보드가 방문 사이에 별도로 해당 청산 보호를 확인하지는 않습니다.",
     "trading.preview_button": "AI 시그널 미리보기",
     "trading.warn_real_orders": "{count}건이 연결된 브로커 계좌에 실제(페이퍼/testnet) 주문으로 제출됩니다.",
     "trading.confirm_checkbox": "이 작업으로 연결된 브로커 계좌에 실제 페이퍼/testnet 주문이 제출된다는 것을 이해합니다.",

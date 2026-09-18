@@ -1306,55 +1306,70 @@ def render_account_settings(user):
     # trial_ends_at param), so adding a card early never starts billing
     # any sooner than the free trial they were already promised.
     with st.expander(_t("account.billing_expander")):
-        billing = tenant.get_billing_info(user["user_id"]) or {}
-        status = billing.get("billing_status", "none")
-
-        if status == "trialing" and not billing.get("stripe_subscription_id"):
-            days_left = tenant.get_trial_days_remaining(user["user_id"])
-            if days_left is not None:
-                st.caption(_t("account.billing_trial_caption", days=days_left))
-            st.write(_t("account.billing_add_payment_body"))
-            try:
-                checkout_url = billing_engine.create_checkout_session(
-                    user["user_id"], user["email"], APP_URL,
-                    trial_ends_at=billing.get("trial_ends_at"),
-                    currency_code=_get_display_currency(),
-                )
-                st.link_button(
-                    _t("account.billing_add_payment_button"), checkout_url,
-                    use_container_width=True,
-                )
-            except Exception:
-                print("[account] create_checkout_session (early add) failed:")
-                traceback.print_exc()
-                st.error(_t("billing.err_checkout_failed"))
-        elif status == "trial_expired":
-            st.caption(_t("account.billing_trial_expired_caption"))
-        elif status in ("trialing", "active") and billing.get("stripe_customer_id"):
-            # trialing here means a card is already on file (subscription
-            # exists but Stripe itself still reports a trialing status) --
-            # same portal link as a fully active subscriber either way.
-            st.caption(_t("account.billing_active_caption"))
-            try:
-                portal_url = billing_engine.create_billing_portal_session(
-                    billing["stripe_customer_id"], APP_URL
-                )
-                st.link_button(_t("billing.manage_button"), portal_url, use_container_width=True)
-            except Exception:
-                print("[account] create_billing_portal_session failed:")
-                traceback.print_exc()
-                st.warning(_t("billing.warn_portal_failed"))
+        # FIX 2026-09-18: admins (ADMIN_EMAILS) are exempt from the billing
+        # gate itself (render_dashboard() never redirects them to
+        # render_billing_gate(), see that function's docstring), but this
+        # expander used to ignore admin status entirely and just rendered
+        # whatever the raw billing_status happened to be -- for an admin
+        # account that has never run Stripe Checkout (billing_status
+        # defaults to 'none'), that fell into the "past_due / canceled /
+        # legacy 'none'" branch below and showed a scary
+        # "subscription needs attention" red error, even though the admin
+        # was never actually blocked from anything. Short-circuit here so
+        # admins see an accurate, calm message instead of an alarming one
+        # that doesn't reflect reality.
+        if tenant.is_admin_email(user["email"]):
+            st.caption(_t("account.billing_admin_exempt_caption"))
         else:
-            # past_due / canceled / legacy 'none' -- render_dashboard()'s
-            # gate would normally have already redirected these statuses to
-            # render_billing_gate() before this code ever runs, but shown
-            # defensively rather than silently rendering nothing.
-            reason = (
-                _t("billing.reason_past_due") if status == "past_due"
-                else _t("billing.reason_canceled") if status == "canceled"
-                else status
-            )
-            st.error(_t("billing.err_needs_attention", status=reason))
+            billing = tenant.get_billing_info(user["user_id"]) or {}
+            status = billing.get("billing_status", "none")
+
+            if status == "trialing" and not billing.get("stripe_subscription_id"):
+                days_left = tenant.get_trial_days_remaining(user["user_id"])
+                if days_left is not None:
+                    st.caption(_t("account.billing_trial_caption", days=days_left))
+                st.write(_t("account.billing_add_payment_body"))
+                try:
+                    checkout_url = billing_engine.create_checkout_session(
+                        user["user_id"], user["email"], APP_URL,
+                        trial_ends_at=billing.get("trial_ends_at"),
+                        currency_code=_get_display_currency(),
+                    )
+                    st.link_button(
+                        _t("account.billing_add_payment_button"), checkout_url,
+                        use_container_width=True,
+                    )
+                except Exception:
+                    print("[account] create_checkout_session (early add) failed:")
+                    traceback.print_exc()
+                    st.error(_t("billing.err_checkout_failed"))
+            elif status == "trial_expired":
+                st.caption(_t("account.billing_trial_expired_caption"))
+            elif status in ("trialing", "active") and billing.get("stripe_customer_id"):
+                # trialing here means a card is already on file (subscription
+                # exists but Stripe itself still reports a trialing status) --
+                # same portal link as a fully active subscriber either way.
+                st.caption(_t("account.billing_active_caption"))
+                try:
+                    portal_url = billing_engine.create_billing_portal_session(
+                        billing["stripe_customer_id"], APP_URL
+                    )
+                    st.link_button(_t("billing.manage_button"), portal_url, use_container_width=True)
+                except Exception:
+                    print("[account] create_billing_portal_session failed:")
+                    traceback.print_exc()
+                    st.warning(_t("billing.warn_portal_failed"))
+            else:
+                # past_due / canceled / legacy 'none' -- render_dashboard()'s
+                # gate would normally have already redirected these statuses to
+                # render_billing_gate() before this code ever runs, but shown
+                # defensively rather than silently rendering nothing.
+                reason = (
+                    _t("billing.reason_past_due") if status == "past_due"
+                    else _t("billing.reason_canceled") if status == "canceled"
+                    else status
+                )
+                st.error(_t("billing.err_needs_attention", status=reason))
 
     # ADDED 2026-09-15 (referral system, Phase 4): every account has its
     # own referral_code (generated at signup, or lazily backfilled by

@@ -213,6 +213,7 @@ _EN = {
     # ---- account settings (profile / change email / language) ----
     "account.header": "Account Settings",
     "account.billing_expander": "💳 Billing",
+    "account.billing_admin_exempt_caption": "You're the platform owner (admin) -- billing doesn't apply to this account.",
     "account.billing_trial_caption": "You're on your free trial. **{days} days** left before you need to add a payment method.",
     "account.billing_trial_expired_caption": "Your free trial has ended. Add a payment method to resume trading.",
     "account.billing_active_caption": "Your subscription is active.",
@@ -602,6 +603,7 @@ _ES = {
 
     "account.header": "Configuración de la cuenta",
     "account.billing_expander": "💳 Facturación",
+    "account.billing_admin_exempt_caption": "Eres el propietario de la plataforma (admin) -- la facturación no aplica a esta cuenta.",
     "account.billing_trial_caption": "Estás en tu prueba gratuita. Te quedan **{days} días** antes de que necesites agregar un método de pago.",
     "account.billing_trial_expired_caption": "Tu prueba gratuita ha terminado. Agrega un método de pago para reanudar las operaciones.",
     "account.billing_active_caption": "Tu suscripción está activa.",
@@ -980,6 +982,7 @@ _PT = {
 
     "account.header": "Configurações da conta",
     "account.billing_expander": "💳 Faturamento",
+    "account.billing_admin_exempt_caption": "Você é o proprietário da plataforma (admin) -- a cobrança não se aplica a esta conta.",
     "account.billing_trial_caption": "Você está no seu teste gratuito. Faltam **{days} dias** antes de precisar adicionar uma forma de pagamento.",
     "account.billing_trial_expired_caption": "Seu teste gratuito terminou. Adicione uma forma de pagamento para retomar as operações.",
     "account.billing_active_caption": "Sua assinatura está ativa.",
@@ -1358,6 +1361,7 @@ _FR = {
 
     "account.header": "Paramètres du compte",
     "account.billing_expander": "💳 Facturation",
+    "account.billing_admin_exempt_caption": "Vous êtes le propriétaire de la plateforme (admin) -- la facturation ne s'applique pas à ce compte.",
     "account.billing_trial_caption": "Vous êtes en essai gratuit. Il vous reste **{days} jours** avant de devoir ajouter un moyen de paiement.",
     "account.billing_trial_expired_caption": "Votre essai gratuit est terminé. Ajoutez un moyen de paiement pour reprendre le trading.",
     "account.billing_active_caption": "Votre abonnement est actif.",
@@ -1736,6 +1740,7 @@ _DE = {
 
     "account.header": "Kontoeinstellungen",
     "account.billing_expander": "💳 Abrechnung",
+    "account.billing_admin_exempt_caption": "Du bist der Plattform-Inhaber (Admin) -- für dieses Konto gilt keine Abrechnung.",
     "account.billing_trial_caption": "Du befindest dich in der kostenlosen Testphase. Noch **{days} Tage**, bevor du eine Zahlungsmethode hinzufügen musst.",
     "account.billing_trial_expired_caption": "Deine kostenlose Testphase ist abgelaufen. Füge eine Zahlungsmethode hinzu, um den Handel fortzusetzen.",
     "account.billing_active_caption": "Dein Abonnement ist aktiv.",
@@ -2114,6 +2119,7 @@ _ZH = {
 
     "account.header": "账户设置",
     "account.billing_expander": "💳 账单",
+    "account.billing_admin_exempt_caption": "您是平台所有者(管理员)——此账户不适用账单。",
     "account.billing_trial_caption": "您正处于免费试用期。还剩 **{days} 天**即需添加付款方式。",
     "account.billing_trial_expired_caption": "您的免费试用已结束。添加付款方式以恢复交易。",
     "account.billing_active_caption": "您的订阅当前有效。",
@@ -2507,6 +2513,7 @@ _ID = {
 
     "account.header": "Pengaturan Akun",
     "account.billing_expander": "💳 Penagihan",
+    "account.billing_admin_exempt_caption": "Anda adalah pemilik platform (admin) -- penagihan tidak berlaku untuk akun ini.",
     "account.billing_trial_caption": "Anda sedang dalam masa uji coba gratis. Tersisa **{days} hari** sebelum Anda perlu menambahkan metode pembayaran.",
     "account.billing_trial_expired_caption": "Uji coba gratis Anda telah berakhir. Tambahkan metode pembayaran untuk melanjutkan trading.",
     "account.billing_active_caption": "Langganan Anda aktif.",
@@ -2884,6 +2891,7 @@ _MS = {
 
     "account.header": "Tetapan Akaun",
     "account.billing_expander": "💳 Pengebilan",
+    "account.billing_admin_exempt_caption": "Anda ialah pemilik platform (admin) -- pengebilan tidak terpakai untuk akaun ini.",
     "account.billing_trial_caption": "Anda sedang dalam percubaan percuma. Baki **{days} hari** sebelum anda perlu menambah kaedah pembayaran.",
     "account.billing_trial_expired_caption": "Percubaan percuma anda telah tamat. Tambah kaedah pembayaran untuk menyambung semula perdagangan.",
     "account.billing_active_caption": "Langganan anda aktif.",
@@ -3261,6 +3269,7 @@ _ZH_TW = {
 
     "account.header": "帳戶設定",
     "account.billing_expander": "💳 帳單",
+    "account.billing_admin_exempt_caption": "您是平台擁有者(管理員)——此帳戶不適用帳單。",
     "account.billing_trial_caption": "您目前處於免費試用期。還剩 **{days} 天**即需新增付款方式。",
     "account.billing_trial_expired_caption": "您的免費試用已結束。新增付款方式以恢復交易。",
     "account.billing_active_caption": "您的訂閱目前有效。",
@@ -3638,6 +3647,7 @@ _TH = {
 
     "account.header": "การตั้งค่าบัญชี",
     "account.billing_expander": "💳 การเรียกเก็บเงิน",
+    "account.billing_admin_exempt_caption": "คุณคือเจ้าของแพลตฟอร์ม (แอดมิน) -- การเรียกเก็บเงินไม่มีผลกับบัญชีนี้",
     "account.billing_trial_caption": "คุณกำลังอยู่ในช่วงทดลองใช้ฟรี เหลืออีก **{days} วัน** ก่อนที่คุณจะต้องเพิ่มวิธีการชำระเงิน",
     "account.billing_trial_expired_caption": "ช่วงทดลองใช้ฟรีของคุณสิ้นสุดลงแล้ว เพิ่มวิธีการชำระเงินเพื่อกลับมาเทรดต่อ",
     "account.billing_active_caption": "การสมัครสมาชิกของคุณใช้งานอยู่",
@@ -4015,6 +4025,7 @@ _JA = {
 
     "account.header": "アカウント設定",
     "account.billing_expander": "💳 請求",
+    "account.billing_admin_exempt_caption": "あなたはプラットフォームのオーナー(管理者)です。このアカウントには請求は適用されません。",
     "account.billing_trial_caption": "現在、無料トライアル期間中です。お支払い方法の追加が必要になるまであと**{days}日**です。",
     "account.billing_trial_expired_caption": "無料トライアルが終了しました。お支払い方法を追加して取引を再開してください。",
     "account.billing_active_caption": "ご契約は有効です。",
@@ -4392,6 +4403,7 @@ _KO = {
 
     "account.header": "계정 설정",
     "account.billing_expander": "💳 결제",
+    "account.billing_admin_exempt_caption": "귀하는 플랫폼 소유자(관리자)입니다 -- 이 계정에는 결제가 적용되지 않습니다.",
     "account.billing_trial_caption": "현재 무료 체험 중입니다. 결제 수단을 추가해야 하기까지 **{days}일** 남았습니다.",
     "account.billing_trial_expired_caption": "무료 체험이 종료되었습니다. 결제 수단을 추가하여 거래를 재개하세요.",
     "account.billing_active_caption": "구독이 활성화되어 있습니다.",

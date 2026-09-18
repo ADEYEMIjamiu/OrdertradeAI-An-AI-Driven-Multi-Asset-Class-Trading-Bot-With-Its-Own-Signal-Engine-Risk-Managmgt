@@ -597,7 +597,7 @@ _BROKER_FIELDS = {
         "has_extra": False,
     },
     "ETORO": {
-        "label": "eToro (Forex/Commodities/Indices, Demo)",
+        "label": "eToro (Forex/Commodities/Indices, Demo/Live)",
         "environment": "demo",
         "key_label": "API Key",
         "secret_label": "User Key",
